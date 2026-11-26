@@ -64,7 +64,8 @@ impl<'a> Typer<'a> {
     }
 
     /// Check a public operator input pattern through its written literal
-    /// parts. The candidate still reads the operand in its own context.
+    /// parts and through block and branch values. The candidate still
+    /// reads the operand in its own context.
     pub(super) fn expression_for_input_pattern(&mut self, node: &SyntaxNode, ty: &Type) -> Expr {
         self.read_literal_part(node, ty, ExpressionFit::InputPattern)
     }

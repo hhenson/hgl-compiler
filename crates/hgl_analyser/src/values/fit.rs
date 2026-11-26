@@ -12,6 +12,7 @@ use hgl_parser::SyntaxKind;
 use super::Typer;
 use super::arguments::Takes;
 use super::calls::removes;
+use super::forms::received_type;
 use crate::declared::{agree, agree_with_input_pattern, names_one_of};
 use crate::hir::{
     BinaryOperator, Callee, ConfigurationRead, EndpointOperation, Expr, ExprKind, UnaryOperator,
@@ -49,18 +50,23 @@ pub(super) fn checked_child_result(value: &Expr) -> Option<Expr> {
 /// TYPE-10: when an operand fits a public input pattern, keep its extents in
 /// the type the operand is fitted to. Leave other conversions to `fit`.
 pub(super) fn fitted_input_pattern(supplied: &Type, pattern: &Type) -> Option<Type> {
-    if !whole(supplied) || open(supplied) {
-        return None;
-    }
-    if agree_with_input_pattern(supplied, pattern) {
-        return Some(supplied.clone());
-    }
-    match pattern {
-        Type::Nullable(payload) if agree_with_input_pattern(supplied, payload) => {
-            Some(Type::Nullable(Box::new(supplied.clone())))
+    let matching = |ty: &Type| {
+        if !whole(ty) || open(ty) {
+            return None;
         }
-        _ => None,
-    }
+        if agree_with_input_pattern(ty, pattern) {
+            return Some(ty.clone());
+        }
+        match pattern {
+            Type::Nullable(payload) if agree_with_input_pattern(ty, payload) => {
+                Some(Type::Nullable(Box::new(ty.clone())))
+            }
+            _ => None,
+        }
+    };
+    // A full result can itself match. Try it before looking at what an
+    // ordinary read takes, leaving `fit` to perform the actual read.
+    matching(supplied).or_else(|| matching(received_type(supplied, |_| true)))
 }
 
 impl<'a> Typer<'a> {

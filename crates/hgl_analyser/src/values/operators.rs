@@ -19,7 +19,6 @@ use super::dependent_packs::{
 };
 use super::expressions::written_null;
 use super::fit::{fitted_input_pattern, is_integer_literal, negated, open, whole};
-use super::forms::received_type;
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, defaulted_argument, infer, infer_from_place, mentions,
@@ -1915,11 +1914,7 @@ impl<'a> Typer<'a> {
                 } else {
                     argument.value.clone()
                 };
-                // A full result can itself match the pattern. Try it
-                // before looking at what an ordinary read takes.
-                let ty = fitted_input_pattern(&value.ty, &ty)
-                    .or_else(|| fitted_input_pattern(received_type(&value.ty, |_| true), &ty))
-                    .unwrap_or(ty);
+                let ty = fitted_input_pattern(&value.ty, &ty).unwrap_or(ty);
                 let place = format!("the parameter `{}`", parameter.name);
                 self.fit_input(value, &ty, &place);
             }

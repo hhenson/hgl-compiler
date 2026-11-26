@@ -146,6 +146,16 @@ fn written_operator_inputs_keep_extents_inside_literals() {
         "const fn wrong_item(row: list<str, 2>) -> i64 => dict_take<i64>([\"row\": row])\n",
         "const fn wrong_size(row: list<i64, 3>) -> i64 => sized<i64, 2>((row, true))\n",
         "const fn wrong_candidate_size(row: list<i64, 3>) -> i64 => tuple_take<i64>((row, true))\n",
+        "const fn nullable_row(row: list<i64, 2>?) {\n",
+        "    let a = list_take<i64>([row, row])\n",
+        "    let b = tuple_take<i64>((row, true))\n",
+        "    let c = dict_take<i64>([\"row\": row])\n",
+        "}\n",
+        "const fn result_row(row: result<list<i64, 2>, error>) {\n",
+        "    let a = list_take<i64>([row, row])\n",
+        "    let b = tuple_take<i64>((row, true))\n",
+        "    let c = dict_take<i64>([\"row\": row])\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
