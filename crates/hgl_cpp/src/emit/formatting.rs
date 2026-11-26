@@ -4,7 +4,8 @@
 //! Core's value `debug_print` calls this formatter and flushes the line
 //! through `write` (DBG-1, DBG-3, DBG-9).
 //! The graph renderer borrows its input views (TIME-9) and reads their
-//! state for the requested places. Lifted value calls use value rendering.
+//! state for the requested places. Lifted value calls retain whole-value
+//! rendering on each admitted tick (FMT-6, FMT-8, FN-11).
 
 use std::fmt::Write;
 
