@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use hgl_diagnostics::{Category, Diagnostic, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::arguments::fixed_list_fits;
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{
@@ -1876,7 +1877,7 @@ impl<'a> Typer<'a> {
                 }
             } else {
                 let value = self.argument_read(argument.clone(), &ty);
-                if !self.fixed_list_value_fits(&value, &ty) {
+                if !fixed_list_fits(&ty, &value.ty) {
                     let place = format!("the parameter `{}`", parameter.name);
                     self.fit_input(value, &ty, &place);
                 }

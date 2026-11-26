@@ -92,6 +92,7 @@ fn a_written_list_element_type_keeps_fixed_list_admission() {
         "impl const fn pick(items: list<str, 2>) -> i64 => 2\n",
         "const fn good(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
         "const fn bad(items: list<str, 2>) -> i64 => pick<i64>(items)\n",
+        "fn lifted(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:6:55 type/type.mismatch EXPR-5"]);
 }
