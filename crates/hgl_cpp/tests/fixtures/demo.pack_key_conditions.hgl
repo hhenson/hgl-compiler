@@ -92,6 +92,9 @@ const fn named_quote<const Key: str = "discount", ...Ps>{
     price: i64 = if Key in arg_keys(Ps) { 11 } else { 7 }
 }(items: ...{Ps}) -> i64 => price
 const fn ordinary_quote<...Ps>(price: i64 = if first_key in arg_keys(Ps) { "wrong" } else { 7 }, items: ...Ps) -> i64 => price
+const default_price: i64 = 31
+const fn lexical_quote<...Ps>{price: i64 = if first_key in arg_keys(Ps) { default_price } else { 7 }}(items: ...Ps) -> i64 => price
+const fn caller(default_price: i64) -> i64 => lexical_quote(true)
 
 test omitted_defaults_choose_their_pack_arm {
     assert ordinary_quote() == 7
@@ -103,4 +106,5 @@ test omitted_defaults_choose_their_pack_arm {
     assert relay(true) == 11
     assert named_quote(other: true) == 7
     assert named_quote(discount: true) == 11
+    assert caller(23) == 31
 }

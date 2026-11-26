@@ -162,20 +162,35 @@ fn a_pack_guarded_default_keeps_its_written_dependencies() {
     assert!(checked.report.contains("through `relay`"));
 }
 
-/// UNIT-7: a selected pack arm still has no formal argument in scope.
+/// UNIT-7 excludes formals from every written default arm.
 #[test]
-fn a_selected_default_arm_cannot_read_a_formal_argument() {
-    let checked = module(concat!(
+fn a_pack_guarded_default_excludes_its_own_formals() {
+    let defaults = concat!(
         "const First: i64 = 0\n",
+        "const formal: i64 = 17\n",
         "const fn price<...Ps>{value: i64 = if First in arg_keys(Ps) { formal } else { 7 }}(formal: i64, items: ...Ps) -> i64 => value\n",
-        "const fn invalid() -> i64 => price(23, true)\n",
-    ));
-    assert_eq!(
-        checked.summary(),
-        ["m.hgl:4:30 name/default.formal_argument UNIT-7"],
-        "{}",
-        checked.report
     );
+    for use_default in [
+        "",
+        "const fn selected() -> i64 => price(23, true)\n",
+        "const fn untaken() -> i64 => price(23)\n",
+        "const fn override() -> i64 => price{value: 11}(23, true)\n",
+    ] {
+        let checked = module(&format!("{defaults}{use_default}"));
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:4:63 name/default.formal_argument UNIT-7"],
+            "{}",
+            checked.report
+        );
+    }
+    let lexical = module(concat!(
+        "const First: i64 = 0\n",
+        "const formal: i64 = 17\n",
+        "const fn price<...Ps>{value: i64 = if First in arg_keys(Ps) { formal } else { 7 }}(items: ...Ps) -> i64 => value\n",
+        "const fn caller(formal: i64) -> i64 => price(true)\n",
+    ));
+    assert!(lexical.summary().is_empty(), "{}", lexical.report);
 }
 
 /// UNIT-8 and EXPR-5: an aggregate literal takes the omitted parameter's

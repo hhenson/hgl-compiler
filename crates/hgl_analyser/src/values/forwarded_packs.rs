@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::ast::AstNode;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -58,6 +58,12 @@ pub(crate) fn defer_pack_branch_reports(
     let reports = diagnostics.as_slice()[start..].to_vec();
     diagnostics.truncate(start);
     for report in reports {
+        // UNIT-7 excludes formal bindings from every written default
+        // arm, even where CTRL-16 defers the arm's type checks.
+        if report.code == Code::Catalogued(codes::DEFAULT_FORMAL_ARGUMENT) {
+            diagnostics.emit(report);
+            continue;
+        }
         let at = report.primary;
         let branch = branches.get(&at.file).and_then(|branches| {
             branches
@@ -1516,7 +1522,6 @@ pub(super) fn check_instances(
         MakingCall, MakingPath, bounded_instance_key, emit_instance_report, past_pack_growth_limit,
         past_the_limit,
     };
-    use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = program.callback_phase_bodies.clone();
