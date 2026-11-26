@@ -594,15 +594,16 @@ fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
         module,
         declaration,
         generics,
+        type_packs,
         requirements,
     } = answer
     else {
         return matches!(answer, Answer::Unread).then(|| "unread".to_string());
     };
-    let generics = generics
-        .iter()
-        .map(|argument| canonical_argument(program, argument))
-        .collect::<Option<Vec<_>>>()?;
+    let Detail::Callable(signature) = &program.modules[*module].details[*declaration] else {
+        return None;
+    };
+    let generics = generic_key(program, signature, generics, type_packs)?;
     let requirements = requirements
         .iter()
         .map(|answer| answer_key(program, answer))

@@ -1648,6 +1648,8 @@ pub enum Answer {
         /// What each generic parameter of the candidate stands for
         /// (GEN-2), in the order declared.
         generics: Vec<GenericArgument>,
+        /// The types of its generic packs in binding order (GEN-10).
+        type_packs: Vec<TypePackArgument>,
         /// What answers each requirement the candidate states itself.
         requirements: Vec<Answer>,
     },
