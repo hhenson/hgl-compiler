@@ -35,6 +35,7 @@ pub(super) struct ImmediateValues<'a> {
     generics: &'a [(Location, Argument)],
     locals: &'a [(LocalId, Rc<Expr>)],
     ranges: &'a [(LocalId, Range<i64>)],
+    range_aliases: Option<&'a HashMap<LocalId, LocalId>>,
 }
 
 impl<'a> ImmediateValues<'a> {
@@ -49,12 +50,18 @@ impl<'a> ImmediateValues<'a> {
             generics,
             locals,
             ranges: &[],
+            range_aliases: None,
         }
     }
 
     /// The remaining iteration values where a fixed range was too large to walk.
-    pub(super) fn with_ranges(mut self, ranges: &'a [(LocalId, Range<i64>)]) -> Self {
+    pub(super) fn with_ranges(
+        mut self,
+        ranges: &'a [(LocalId, Range<i64>)],
+        aliases: &'a HashMap<LocalId, LocalId>,
+    ) -> Self {
         self.ranges = ranges;
+        self.range_aliases = Some(aliases);
         self
     }
 
@@ -95,6 +102,13 @@ impl<'a> ImmediateValues<'a> {
         let (min, max) = self.integer_bounds(left)?;
         let (right_min, right_max) = self.integer_bounds(right)?;
         use BinaryOperator::{Equal, Greater, GreaterEqual, Less, LessEqual, NotEqual};
+        if self.range_bounds(left).is_some() && self.range_local(left) == self.range_local(right) {
+            return match operator {
+                Equal | LessEqual | GreaterEqual => Some(true),
+                NotEqual | Less | Greater => Some(false),
+                _ => None,
+            };
+        }
         let (always, never) = match operator {
             Equal | NotEqual => {
                 let equal = min == max && right_min == right_max && min == right_min;
@@ -114,7 +128,7 @@ impl<'a> ImmediateValues<'a> {
         (always || never).then_some(always)
     }
 
-    /// A known threshold compared directly with this range's binding.
+    /// A known threshold compared with this range's binding or an alias.
     pub(super) fn comparison_boundary(self, expression: &Expr, binding: LocalId) -> Option<i64> {
         use BinaryOperator::{Equal, Greater, GreaterEqual, Less, LessEqual, NotEqual};
         let (operator, left, right) = self.builtin_binary(expression)?;
@@ -124,9 +138,9 @@ impl<'a> ImmediateValues<'a> {
         ) {
             return None;
         }
-        let other = match (&left.kind, &right.kind) {
-            (ExprKind::Local(local), _) if *local == binding => right,
-            (_, ExprKind::Local(local)) if *local == binding => left,
+        let other = match (self.range_local(left), self.range_local(right)) {
+            (Some(local), _) if local == binding => right,
+            (_, Some(local)) if local == binding => left,
             _ => return None,
         };
         let LabelValue::Int(value) = self.selector(other)? else {
@@ -140,11 +154,22 @@ impl<'a> ImmediateValues<'a> {
         crate::const_inputs::builtin_operation(self.program, expression).then_some(binary)
     }
 
-    /// Inclusive integer bounds of an active range binding.
-    pub(super) fn range_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
+    /// The lexical local, following direct immutable copies to their source.
+    pub(super) fn range_local(self, expression: &Expr) -> Option<LocalId> {
         let ExprKind::Local(local) = expression.kind else {
             return None;
         };
+        Some(
+            self.range_aliases
+                .and_then(|aliases| aliases.get(&local))
+                .copied()
+                .unwrap_or(local),
+        )
+    }
+
+    /// Inclusive integer bounds of an active range binding.
+    pub(super) fn range_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
+        let local = self.range_local(expression)?;
         let (_, range) = self.ranges.iter().find(|(id, _)| *id == local)?;
         // Only nonempty ranges are installed, so end - 1 cannot overflow.
         Some((range.start, range.end - 1))

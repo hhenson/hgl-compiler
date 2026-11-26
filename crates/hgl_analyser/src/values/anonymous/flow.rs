@@ -1,7 +1,7 @@
 //! The category of a reached return in an immediate anonymous call.
 //! The call's typed body is discarded after this check (TIME-2, TYPE-10).
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -33,6 +33,7 @@ struct Flow<'a, 'p> {
     bindings: ImmediateBindings,
     enclosing_bindings: usize,
     ranges: Vec<(LocalId, Range<i64>)>,
+    range_aliases: HashMap<LocalId, LocalId>,
     range_passes_left: u64,
     range_splits_left: usize,
     live: HashSet<LocalId>,
@@ -43,11 +44,30 @@ pub(super) fn result_is_live(
     body: &[Stmt],
     known: &[(LocalId, Rc<Expr>)],
 ) -> bool {
+    let mut range_aliases = HashMap::new();
+    walk_statement_nodes(body, &mut |node| {
+        if let Node::Statement(Stmt::Declare {
+            local,
+            value:
+                Some(Expr {
+                    kind: ExprKind::Local(source),
+                    ..
+                }),
+        }) = node
+            && typer.locals[*local].kind == LocalKind::Let
+        {
+            // These are lexical IDs. A direct immutable copy carries an
+            // iteration binding's bounds even when its value varies by pass.
+            let source = range_aliases.get(source).copied().unwrap_or(*source);
+            range_aliases.insert(*local, source);
+        }
+    });
     let mut flow = Flow {
         typer,
         bindings: known.to_vec(),
         enclosing_bindings: known.len(),
         ranges: Vec::new(),
+        range_aliases,
         range_passes_left: RANGE_PASSES,
         range_splits_left: RANGE_SPLITS,
         live: HashSet::new(),
@@ -58,7 +78,7 @@ pub(super) fn result_is_live(
 impl Flow<'_, '_> {
     fn known(&self) -> ImmediateValues<'_> {
         ImmediateValues::new(self.typer.program, &self.typer.instance, &self.bindings)
-            .with_ranges(&self.ranges)
+            .with_ranges(&self.ranges, &self.range_aliases)
     }
 
     fn reads_live(&self, value: &Expr) -> bool {
@@ -377,7 +397,7 @@ impl Flow<'_, '_> {
                 }
                 Node::Statement(Stmt::Switch {
                     selector, cases, ..
-                }) if matches!(selector.kind, ExprKind::Local(local) if local == binding) => {
+                }) if known.range_local(selector) == Some(binding) => {
                     for case in cases {
                         if let Some(LabelValue::Int(value)) = &case.value {
                             insert(*value);
