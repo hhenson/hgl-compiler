@@ -30,19 +30,6 @@ impl Typer<'_> {
         };
         *planned = None;
         let Some(signature) = formatting::value_signature(self.program, callee) else {
-            if let [argument] = arguments.as_slice()
-                && let Some(members) =
-                    formatting::collection_members(self.program, callee, &argument.value.ty)
-            {
-                *planned =
-                    self.member_conversions(&members, argument.value.at)
-                        .map(|conversions| {
-                            Box::new(TextCall {
-                                pattern: None,
-                                conversions,
-                            })
-                        });
-            }
             return;
         };
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
@@ -199,7 +186,7 @@ impl Typer<'_> {
             return;
         }
         *planned = Some(Box::new(TextCall {
-            pattern: Some(text.to_string()),
+            pattern: text.to_string(),
             conversions: conversions.into_boxed_slice(),
         }));
     }
@@ -362,7 +349,7 @@ impl Typer<'_> {
     }
 
     /// Record the selected ordinary call, with an input supplied by
-    /// the formatter or collection renderer when it uses the call.
+    /// the formatter when it uses the call.
     fn text_conversion(&mut self, ty: &Type, at: Location) -> Option<Expr> {
         let written = self.node_at(at)?;
         let callee = self.text_converter(written, ty)?;
@@ -374,15 +361,6 @@ impl Typer<'_> {
             .parameters
             .iter()
             .position(|parameter| !parameter.configuration)?;
-        let text = if let Some(members) = formatting::collection_members(self.program, &callee, ty)
-        {
-            Some(Box::new(TextCall {
-                pattern: None,
-                conversions: self.member_conversions(&members, at)?,
-            }))
-        } else {
-            None
-        };
         Some(Expr {
             kind: ExprKind::Call {
                 callee,
@@ -397,7 +375,7 @@ impl Typer<'_> {
                     },
                 }],
                 form: Form::Named,
-                text,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             },
@@ -405,30 +383,6 @@ impl Typer<'_> {
             at,
             category: ValueCategory::Value,
         })
-    }
-
-    fn member_conversions(
-        &mut self,
-        members: &[&Type],
-        at: Location,
-    ) -> Option<Box<[Option<Expr>]>> {
-        members
-            .iter()
-            .map(|ty| {
-                let ty = match ty {
-                    Type::Nullable(inner) => inner.as_ref(),
-                    ty => *ty,
-                };
-                if formatting::needs_text_conversion(ty)
-                    && !names_parameter(ty)
-                    && *ty != Type::Unknown
-                {
-                    Some(Some(self.text_conversion(ty, at)?))
-                } else {
-                    Some(None)
-                }
-            })
-            .collect()
     }
 
     fn checked_places<'s>(&mut self, pattern: &Expr, text: &'s str) -> Option<Vec<Piece<'s>>> {
