@@ -256,3 +256,20 @@ test callback_pair_follows_selected_instances {
     assert eval live_price(t: [2]) == [19]
     assert eval value_units(t: [2]) == [19]
 }
+
+# GEN-17: the selected pack arm can reveal a pair whose callback is still open.
+const first_price: i64 = 0
+fn maybe_price<...Ps>(f: const fn(i64) -> str, t: i64, items: ...Ps) -> i64 =>
+    if first_price in arg_keys(Ps) { t + quoted_price(f(1)) } else { t + 20 }
+fn with_price(f: const fn(i64) -> str, t: i64) -> i64 => maybe_price(f, t, 1)
+fn without_price(f: const fn(i64) -> str, t: i64) -> i64 => maybe_price(f, t)
+fn selected_price(t: i64) -> i64 => with_price(currency, t)
+fn omitted_price(t: i64) -> i64 => without_price(fn(n) => currency(t), t)
+
+# expect-error(constraint, "requires.unmet")
+fn invalid_selected_price(t: i64) -> i64 => with_price(fn(n) => currency(t), t)
+
+test callback_pair_in_selected_pack_arm {
+    assert eval selected_price(t: [2]) == [4]
+    assert eval omitted_price(t: [2]) == [22]
+}

@@ -198,11 +198,17 @@ impl Typer<'_> {
         open
     }
 
-    pub(super) fn mark_open_instance_captures(&mut self) {
+    /// Mark the callback slots whose captures still depend on a caller.
+    pub(super) fn mark_open_instance_captures(&mut self) -> bool {
+        let open = self.open_callback_captures();
+        if open.is_empty() {
+            return false;
+        }
         self.callback_captures = vec![ValueCategory::Value; self.signature.parameters.len()];
-        for callback in self.open_callback_captures() {
+        for callback in open {
             self.callback_captures[callback.slot] = ValueCategory::Unsettled;
         }
+        true
     }
 
     fn read_capture_categories(
@@ -260,6 +266,7 @@ impl Typer<'_> {
         trial.callback_captures = captures;
         let unsettled = HashSet::new();
         if independent {
+            trial.selected_pack_branches = self.selected_pack_branches;
             trial.unsettled_results = Some(&unsettled);
         }
         let (body, _) = trial.graph();
