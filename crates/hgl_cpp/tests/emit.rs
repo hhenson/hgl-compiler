@@ -3135,8 +3135,9 @@ fn temporal_structs_and_nullables_are_written() {
 }
 
 /// Report temporal shapes still beyond the target: a struct whose field
-/// has a form the library does not read as a part (a set), a struct with
-/// generic value arguments, and a tuple with an atomic position.
+/// has a form the library does not read as a part (a set), a struct with an
+/// unsupported generic value argument kind (`str`), and a tuple with an
+/// atomic position.
 #[test]
 fn temporal_structs_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -3146,13 +3147,13 @@ fn temporal_structs_not_written_yet_are_reported() {
             "struct Listed {\n",
             "    values: set<i64>\n",
             "}\n",
-            "struct Box<const N: i64> {\n",
+            "struct Labeled<const tag: str> {\n",
             "    value: i64\n",
             "}\n",
             "fn listed(value: Listed) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn boxed(value: Box<2>) -> i64 {\n",
+            "fn labeled(value: Labeled<\"a\">) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
             "struct Plain {\n",
@@ -3166,15 +3167,16 @@ fn temporal_structs_not_written_yet_are_reported() {
     assert_eq!(
         emitted.reported,
         [
+            "m.hgl:5:8 the cpp target does not write a generic parameter of this kind of a struct yet",
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
-            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<2>` yet",
+            "m.hgl:11:12 the cpp target does not write a temporal value of `Labeled<\"a\">` yet",
             "m.hgl:17:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }
 
-/// Schema identity includes the applied type arguments (TYPE-3), and the
-/// same schema is usable by both sides of a trace (TYPE-9, CEVAL-3, CEVAL-4).
+/// Schema identity includes the applied type and value arguments (TYPE-3), and
+/// the same schema is usable by both sides of a trace (TYPE-9, CEVAL-3, CEVAL-4).
 #[test]
 fn concrete_generic_structs_use_applied_bundle_schemas() {
     let emitted = emit_with(
@@ -3196,6 +3198,16 @@ fn concrete_generic_structs_use_applied_bundle_schemas() {
         .expect("generated types header")
         .text;
     assert!(types.contains("::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>"));
+    assert!(types.contains("::hglrt::nominal_struct_name<\"Bucket\", ::hglrt::value_arg<N_p_>>"));
+    assert!(types.contains(
+        "::hglrt::nominal_struct_name<\"Mixed\", ::hglrt::type_arg_slot, ::hglrt::value_arg<N_p_>>"
+    ));
+    assert!(
+        types.contains("::hglrt::nominal_struct_name<\"InferredSized\", ::hglrt::value_arg<N_p_>>")
+    );
+    assert!(types.contains(
+        "::hglrt::nominal_struct_name<\"InferredRow\", ::hglrt::type_arg_slot, ::hglrt::value_arg<N_p_>>"
+    ));
 }
 
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
@@ -3688,8 +3700,10 @@ test tag {
         .expect("module implementation")
         .text;
     assert!(body.contains("::hglrt::type_tag{\"i64\"}"), "{body}");
-    // Cross-module same-named structs emit distinct declaration identities.
+    // Cross-module same-named structs emit distinct declaration identities
+    // alongside their canonical spelling for display (TYPE-18, FMT-5).
     assert!(body.contains("::hglrt::type_tag{\"declaration("), "{body}");
+    assert!(body.contains(", \"Quote\"}"), "{body}");
 }
 
 /// TYPE-18, Proposed: source connection checking awaits its diagnostic,

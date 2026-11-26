@@ -125,14 +125,19 @@ fn template_arguments(
     if !template_keeps(program, struct_of, arguments, &mut Vec::new()) {
         return None;
     }
-    let written: Option<Vec<String>> = arguments
+    let written: Option<Vec<String>> = read
+        .generics
         .iter()
-        .map(|argument| match argument {
+        .zip(arguments)
+        .map(|(generic, argument)| match argument {
             GenericArgument::Type(ty) => cpp_type_in(program, ty, queries),
             GenericArgument::NoResult => None,
-            GenericArgument::Constant(constant) => {
-                constant_argument(program, &constant.value, queries)
-            }
+            GenericArgument::Constant(constant) => constant_argument(
+                program,
+                &constant.value,
+                matches!(generic.kind, GenericKind::Value(Type::Unknown)),
+                queries,
+            ),
         })
         .collect();
     let mut written = written?;
@@ -342,10 +347,21 @@ fn walk_types(ty: &Type, visit: &mut dyn FnMut(&Type)) {
 fn constant_argument(
     program: &Program,
     value: &ConstantValue,
+    deduced: bool,
     queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     match value {
-        ConstantValue::Int(number) => Some(integer_literal(*number)),
+        ConstantValue::Int(number) => {
+            let literal = integer_literal(*number);
+            if deduced {
+                // GEN-13: an inferred integer value parameter uses `auto` in
+                // C++, so pin integer literals to `::hgraph::Int` (`i64`) to
+                // match forwarded `const M: i64` arguments and `hglrt::text_of`.
+                Some(format!("static_cast<::hgraph::Int>({literal})"))
+            } else {
+                Some(literal)
+            }
+        }
         ConstantValue::Bool(flag) => Some(flag.to_string()),
         ConstantValue::Float(number) if number.is_finite() => Some(format!("({number:?})")),
         ConstantValue::Member(member) => {
@@ -366,16 +382,26 @@ fn constant_argument(
     }
 }
 
-/// TYPE-18: concrete applications use the analyser's canonical identity. A
+/// TYPE-18, FMT-5: concrete applications carry the analyser's canonical
+/// identity for nominal matching and its canonical spelling for display. A
 /// generic layout forwards that same tag as an extra C++ template argument.
 fn type_tag(value: &ConstantValue, queries: Option<&[ConstantValue]>) -> Option<String> {
     if let ConstantValue::Type(ty) = value
         && let Some(identity) = ty.identity()
     {
+        let spelling = ty.canonical_spelling();
+        if spelling == identity {
+            return Some(format!(
+                "::{}::type_tag{{{}}}",
+                runtime::NAMESPACE,
+                names::string(&identity)
+            ));
+        }
         return Some(format!(
-            "::{}::type_tag{{{}}}",
+            "::{}::type_tag{{{}, {}}}",
             runtime::NAMESPACE,
-            names::string(&identity)
+            names::string(&identity),
+            names::string(&spelling)
         ));
     }
     let index = queries?
