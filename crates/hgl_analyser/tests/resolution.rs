@@ -1152,3 +1152,249 @@ const fn outer(value: i64 = dep::marker()) -> i64 => value"#,
         checked.report
     );
 }
+
+/// UNIT-7 excludes formal and field names in generic value defaults, even
+/// when the enclosing module or a file import provides a matching value.
+#[test]
+fn generic_value_defaults_exclude_formal_and_field_names() {
+    let checked = check(&[
+        ("lib.hgl", "module lib\nexport const cap: i64 = 3\n"),
+        (
+            "m.hgl",
+            r#"module m
+use lib as dep
+const outer: i64 = 2
+const fn callable<const K: i64 = outer>(outer: i64) -> i64 => K
+const fn missing<const K: i64 = depth>(depth: i64) -> i64 => K
+const fn configured<const K: i64 = dep::cap>{const dep: i64 = 3}() -> i64 => K
+struct Held<const N: i64 = outer> { outer: i64 }
+struct Alone<const N: i64 = width> { width: i64 }
+operator guarded<const N: i64 = outer>(outer: i64) -> i64"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:34 name/default.formal_argument UNIT-7",
+            "m.hgl:5:33 name/default.formal_argument UNIT-7",
+            "m.hgl:6:36 name/default.formal_argument UNIT-7",
+            "m.hgl:7:28 name/default.formal_argument UNIT-7",
+            "m.hgl:8:29 name/default.formal_argument UNIT-7",
+            "m.hgl:9:33 name/default.formal_argument UNIT-7",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-7 leaves ordinary names in signature types, earlier generic
+/// bindings, a default's local bindings, and GEN-18's callback visible.
+#[test]
+fn generic_defaults_keep_their_lexical_scope_and_law_operand() {
+    let checked = module(
+        r#"struct Kind { n: i64 }
+const fn typed<const K: Kind>(Kind: i64) -> i64 => K.n
+const limit: i64 = 3
+struct Shape<const N: i64 = limit> { n: i64 }
+const fn local<const N: i64 = { let count = 2
+count }, const K: i64 = N>(count: i64) -> i64 => K + count
+const fn laws<const A: bool = associative(f), const C: bool = commutative(f)>(
+    f: const fn(i64, i64) -> i64) -> tuple<bool, bool> => (A, C)"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// UNIT-7 and GEN-14: the slot decides whether the bare name reads a
+/// value. The same spelling can legitimately supply a type in a default.
+#[test]
+fn bare_generic_arguments_in_defaults_follow_the_declared_slot_kind() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Price { cents: i64 }
+struct Quote<T> { bid: T }
+struct Tag<const N: i64> { n: i64 }
+const amount: Price = Price(cents: 77)
+const outer: i64 = 4
+const fn correct<const K: Type = type(Quote<Price>(bid: amount))>(Price: i64) -> Type => K
+const fn wrong<const K: Type = type(Tag<Price>(n: 1))>(Price: i64) -> Type => K
+const fn shadowed<const K: Type = type(Tag<outer>(n: 1))>(outer: i64) -> Type => K
+const fn unbound<const K: Type = type(Tag<absent>(n: 1))>(absent: i64) -> Type => K
+struct Good<const K: Type = type(Quote<Price>(bid: amount))> { Price: i64 }
+struct Bad<const K: Type = type(Tag<Price>(n: 1))> { Price: i64 }
+"#,
+    )]);
+    let reports: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|report| report.code.as_str())
+        .collect();
+    assert_eq!(
+        reports, ["name/default.formal_argument"; 4],
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-4, FN-17, UNIT-7 and GEN-14: the selected role, in either
+/// declaration order, determines the namespace of its written argument.
+#[test]
+fn a_default_uses_the_selected_generic_slot_of_a_callable_pair() {
+    for reverse in [false, true] {
+        let paired = |value: &str, temporal: &str| {
+            if reverse {
+                format!("{temporal}\n{value}")
+            } else {
+                format!("{value}\n{temporal}")
+            }
+        };
+        let type_pair = paired(
+            "const fn pick<T>(v:T)->i64=>17",
+            "fn pick<const N:i64>(v:i64)->i64=>N",
+        );
+        let value_pair = paired(
+            "const fn choose_count<const N:i64>(v:i64)->i64=>N",
+            "fn choose_count<T>(v:T)->i64=>19",
+        );
+        let source = format!(
+            r#"module m
+struct Key {{ value: i64 }}
+const row: Key = Key(value: 9)
+const size: i64 = 29
+{type_pair}
+{value_pair}
+const fn call(f:const fn(Key)->i64)->i64=>f(row)
+const fn use_int(f:const fn(i64)->i64)->i64=>f(7)
+const fn direct<const Kind:Type=type(pick<Key>(row))>(Key:i64)->Type=>Kind
+struct Callback<const Kind:Type=type(call(pick<Key>))> {{ Key:i64 }}
+const fn wrong<const N:i64=choose_count<size>(7)>(size:i64)->i64=>N
+struct Wrong<const Kind:Type=type(use_int(choose_count<size>))> {{ size:i64 }}
+const first:i64=0
+const fn guarded<...Ts, const N:i64=if first in arg_keys(Ts) {{ choose_count<size>(7) }} else {{ 2 }}>(size:i64, xs:...Ts)->i64=>N
+const fn guarded_type<...Ts, const K:Type=if first in arg_keys(Ts) {{ type(pick<Key>(row)) }} else {{ type(row) }}>(Key:i64, xs:...Ts)->Type=>K
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        let codes: Vec<_> = checked
+            .findings
+            .iter()
+            .map(|report| report.code.as_str())
+            .collect();
+        assert_eq!(
+            codes, ["name/default.formal_argument"; 3],
+            "{source}\n{}",
+            checked.report
+        );
+        assert!(
+            checked
+                .findings
+                .iter()
+                .all(|report| report.message.contains("size"))
+        );
+    }
+}
+
+/// UNIT-7 and UNIT-8 read names lexically in all four kinds of default.
+/// A GEN-10 guard can skip a value at execution but cannot hide its name.
+#[test]
+fn pack_guards_preserve_the_selected_role_in_every_default() {
+    let value_helper = "const fn measure<const N:i64>(v:i64)->i64=>N";
+    let temporal_helper = "fn measure<T>(v:T)->T=>v";
+    let type_helper = "const fn describe<T>(v:T)->T=>v";
+    let other_role = "fn describe<const N:i64>(v:i64)->i64=>N";
+    for helpers in [
+        format!("{value_helper}\n{type_helper}"),
+        format!("{value_helper}\n{temporal_helper}\n{type_helper}\n{other_role}"),
+        format!("{temporal_helper}\n{value_helper}\n{other_role}\n{type_helper}"),
+    ] {
+        for (name, query, rejects) in [
+            ("width", "type(measure<width>(8))", true),
+            ("Unit", "type(describe<Unit>(row))", false),
+            ("unused", "type(measure<width>(8))", false),
+        ] {
+            let conditional = format!("if first in arg_keys(Ts) {{ {query} }} else {{ type(0) }}");
+            let other_arm = format!("if first in arg_keys(Ts) {{ type(0) }} else {{ {query} }}");
+            let source = format!(
+                r#"module m
+const first:i64 = 0
+const width:i64 = 23
+struct Unit {{ n:i64 }}
+const row:Unit = Unit(n:11)
+{helpers}
+const fn generic<...Ts,const K:Type={conditional}>({name}:i64,xs:tuple<Ts>)->Type=>K
+const fn ordinary<...Ts>({name}:i64,xs:tuple<Ts>,fallback:Type={other_arm})->Type=>fallback
+const fn config<...Ts>{{{name}:i64, fallback:Type={conditional}}}(xs:tuple<Ts>)->Type=>fallback
+struct Fields<...Ts> {{
+    {name}:i64
+    xs:tuple<Ts>
+    fallback:Type={other_arm}
+}}
+"#
+            );
+            let checked = check(&[("m.hgl", &source)]);
+            let codes: Vec<_> = checked
+                .findings
+                .iter()
+                .map(|report| report.code.as_str())
+                .collect();
+            let expected = if rejects {
+                &["name/default.formal_argument"; 4][..]
+            } else {
+                &[]
+            };
+            assert_eq!(codes, expected, "{source}\n{}", checked.report);
+        }
+    }
+}
+
+/// FN-19 can leave an entire expansion unopened. UNIT-7 still applies
+/// at each written use, and a function reference takes the receiving
+/// template's role (FN-17) even when there is no pack entry to run.
+#[test]
+fn excluded_names_in_an_unexpanded_pack_follow_the_lexical_call_site() {
+    let prelude = r#"
+const width:i64=23
+struct Unit { n:i64 }
+const row:Unit=Unit(n:3)
+const fn measure<const N:i64>(x:i64)->i64=>N
+fn measure<T>(x:T)->T=>x
+const fn pick<T>(x:T)->T=>x
+fn pick<const N:i64>(x:i64)->i64=>N
+const fn entries<...As>(args:...As)->i64=>1
+const fn inspect(f:const fn(Unit)->Unit)->i64=>f(row).n
+const fn route(f:fn(i64)->i64)->i64=>4
+"#;
+    for (binding, entry, invalid) in [
+        ("width", "measure<width>(2)", true),
+        ("Unit", "inspect(pick<Unit>)", false),
+        ("width", "route(pick<width>)", true),
+        (
+            "width",
+            "entries(...{for j in arg_keys(Ps): measure<width>(2)})",
+            true,
+        ),
+        ("other", "measure<width>(2)", false),
+    ] {
+        let spread = format!("entries(...{{for k in arg_keys(Ps): {entry}}})");
+        let checked = module(&format!(
+            "{prelude}
+const fn generic<...Ps,const K:i64={spread}>({binding}:i64,v:tuple<Ps>)->i64=>K
+const fn ordinary<...Ps>({binding}:i64,v:tuple<Ps>,k:i64={spread})->i64=>k
+const fn config<...Ps>{{{binding}:i64,k:i64={spread}}}(v:tuple<Ps>)->i64=>k
+struct Fields<...Ps> {{ {binding}:i64\n v:tuple<Ps>\n k:i64={spread} }}
+test override {{ assert ordinary(9,(11,),12)==12 }}
+"
+        ));
+        let codes: Vec<_> = checked
+            .findings
+            .iter()
+            .map(|report| report.code.as_str())
+            .collect();
+        let expected = if invalid {
+            &["name/default.formal_argument"; 4][..]
+        } else {
+            &[]
+        };
+        assert_eq!(codes, expected, "{entry}\n{}", checked.report);
+    }
+}

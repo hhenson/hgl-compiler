@@ -891,6 +891,12 @@ impl<'a> Typer<'a> {
                 })
             })
             .collect();
+        if let Some(ty @ Type::Dict { .. }) = expected {
+            self.check_collection_constants(
+                items.iter().filter_map(|pair| pair.children().next()),
+                ty,
+            );
+        }
         let ty = match (expected, &sides) {
             (Some(expected), Some(_)) => expected.clone(),
             // A place whose type is known and is no dictionary is given
@@ -1011,13 +1017,8 @@ impl<'a> Typer<'a> {
                     self.fit(value, element, "an element")
                 })
                 .collect();
-            // EXPR-9: a duplicate constant member of a string set is
-            // a source error, including in a generic value argument.
-            if matches!(expected, Type::Set(_) if *element == Type::Scalar(Scalar::Str))
-                && let Err(fault) = self.read_constant(node, Some(expected))
-                && let Some(report) = fault.set_duplicate_report()
-            {
-                self.diagnostics.emit(report);
+            if matches!(expected, Type::Set(_)) {
+                self.check_collection_constants(items.iter().cloned(), expected);
             }
             // TYPE-10: "Size participates in identity." A list of a
             // size that is known has that many entries.

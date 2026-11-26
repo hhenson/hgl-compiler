@@ -810,7 +810,7 @@ void bits_are_held_as_they_were_read()
     ::hglrt::testing::statement();
     ::hglrt::testing::check(((!(made).first) && ::hglrt::eq__T_T<::hglrt::list<::hgraph::Bool>>((made).on, ::hglrt::list<::hgraph::Bool>{true, true})));
     ::hglrt::testing::statement();
-    [[maybe_unused]] const ::hglrt::set<::hgraph::Bool> members = ::hglrt::set<::hgraph::Bool>{true, false, true};
+    [[maybe_unused]] const ::hglrt::set<::hgraph::Bool> members = ::hglrt::set<::hgraph::Bool>{true, false, ::hglrt::item(on, 0)};
     ::hglrt::testing::statement();
     ::hglrt::testing::check(::hglrt::eq__T_T<::hglrt::set<::hgraph::Bool>>(members, ::hglrt::set<::hgraph::Bool>{false, true}));
 }

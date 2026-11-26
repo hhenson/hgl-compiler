@@ -60,17 +60,26 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
             diagnostics,
             uses: Vec::new(),
             contextual_type_reports: HashMap::new(),
+            default_type_reports: HashMap::new(),
             hidden_callables: HashMap::new(),
             prelude: Vec::new(),
             decisions: Vec::new(),
         };
         resolver.module();
-        let (mut uses, prelude, decisions, hidden_callables, contextual_type_reports) = (
+        let (
+            mut uses,
+            prelude,
+            decisions,
+            hidden_callables,
+            contextual_type_reports,
+            default_type_reports,
+        ) = (
             resolver.uses,
             resolver.prelude,
             resolver.decisions,
             resolver.hidden_callables,
             resolver.contextual_type_reports,
+            resolver.default_type_reports,
         );
 
         let module = &mut program.modules[index];
@@ -86,6 +95,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.decisions = decisions;
         module.hidden_callables = hidden_callables;
         module.contextual_type_reports = contextual_type_reports;
+        module.default_type_reports = default_type_reports;
         for name in prelude {
             if !module
                 .prelude_names
@@ -230,6 +240,7 @@ struct Resolver<'a> {
     uses: Vec<NameUse>,
     /// Value-only reports wait for the GEN-14 argument kind to be known.
     contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
+    default_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
     hidden_callables: HashMap<Location, Location>,
     prelude: Vec<PreludeName>,
     decisions: Vec<Decision>,
@@ -396,16 +407,19 @@ impl Resolver<'_> {
     /// A function, an operator or a native function.
     fn callable(&mut self, node: &SyntaxNode) {
         self.frames.push(Frame::default());
-        // GEN-1: "Generic scope covers the whole declaration."
-        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            self.generic_params(&generics, true);
-        }
+        // GEN-18: a law default needs the bound function parameter.
+        let (law_defaults, mut defaults): (Vec<_>, Vec<_>) = self
+            .generic_params(node)
+            .into_iter()
+            .partition(|expr| crate::laws::predicate(expr).is_some());
         let parameters = crate::read::parameters(node);
         // The types first: they see the generic parameters.
         for parameter in &parameters {
-            for part in split_at_default(parameter).0 {
+            let (types, initializers) = split_at_default(parameter);
+            for part in types {
                 self.walk(&part);
             }
+            defaults.extend(initializers);
         }
         if let Some(result) = child(node, SyntaxKind::ReturnType) {
             self.walk(&result);
@@ -421,10 +435,8 @@ impl Resolver<'_> {
                 what: "a parameter of the same declaration",
             })
             .collect();
-        for parameter in &parameters {
-            for part in split_at_default(parameter).1 {
-                self.walk(&part);
-            }
+        for default in defaults {
+            self.walk(&default);
         }
         self.hidden.clear();
         for parameter in &parameters {
@@ -438,14 +450,8 @@ impl Resolver<'_> {
                 self.bind(&name, kind);
             }
         }
-        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            for generic in generics.children() {
-                if let Some(default) = crate::read::default_of(&generic)
-                    && crate::laws::predicate(&default).is_some()
-                {
-                    self.walk(&default);
-                }
-            }
+        for default in law_defaults {
+            self.walk(&default);
         }
         // FN-8: a pack's `for f` sees the callable's parameters. This is
         // separate from reading the pack's type or the parameter defaults.
@@ -477,7 +483,12 @@ impl Resolver<'_> {
         self.frames.pop();
     }
 
-    fn generic_params(&mut self, generics: &SyntaxNode, defer_laws: bool) {
+    /// Binds generic names and resolves their types. The caller walks their
+    /// defaults in the same UNIT-7 scope as the declaration's other defaults.
+    fn generic_params(&mut self, declaration: &SyntaxNode) -> Vec<SyntaxNode> {
+        let Some(generics) = child(declaration, SyntaxKind::GenericParams) else {
+            return Vec::new();
+        };
         let parameters: Vec<SyntaxNode> = generics
             .children()
             .filter(|parameter| parameter.kind() == SyntaxKind::GenericParam)
@@ -491,27 +502,20 @@ impl Resolver<'_> {
                 self.bind(&name, LocalKind::GenericParameter);
             }
         }
-        // The type of `const N: i64`.
+        let mut defaults = Vec::new();
         for parameter in &parameters {
-            let (types, defaults) = split_at_default(parameter);
+            let (types, initializers) = split_at_default(parameter);
             for part in types {
                 self.walk(&part);
             }
-            for part in defaults {
-                // GEN-18, UNIT-8: the one default that may inspect a
-                // formal function waits until those parameters are bound.
-                if !defer_laws || crate::laws::predicate(&part).is_none() {
-                    self.walk(&part);
-                }
-            }
+            defaults.extend(initializers);
         }
+        defaults
     }
 
     fn structure(&mut self, node: &SyntaxNode) {
         self.frames.push(Frame::default());
-        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            self.generic_params(&generics, false);
-        }
+        let mut defaults = self.generic_params(node);
         // UNIT-7: a default is resolved "excluding ... the struct's
         // instance fields". A field's name is the first token of its
         // member; `time` may be one (LEX-9) and is no name to look up.
@@ -529,27 +533,21 @@ impl Resolver<'_> {
             match part.kind() {
                 SyntaxKind::GenericParams => {}
                 SyntaxKind::StructMember => {
-                    let (types, defaults) = split_at_default(&part);
+                    let (types, initializers) = split_at_default(&part);
                     // `name = value` has no `:`; everything is after `=`.
                     for part in types {
                         self.walk(&part);
                     }
-                    self.hidden = fields
-                        .iter()
-                        .map(|field| Hidden {
-                            name: field.name.clone(),
-                            at: field.at,
-                            what: field.what,
-                        })
-                        .collect();
-                    for part in defaults {
-                        self.walk(&part);
-                    }
-                    self.hidden.clear();
+                    defaults.extend(initializers);
                 }
                 _ => self.walk(&part),
             }
         }
+        self.hidden = fields;
+        for default in defaults {
+            self.walk(&default);
+        }
+        self.hidden.clear();
         self.frames.pop();
     }
 
@@ -676,8 +674,55 @@ impl Resolver<'_> {
     /// constraint, an instantiation.
     #[inline(never)]
     fn name_use(&mut self, node: &SyntaxNode) {
-        self.name_of(node);
+        if !self.default_type_name(node) {
+            self.name_of(node);
+        }
         self.children(node);
+    }
+
+    /// UNIT-7 excludes values. A type in the same scope has its ordinary
+    /// binding; GEN-14 decides which reading of a lone generic argument is used.
+    fn default_type_name(&mut self, node: &SyntaxNode) -> bool {
+        if self.hidden.is_empty() || node.kind() != SyntaxKind::NamedType {
+            return false;
+        }
+        let qualified = child(node, SyntaxKind::QualifiedName);
+        let Some(first) = identifiers(qualified.as_ref().unwrap_or(node)).next() else {
+            return false;
+        };
+        if qualified.is_none() && first.text() == "Type"
+            || self
+                .frames
+                .iter()
+                .rev()
+                .any(|frame| frame.bound.contains_key(first.text()))
+            || !self.hidden.iter().any(|hidden| hidden.name == first.text())
+        {
+            return false;
+        }
+        let Some(name) = crate::syntax::name_token(node) else {
+            return false;
+        };
+        let ambiguous = child(node, SyntaxKind::GenericArgs).is_none()
+            && node
+                .parent()
+                .is_some_and(|parent| parent.kind() == SyntaxKind::GenericArgs);
+        let before = self.diagnostics.len();
+        let hidden = std::mem::take(&mut self.hidden);
+        self.name_of(node);
+        self.hidden = hidden;
+        if ambiguous {
+            let key = self.at(&name);
+            let reports = self.diagnostics.as_slice()[before..].to_vec();
+            self.diagnostics.truncate(before);
+            if !reports.is_empty() {
+                self.default_type_reports.insert(key, reports);
+            }
+            if let Some(report) = self.default_name_report(&first) {
+                self.contextual_type_reports.insert(key, vec![report]);
+            }
+        }
+        true
     }
 
     /// `name<...>(...)` that reads two ways.
@@ -1311,11 +1356,17 @@ impl Resolver<'_> {
     /// UNIT-7 rejects a formal or field name in a default before looking
     /// for the same name in the enclosing scope.
     fn reject_default_name(&mut self, token: &SyntaxToken) -> bool {
+        if let Some(report) = self.default_name_report(token) {
+            self.diagnostics.emit(report);
+            return true;
+        }
+        false
+    }
+
+    fn default_name_report(&self, token: &SyntaxToken) -> Option<hgl_diagnostics::Diagnostic> {
         let name = token.text();
-        let Some(hidden) = self.hidden.iter().find(|hidden| hidden.name == name) else {
-            return false;
-        };
-        self.diagnostics.emit(
+        let hidden = self.hidden.iter().find(|hidden| hidden.name == name)?;
+        Some(
             error(
                 Category::Name,
                 codes::DEFAULT_FORMAL_ARGUMENT,
@@ -1324,8 +1375,7 @@ impl Resolver<'_> {
                 "UNIT-7",
             )
             .with_related(hidden.at, "declared here"),
-        );
-        true
+        )
     }
 
     /// UNIT-2: "an alias qualifies a public interface with
