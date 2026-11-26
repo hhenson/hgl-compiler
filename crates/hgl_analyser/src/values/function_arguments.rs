@@ -1877,12 +1877,14 @@ fn reflected_arguments<'a>(
             readings
         })
         .collect();
+    // Even one reading of the inputs can leave several results of a
+    // partially written operator. Check the complete candidate (FN-17).
     let operator_trial = match target {
         ReflectedTarget::Operator {
             operator,
             candidates,
             written,
-        } if choices.iter().any(|choices| choices.len() > 1) => Some((
+        } if written.is_some() || choices.iter().any(|choices| choices.len() > 1) => Some((
             operator,
             candidates,
             written.map(|(name, bindings, _)| (name, bindings)),

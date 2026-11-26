@@ -384,8 +384,13 @@ const fn describe_result<R, ...Ps, ...As>(
 const fn descriptions(other: const fn(i64, i64) -> i64, xs: list<i64, 2>) -> tuple<str, str> =>
     (describe_result(other, describe<9>, xs), describe_result(other, describe_reversed<9>, xs))
 
+const fn descriptions_at_list(other: const fn(i64, i64) -> i64, xs: list<i64, 2>) -> tuple<str, str> =>
+    (describe_result(other, describe<9, list<i64, 2>>, xs),
+     describe_result(other, describe_reversed<9, list<i64, 2>>, xs))
+
 test proven_results_with_identical_inputs {
     assert descriptions(sibling, [8, 5]) == ("forward", "reverse")
+    assert descriptions_at_list(sibling, [8, 5]) == ("forward", "reverse")
 }
 
 const fn ambiguous_description(other: const fn(i64, i64) -> i64, xs: list<i64, 2>) -> str
