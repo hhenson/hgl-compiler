@@ -1001,7 +1001,7 @@ analyser: partial
 - Core declares a native value candidate for `convert<str>(Type)`.
 
 - A user type uses its selected `convert<str>` and rejects if there is no candidate.
-- Core HGL candidates admit growing/fixed list, set, dictionary and tuple text, and list, set and dictionary delta text, when each written member has its FMT-5 text. Missing member conversions reject at the call. Formatting a tuple retains the selected type pack for its conversion.
+- Core HGL candidates admit growing/fixed list, set, dictionary and tuple text, and list, set and dictionary delta text, when each written member has its FMT-5 text. A member without an infallible text conversion rejects at the call, including inside a nested tuple. Formatting and named requirements retain a selected tuple conversion's type pack.
 - A nullable field checks the text conversion of its payload type. The target writes that text when present and `null` when absent.
 - Left: struct text candidates (#751).
 

@@ -1843,7 +1843,7 @@ impl<'a> Typer<'a> {
                         module,
                         declaration,
                         generics,
-                        ..
+                        type_packs,
                     }) => {
                         self.requiring += 1;
                         let requirements = self.answers(module, declaration, &generics);
@@ -1853,6 +1853,7 @@ impl<'a> Typer<'a> {
                             module,
                             declaration,
                             generics,
+                            type_packs,
                             requirements,
                         }
                     }
@@ -2001,7 +2002,7 @@ impl<'a> Typer<'a> {
         let supplied = requirement_inputs(public, operands.iter().map(|(_, ty)| ty));
         let Requested {
             place: requested,
-            among,
+            mut among,
             unfit,
             ..
         } = self.output_requested(operator, public, found, &supplied, false);
@@ -2020,6 +2021,19 @@ impl<'a> Typer<'a> {
             && !self.admits(arrow, requested)
         {
             return Some(Answered::Unmet);
+        }
+        // FMT-5 needs a conversion that gives text directly. This also
+        // applies to the named `convert(T) -> str` requirement used by
+        // Core's compound conversions. Ordinary calls can still read a
+        // fallible result's payload when their place expects it (ERR-15).
+        let text = Type::Scalar(crate::Scalar::Str);
+        if result == Some(&text)
+            && program.core() == Some(operator.module)
+            && program.modules[operator.module].declarations[operator.declaration].name == "convert"
+        {
+            among
+                .get_or_insert_with(|| vec![text.clone()])
+                .retain(|candidate| *candidate == text);
         }
         // What the call asks of the result: with the operator's
         // defaults, or as its arrow says.
@@ -3421,17 +3435,19 @@ pub(super) fn instances_hold(
                 // the candidate this instance's caller answers it with
                 // (GEN-16); any other has the instance's arguments and
                 // answers in place.
-                let (callee, generics, answers) = match call.required {
+                let (callee, generics, mut type_packs, answers) = match call.required {
                     Some(position) => match made.answers.get(position) {
                         Some(hir::Answer::Candidate {
                             module,
                             declaration,
                             generics,
+                            type_packs,
                             requirements,
                             ..
                         }) => (
                             (*module, *declaration),
                             generics.clone(),
+                            type_packs.clone(),
                             requirements.clone(),
                         ),
                         _ => continue,
@@ -3474,16 +3490,23 @@ pub(super) fn instances_hold(
                         (
                             call.callee,
                             generics,
+                            call.type_packs.clone(),
                             call.answers
                                 .iter()
                                 .map(|answer| {
-                                    answered_in(program, answer, &map, &declared, &made.answers)
+                                    answered_in(
+                                        program,
+                                        answer,
+                                        &map,
+                                        &declared,
+                                        &enclosing_packs,
+                                        &made.answers,
+                                    )
                                 })
                                 .collect(),
                         )
                     }
                 };
-                let mut type_packs = call.type_packs.clone();
                 let forwarded = type_packs.iter().any(|pack| pack.forwarded_from.is_some());
                 for pack in &mut type_packs {
                     pack.place_types(|ty| placed(substitute_within(ty, &map), &declared));
@@ -4852,6 +4875,7 @@ fn answered_in(
     answer: &hir::Answer,
     map: &[(Location, &Argument)],
     declared: &[Location],
+    enclosing_packs: &PackTypes<'_>,
     answers: &[hir::Answer],
 ) -> hir::Answer {
     match answer {
@@ -4860,20 +4884,31 @@ fn answered_in(
             module,
             declaration,
             generics,
+            type_packs,
             requirements,
-        } => hir::Answer::Candidate {
-            operator: *operator,
-            module: *module,
-            declaration: *declaration,
-            generics: generics
-                .iter()
-                .map(|argument| given_in(program, argument, map, declared))
-                .collect(),
-            requirements: requirements
-                .iter()
-                .map(|answer| answered_in(program, answer, map, declared, answers))
-                .collect(),
-        },
+        } => {
+            let mut type_packs = type_packs.clone();
+            for pack in &mut type_packs {
+                pack.place_types(|ty| placed(substitute_within(ty, map), declared));
+                enclosing_packs.place_forwarded(pack);
+            }
+            hir::Answer::Candidate {
+                operator: *operator,
+                module: *module,
+                declaration: *declaration,
+                generics: generics
+                    .iter()
+                    .map(|argument| given_in(program, argument, map, declared))
+                    .collect(),
+                type_packs,
+                requirements: requirements
+                    .iter()
+                    .map(|answer| {
+                        answered_in(program, answer, map, declared, enclosing_packs, answers)
+                    })
+                    .collect(),
+            }
+        }
         hir::Answer::Stated(position) => answers
             .get(*position)
             .cloned()
