@@ -147,3 +147,19 @@ test a_written_type_reads_the_current_entry {
     assert a_written_local("one", 2, "three") == 212
     assert a_written_result(4, 5) == 450
 }
+
+# FN-17/19, GEN-6: a written callback keeps its slot while the spread waits
+# for its keys. Its candidate-only option still selects the implementation.
+operator apply_entry(cb: const fn(i64) -> i64, value: i64) -> i64
+impl const fn apply_entry<const bonus: bool = false>(cb: const fn(i64) -> i64, value: i64) -> i64
+    requires bonus == false => cb(value)
+impl const fn apply_entry<const bonus: bool = false>(cb: const fn(i64) -> i64, value: i64) -> i64
+    requires bonus == true => cb(value) + 10
+const fn ordinary_entries<...A>(cb: const fn(i64) -> i64, items: ...A) -> i64 =>
+    apply_entry(cb, ...{for k in arg_keys(A): items[k]})
+const fn configured_entries<...A>(cb: const fn(i64) -> i64, items: ...A) -> i64 =>
+    apply_entry{bonus: true}(cb: cb, ...{for k in arg_keys(A): items[k]})
+test operator_entries_forward_a_function {
+    assert ordinary_entries(increment, 4) == 5
+    assert configured_entries(increment, 4) == 15
+}
