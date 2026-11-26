@@ -12,6 +12,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use super::candidates::{AtInstance, Given, Wanted};
+use super::dependent_packs::PackTypes;
 use super::fit::{open, whole};
 use super::forwarded_packs::{visit_anonymous_bodies, walk_nested_calls};
 use super::inference::{fixed, mentions, placed, unsaid};
@@ -1836,12 +1837,13 @@ impl<'a> Typer<'a> {
                 let Some((operator, operands, result)) = read else {
                     return hir::Answer::Unread;
                 };
-                match self.answered(operator, (file, operands), result.as_ref()) {
+                match self.answered(operator, (file, operands), result.as_ref(), true) {
                     Some(Answered::Stated(index)) => hir::Answer::Stated(index),
                     Some(Answered::Selected {
                         module,
                         declaration,
                         generics,
+                        ..
                     }) => {
                         self.requiring += 1;
                         let requirements = self.answers(module, declaration, &generics);
@@ -1895,7 +1897,7 @@ impl<'a> Typer<'a> {
         supplied: (FileId, Vec<(SyntaxNode, Type)>),
         result: Option<&Type>,
     ) -> Option<bool> {
-        self.answered(operator, supplied, result)
+        self.answered(operator, supplied, result, true)
             .map(|answered| !matches!(answered, Answered::Unmet))
     }
 
@@ -1920,10 +1922,12 @@ impl<'a> Typer<'a> {
             module,
             declaration,
             generics,
+            type_packs,
         } = self.answered(
             operator,
             (self.file, vec![(operand, ty.clone())]),
             Some(&result),
+            false,
         )?
         else {
             return None;
@@ -1932,14 +1936,15 @@ impl<'a> Typer<'a> {
             return None;
         };
         let given: Vec<_> = fixed(&signature.generics).zip(&generics).collect();
+        let packs = PackTypes::new(&signature.generics, &type_packs);
         let supplied = signature
             .parameters
             .iter()
             .find(|parameter| !parameter.configuration)?;
         // The formatter holds the whole argument and needs the text
-        // itself. Ordinary deferred reads may admit either payload.
-        if !self.admits(&substitute_within(&supplied.ty, &given), ty)
-            || substitute_within(signature.result.as_ref()?, &given) != result
+        // itself. Use the selected tuple types when checking that fit.
+        if !self.admits(&packs.project(&supplied.ty, &given).ok()?, ty)
+            || packs.project(signature.result.as_ref()?, &given).ok()? != result
         {
             return None;
         }
@@ -1955,7 +1960,7 @@ impl<'a> Typer<'a> {
             module,
             declaration,
             generics,
-            type_packs: Vec::new(),
+            type_packs,
             requirements,
             test_candidates: self.test_candidates,
         })
@@ -1970,6 +1975,7 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         (file, operands): (FileId, Vec<(SyntaxNode, Type)>),
         result: Option<&Type>,
+        testing_requirement: bool,
     ) -> Option<Answered> {
         let own: Vec<Location> = self
             .signature
@@ -2082,9 +2088,12 @@ impl<'a> Typer<'a> {
             written: false,
             callback: None,
         };
-        self.requiring += 1;
+        // FMT-5 selects a regular conversion call. Only the selected
+        // candidates' actual requirements spend requirement depth there.
+        let depth = u32::from(testing_requirement);
+        self.requiring += depth;
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
-        self.requiring -= 1;
+        self.requiring -= depth;
         if untold {
             return None;
         }
@@ -2094,6 +2103,7 @@ impl<'a> Typer<'a> {
                 module: chosen.module,
                 declaration: chosen.declaration,
                 generics: chosen.generics,
+                type_packs: chosen.type_packs,
             },
             _ => Answered::Unmet,
         })
@@ -2598,6 +2608,8 @@ enum Answered {
         declaration: usize,
         /// What each of its generic parameters stands for.
         generics: Vec<Argument>,
+        /// The selected types of each heterogeneous pack (GEN-10).
+        type_packs: Vec<hir::TypePackArgument>,
     },
 }
 
