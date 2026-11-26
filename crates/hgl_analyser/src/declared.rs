@@ -686,6 +686,12 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
     )
 }
 
+/// True when a type, a size or a constant argument nested in it names a
+/// parameter of the enclosing generic declaration (GEN-2, TYPE-18).
+pub(crate) fn mentions(ty: &Type, own: &[Location]) -> bool {
+    names_one_of(ty, own) || ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
+}
+
 /// The most a type may weigh once arguments stand for its parameters.
 /// A type weighs one for itself and for each type inside it.
 const WEIGHT: usize = 10_000;

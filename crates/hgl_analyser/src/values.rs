@@ -855,6 +855,8 @@ struct Typer<'a> {
     probing_logic: bool,
     /// TYPE-18: a cold operand asks for declared types, never local values.
     type_query: bool,
+    /// A nested descriptor's cold operand selected an overload provisionally.
+    nested_query_selects: bool,
     /// The locals a capability has been bound to, each with the
     /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
     /// `let` ... [is a use]"). The local is then the capability under
@@ -1108,6 +1110,7 @@ impl<'a> Typer<'a> {
             present: Vec::new(),
             probing_logic: false,
             type_query: false,
+            nested_query_selects: false,
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
             binding_child: None,
@@ -1290,6 +1293,7 @@ impl<'a> Typer<'a> {
             present: self.present.len(),
             selecting: self.selecting.borrow().len(),
             type_queries: self.type_query_locations.len(),
+            nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
             resolved_written: self
                 .resolved_written
@@ -1308,6 +1312,7 @@ impl<'a> Typer<'a> {
     /// first to learn something and then where it stands, must leave
     /// one reading's worth of each.
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
+        self.nested_query_selects = mark.nested_query_selects;
         if let Some(deferred) = self.deferred_type_fit {
             deferred.set(mark.deferred_type_fit);
         }
@@ -1476,6 +1481,8 @@ struct Mark {
     selecting: usize,
     /// How many `type(...)` cache insertions have been logged.
     type_queries: usize,
+    /// Whether a nested cold operand already required instance selection.
+    nested_query_selects: bool,
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
     /// How many body-level resolved written types have been recorded.

@@ -168,7 +168,13 @@ fn query_type_with_bindings(
     let Some(operand) = query.children().next() else {
         return QueryType::Unresolved;
     };
-    let ty = typer.expression(&operand, None).ty;
+    let mut ty = typer.expression(&operand, None).ty;
+    if !map.is_empty() {
+        // A nested constructor can keep ordinary value expressions such as
+        // N*2+1 in its nominal arguments. The enclosing Type describes the
+        // concrete application after those arguments have also been placed.
+        ty = program.specialize_type(&ty, &map);
+    }
     let new_errors = typer.diagnostics.as_slice()[before..]
         .iter()
         .any(|report| report.severity == Severity::Error);
@@ -180,7 +186,7 @@ fn query_type_with_bindings(
     } else if declaration_pass
         && !signature.generics.is_empty()
         && !type_has_deferred_query(&ty)
-        && !selecting.borrow().is_empty()
+        && (!selecting.borrow().is_empty() || typer.nested_query_selects)
     {
         // Capture only parameters used by the operand. The argument taking
         // this default is not an input unless the default actually names it.

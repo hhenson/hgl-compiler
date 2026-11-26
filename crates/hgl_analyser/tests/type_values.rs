@@ -1695,3 +1695,31 @@ export struct Pair<const K: tuple<Type, Type>> requires K == PAIR { id: i64? }
         }
     }
 }
+
+#[test]
+fn requirements_follow_constants_inside_a_nominal_type_descriptor() {
+    let definitions = r#"module m
+struct Tagged<const Pair: tuple<Type, i64>> { n: i64 }
+const WANTED: Type = type(Tagged<(type(1), 5)>(n: 0))
+const fn rows<T>() -> list<T> => []
+operator select<A, R>(value: A) -> R
+impl const fn select<A>(value: A) -> i64 => 1
+impl const fn select(value: list<str>) -> bool => true
+struct Only<const Key: Type> requires Key == WANTED { n: i64? }
+struct Route<T, const N: i64> {
+    anchor: T?
+    nested: Only<type(Tagged<(type(select(rows<T>())), N*2+1)>(n: 0))>?
+}
+"#;
+    for (arguments, valid) in [("i64, 2", true), ("str, 2", false), ("i64, 3", false)] {
+        let source = format!("{definitions}test make {{ let x = Route<{arguments}>() }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert!(checked.findings.is_empty(), "{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+            assert!(checked.report.contains("the `requires` of `Only`"));
+        }
+    }
+}

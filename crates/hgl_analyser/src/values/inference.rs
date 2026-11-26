@@ -17,7 +17,8 @@ use super::fit::{not_null, open, whole};
 use super::forms::Taken;
 use super::{Fact, Typer};
 use crate::constant::Fault;
-use crate::declared::{names_one_of, names_parameter, substitute_within};
+pub(super) use crate::declared::mentions;
+use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Expr, ValueCategory};
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind};
 use crate::syntax::{child, name_token, ungrouped};
@@ -2310,19 +2311,6 @@ pub(super) fn placed(ty: Type, own: &[Location]) -> Type {
     } else {
         ty
     }
-}
-
-/// True when `ty` names one of the generic parameters declared at
-/// `own`: as a type, or as a value in a size or a constant argument.
-pub(super) fn mentions(ty: &Type, own: &[Location]) -> bool {
-    names_one_of(ty, own) || names_value_of(ty, own)
-}
-
-/// True when a size or a constant argument inside `ty` names a generic
-/// value parameter declared at one of `own`: the `N` of `list<i64, N>`,
-/// of `list<i64, N + 1>`, of `Box<[N]>`.
-fn names_value_of(ty: &Type, own: &[Location]) -> bool {
-    ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
 }
 
 /// The default `value` of the generic value parameter at `index`, of a

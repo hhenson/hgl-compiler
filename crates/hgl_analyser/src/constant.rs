@@ -3019,10 +3019,10 @@ impl ConstantValue {
     pub(crate) fn names_one_of(&self, own: &[Location]) -> bool {
         match self {
             ConstantValue::Parameter { at, .. } => own.contains(at),
-            ConstantValue::Type(ty) => crate::declared::names_one_of(ty, own),
+            ConstantValue::Type(ty) => crate::declared::mentions(ty, own),
             ConstantValue::InstanceTypeQuery { bindings, .. } => {
                 bindings.iter().any(|(_, arg)| match arg {
-                    Argument::Type(ty) => crate::declared::names_one_of(ty, own),
+                    Argument::Type(ty) => crate::declared::mentions(ty, own),
                     Argument::Constant(c) => c.value.names_one_of(own),
                     Argument::NoResult => false,
                 })

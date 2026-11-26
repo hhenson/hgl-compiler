@@ -280,6 +280,11 @@ impl<'a> Typer<'a> {
         let new_errors = self.diagnostics.as_slice()[mark.diagnostics..]
             .iter()
             .any(|report| report.severity == hgl_diagnostics::Severity::Error);
+        // The outer descriptor can contain this query as a nominal argument.
+        // Retain its need for selection without adding its calls to runtime HIR.
+        if querying && self.selecting.borrow().len() > mark.selecting {
+            self.nested_query_selects = true;
+        }
         // TYPE-18 evaluates nothing of the operand. Its local
         // effects and deferred calls do not belong to the body.
         self.restore_read(mark, false);
