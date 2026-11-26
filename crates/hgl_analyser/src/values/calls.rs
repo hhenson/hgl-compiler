@@ -17,7 +17,7 @@ use super::children::ChildOrigin;
 use super::constants::generic_default;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
-use super::expressions::has_ordered_block;
+use super::expressions::{ExpressionFit, has_ordered_block};
 use super::fit::{not_null, open, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{
@@ -374,8 +374,9 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         used: bool,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
-        self.call_read(node, expected, used)
+        self.call_read(node, expected, used, fit)
     }
 
     /// A direct call uses its selected signature. A callback parameter
@@ -395,6 +396,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         used: bool,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let (Some(callee), Some(list)) = (call_callee(node), child(node, SyntaxKind::ArgList))
         else {
@@ -458,7 +460,7 @@ impl<'a> Typer<'a> {
         if callee.kind() == SyntaxKind::NameExpr
             && child(&callee, SyntaxKind::QualifiedName).is_none()
             && let Some(name) = name_token(&callee)
-            && let Some(form) = self.result_form(&name, &list, expected)
+            && let Some(form) = self.result_form(&name, &list, expected, fit)
         {
             return form;
         }

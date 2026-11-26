@@ -233,6 +233,7 @@ parser: done
 analyser: done
 
 - Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent, which must agree with the destination after selection.
+- In an operator's public input pattern, a comprehension entry can keep a fixed list extent where the pattern omits it. The candidate still checks its own extent (TYPE-10, GEN-8).
 - A range in a forwarded body uses its enclosing instance's fitted bounds when the body is read again (GEN-7).
 - In composition, ordinary entries over a range make an ordinary list that a `const` parameter can take. A connection in a range's entries or the use of a fixed-list connection as the iterable makes a fixed list connection.
 

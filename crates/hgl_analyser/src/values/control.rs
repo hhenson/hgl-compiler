@@ -5,7 +5,7 @@
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::expressions::takes_its_type;
+use super::expressions::{ExpressionFit, takes_its_type};
 use super::fit::{is_integer_literal, not_null, nullable, open};
 use super::symbols::is_null;
 use super::{BOOL, Fact, Typer};
@@ -229,6 +229,16 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
     ) -> (Expr, Outcome) {
+        self.flow_with_fit(node, expected, value_use, ExpressionFit::Value)
+    }
+
+    pub(super) fn flow_with_fit(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        value_use: ValueUse,
+        fit: ExpressionFit,
+    ) -> (Expr, Outcome) {
         // "Parentheses select grouping" (EXPR-1).
         let node = &ungrouped(node.clone());
         // SOURCE-4: a block or an `if` whose value is used is a value
@@ -237,10 +247,10 @@ impl<'a> Typer<'a> {
             value_use.is_used() && matches!(node.kind(), SyntaxKind::Block | SyntaxKind::IfExpr);
         self.valued += u32::from(valued);
         let read = match node.kind() {
-            SyntaxKind::Block => self.block(node, expected, value_use),
-            SyntaxKind::IfExpr => self.conditional(node, expected, value_use),
+            SyntaxKind::Block => self.block(node, expected, value_use, fit),
+            SyntaxKind::IfExpr => self.conditional(node, expected, value_use, fit),
             _ => {
-                let value = self.expression_in_flow(node, expected, value_use);
+                let value = self.expression_with_fit(node, expected, value_use, fit);
                 let outcome = if value_use == ValueUse::Inferred
                     && value.ty == Type::Unknown
                     && let ExprKind::Call { callee, .. } = &value.kind
@@ -268,12 +278,13 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         value_use: ValueUse,
+        fit: ExpressionFit,
     ) -> (Expr, Outcome) {
         let at = self.at(node);
         // ERR-12: what a null test proves inside the block holds to its
         // end.
         let frame = self.present.len();
-        let (expression, outcome) = self.block_read(node, expected, value_use, at);
+        let (expression, outcome) = self.block_read(node, expected, value_use, at, fit);
         self.present.truncate(frame);
         (expression, outcome)
     }
@@ -285,6 +296,7 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
         at: Location,
+        fit: ExpressionFit,
     ) -> (Expr, Outcome) {
         let (statements, last) = self.block_head(node);
         let (value, outcome) = match last {
@@ -295,14 +307,19 @@ impl<'a> Typer<'a> {
                 (Some(Box::new(value)), Outcome::Returns)
             }
             Some(last) => {
-                let (value, outcome) = self.flow(&last, expected, value_use);
+                let (value, outcome) = self.flow_with_fit(&last, expected, value_use, fit);
                 match (outcome, expected) {
                     (Outcome::Value(_), Some(expected)) if !open(expected) => {
                         let reported = self.diagnostics.len();
                         // A branch of a graph's `if` or `switch` gives
                         // its connection across a reference as the
                         // place it stands in does (TIME-10).
-                        let value = self.fit_input(value, expected, "the value of this block");
+                        let pattern_type = fit.input_type(&value, expected);
+                        let value = self.fit_input(
+                            value,
+                            pattern_type.as_ref().unwrap_or(expected),
+                            "the value of this block",
+                        );
                         let ty = if self.diagnostics.len() == reported {
                             value.ty.clone()
                         } else {
@@ -388,6 +405,7 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
         (before, before_returned, proved): (&[bool], bool, &[Fact]),
+        fit: ExpressionFit,
     ) -> Branch {
         self.assigned = restored(before, self.locals.len(), true);
         self.returned = before_returned;
@@ -395,7 +413,7 @@ impl<'a> Typer<'a> {
         // further.
         let frame = self.present.len();
         self.present.extend_from_slice(proved);
-        let (value, outcome) = self.flow(node, expected, value_use);
+        let (value, outcome) = self.flow_with_fit(node, expected, value_use, fit);
         self.present.truncate(frame);
         Branch {
             value,
@@ -423,6 +441,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         value_use: ValueUse,
+        fit: ExpressionFit,
     ) -> (Expr, Outcome) {
         let at = self.at(node);
         let mut parts = node.children();
@@ -487,11 +506,11 @@ impl<'a> Typer<'a> {
             // composes only the selected branch.
             if selected {
                 self.report_pack_branch(&then);
-                return self.flow(&then, expected, value_use);
+                return self.flow_with_fit(&then, expected, value_use, fit);
             }
             if let Some(otherwise) = otherwise {
                 self.report_pack_branch(&otherwise);
-                return self.flow(&otherwise, expected, value_use);
+                return self.flow_with_fit(&otherwise, expected, value_use, fit);
             }
             let (kind, outcome) = if value_use.is_used() {
                 (ExprKind::Literal(hir::Value::Null), Outcome::Null)
@@ -554,21 +573,27 @@ impl<'a> Typer<'a> {
         };
         let by_place = |branch: &SyntaxNode| branch_takes_its_type(branch);
         let (mut then, mut other) = match &otherwise {
-            None => (self.branch(&then, expected, value_use, in_then), None),
+            None => (self.branch(&then, expected, value_use, in_then, fit), None),
             Some(otherwise) if !told && by_place(&then) && !by_place(otherwise) => {
-                let other = self.branch(otherwise, expected, value_use, in_else);
+                let other = self.branch(otherwise, expected, value_use, in_else, fit);
                 let hint = from_other(&other.outcome, &then);
-                let then = self.branch(&then, hint.as_ref().or(expected), value_use, in_then);
+                let then = self.branch(&then, hint.as_ref().or(expected), value_use, in_then, fit);
                 (then, Some(other))
             }
             Some(otherwise) => {
-                let then = self.branch(&then, expected, value_use, in_then);
+                let then = self.branch(&then, expected, value_use, in_then, fit);
                 let hint = if !told && by_place(otherwise) {
                     from_other(&then.outcome, otherwise)
                 } else {
                     None
                 };
-                let other = self.branch(otherwise, hint.as_ref().or(expected), value_use, in_else);
+                let other = self.branch(
+                    otherwise,
+                    hint.as_ref().or(expected),
+                    value_use,
+                    in_else,
+                    fit,
+                );
                 (then, Some(other))
             }
         };
@@ -945,6 +970,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(sequence_node), Some(entry), Some(name)) = (
@@ -983,10 +1009,17 @@ impl<'a> Typer<'a> {
         let returned = self.returned;
         let present = self.present.len();
         let range_scope = self.enter_range_bindings(&sequence, &[binding]);
-        let value = self.expression(&entry, element);
+        let value = self.expression_with_fit(&entry, element, ValueUse::Required, fit);
         self.unrolled_range_bindings.truncate(range_scope);
         let value = match element {
-            Some(element) => self.fit_input(value, element, "this list entry"),
+            Some(element) => {
+                let pattern_type = fit.input_type(&value, element);
+                self.fit_input(
+                    value,
+                    pattern_type.as_ref().unwrap_or(element),
+                    "this list entry",
+                )
+            }
             None => value,
         };
         self.present.truncate(present);
