@@ -13,6 +13,75 @@ use hgl_analyser::{Detail, GenericKind};
 /// No findings.
 const NONE: [&str; 0] = [];
 
+/// GEN-8 and EXPR-5: the first or a later written type argument fixes
+/// the corresponding public parameter of a function or operator call.
+#[test]
+fn written_generic_types_constrain_call_arguments() {
+    let checked = module(concat!(
+        "const fn first_fn<K, M>(key: K, mode: M) -> i64 => 1\n",
+        "const fn later_fn<M, K>(mode: M, key: K) -> i64 => 1\n",
+        "operator first_op<K, M>(key: K, mode: M) -> i64\n",
+        "impl const fn first_op(key: str, mode: bool) -> i64 => 1\n",
+        "operator later_op<M, K>(mode: M, key: K) -> i64\n",
+        "impl const fn later_op(mode: bool, key: str) -> i64 => 1\n",
+        "impl const fn later_op(mode: bool, key: f64) -> i64 => 2\n",
+        "const fn a() -> i64 => first_fn<i64?, bool>(\"a\", true)\n",
+        "const fn b() -> i64 => later_fn<bool, i64>(true, \"a\")\n",
+        "const fn c() -> i64 => first_op<i64?, bool>(\"a\", true)\n",
+        "const fn d() -> i64 => later_op<bool, i64>(true, key: \"a\")\n",
+        "const fn explicit() -> i64 => later_op<bool, str>(true, \"a\")\n",
+        "const fn inferred() -> i64 => later_op<bool>(true, \"a\")\n",
+        "const fn widened() -> i64 => later_op<bool, f64>(true, 7)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:45 type/type.mismatch EXPR-5",
+            "m.hgl:10:50 type/type.mismatch EXPR-5",
+            "m.hgl:11:45 type/type.mismatch EXPR-5",
+            "m.hgl:12:55 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
+/// GEN-8 also fixes a constant used in a public input's type (TYPE-10).
+/// A known public function template checks its own type under FN-17.
+#[test]
+fn written_generics_constrain_a_size_and_a_function_template() {
+    let checked = module(concat!(
+        "operator sized<const N: i64>(items: list<i64, N>) -> i64\n",
+        "impl const fn sized(items: list<i64, 2>) -> i64 => 2\n",
+        "const fn bad_size(items: list<i64, 2>) -> i64 => sized<3>(items)\n",
+        "const fn good_size(items: list<i64, 2>) -> i64 => sized<2>(items)\n",
+        "operator select<T>(f: const fn(T) -> i64) -> i64\n",
+        "impl const fn select(f: const fn(str) -> i64) -> i64 => f(\"a\")\n",
+        "const fn combine(text: str) -> i64 => 1\n",
+        "const fn bad_fn() -> i64 => select<i64>(combine)\n",
+        "const fn good_fn() -> i64 => select<str>(combine)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:59 type/type.mismatch EXPR-5",
+            "m.hgl:9:41 type/type.mismatch FN-17",
+        ]
+    );
+}
+
+/// EXPR-5: a contextual argument is checked with the written public
+/// generic in place and may still use the ordinary literal widening.
+#[test]
+fn a_written_generic_checks_a_contextual_argument() {
+    let checked = module(concat!(
+        "operator pick<T>(items: list<T>) -> i64\n",
+        "impl const fn pick(items: list<str>) -> i64 => 1\n",
+        "impl const fn pick(items: list<f64>) -> i64 => 2\n",
+        "const fn bad() -> i64 => pick<i64>([\"a\"])\n",
+        "const fn good() -> i64 => pick<f64>([1])\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:5:37 type/type.mismatch EXPR-5"]);
+}
+
 /// The message of each finding, in order.
 fn messages(checked: &Checked) -> Vec<&str> {
     checked
