@@ -81,3 +81,20 @@ test scalar_out_reads_the_staged_or_retained_value {
     assert eval final_word(word: ["fail", "pass"]) == ["fail", "pass"]
     assert raises("numeric.division_by_zero") { eval final_word(word: ["pass", "fail"]) }
 }
+
+# EXPR-2, TIME-7: a failing output read is evaluated in written argument order.
+const fn combine(current: i64, amount: i64) -> i64 => current + amount
+fn ordered_out(step: i64, const reverse: bool) -> i64 {
+    inject out
+    when {
+        if step < 0 { return 7 }
+        if reverse { return combine(amount: 10 // step, current: out) }
+        return combine(out, 10 // step)
+    }
+}
+test output_reads_keep_argument_order {
+    assert raises("value.unset_read") { eval ordered_out(step: [0], reverse: false) }
+    assert raises("numeric.division_by_zero") { eval ordered_out(step: [0], reverse: true) }
+    assert raises("numeric.division_by_zero") { eval ordered_out(step: [-1, 0], reverse: false) }
+    assert eval ordered_out(step: [-1, 2, 5], reverse: false) == [7, 12, 14]
+}

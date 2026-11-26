@@ -874,7 +874,7 @@ fn endpoint_hook_checks_run_on_the_sdk() {
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

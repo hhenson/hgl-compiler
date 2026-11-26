@@ -26,7 +26,7 @@ transpiler: partial
 
 - Materializes arguments that can change state or fail in written order, before filling
   omitted defaults. Applies this to calls, constructors, lifted operands and entry
-  calls.
+  calls. A scalar output payload read in a hook can fail when unset (TIME-7).
 - Emits statement-block field defaults for concrete and specialized structs
   (UNIT-8, TYPE-5). In the emitted forms an omitted field default can propagate
   a failure. Calls with no resolved target or argument slot have defensive reports.
