@@ -457,6 +457,28 @@ impl<'a> Typer<'a> {
             ) else {
                 continue;
             };
+            // GEN-6: a complete fallible place takes a candidate's guaranteed
+            // value as a success. Match that candidate against the requested
+            // payload, preserving independent output generics and FN-17 templates.
+            let success = not_null(wanted.place).and_then(|result| {
+                let Type::Result { value, error } = result else {
+                    return None;
+                };
+                let (role, _) = candidate.kind.candidate()?;
+                (**error == Type::Error
+                    && wanted.callback.is_none()
+                    && super::candidate_contracts::guarantees_success(
+                        public, signature, role, result,
+                    ))
+                .then_some((result, value.as_ref()))
+            });
+            let for_payload = success.map(|(_, value)| Wanted {
+                place: Some(value),
+                among: wanted.among.clone(),
+                written: false,
+                callback: None,
+            });
+            let wanted = for_payload.as_ref().unwrap_or(wanted);
             // ERR-14 and ERR-15: a checked child's ordinary type is the
             // child's value. A candidate that declares a result slot can
             // take the failure whole. A bare generic does not infer that
@@ -780,6 +802,7 @@ impl<'a> Typer<'a> {
                     module,
                     declaration,
                     declared: signature,
+                    success: success.map(|(result, _)| result.clone()),
                     taken,
                     generics,
                     type_packs,
@@ -1083,6 +1106,7 @@ impl<'a> Typer<'a> {
             public_generics,
             public_type_packs,
             mut selecting,
+            success,
             ..
         } = chosen;
         let operator_generics = public_generics.unwrap_or(operator_generics);
@@ -1313,6 +1337,7 @@ impl<'a> Typer<'a> {
             lifted: false,
         };
         self.finished_call(&mut kind, false);
+        let deferred = selecting.is_some();
         let kind = if let Some(selecting) = selecting {
             if self.graph {
                 self.constants_of(&kind);
@@ -1364,7 +1389,26 @@ impl<'a> Typer<'a> {
         } else {
             kind
         };
-        (kind, signature.result.clone().unwrap_or(Type::Unknown))
+        let ty = signature.result.clone().unwrap_or(Type::Unknown);
+        if let Some(result) = success {
+            if deferred {
+                return (kind, result);
+            }
+            let payload = Expr {
+                kind,
+                ty,
+                at,
+                category: hir::ValueCategory::Unsettled,
+            };
+            return (
+                ExprKind::Tagged {
+                    success: true,
+                    payload: Box::new(payload),
+                },
+                result,
+            );
+        }
+        (kind, ty)
     }
 
     /// True when the candidate `signature`, of an operator whose public
@@ -3535,6 +3579,8 @@ pub(super) struct Chosen<'s> {
     pub(super) declaration: usize,
     /// Its signature as it is declared, generic parameters and all.
     declared: &'s Signature,
+    /// A complete fallible place taking this implementation's guaranteed success.
+    success: Option<Type>,
     /// Its signature as this call takes it: what its generic
     /// parameters stand for put in place.
     taken: std::borrow::Cow<'s, Signature>,

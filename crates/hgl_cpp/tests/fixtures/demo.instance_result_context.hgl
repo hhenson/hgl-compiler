@@ -2,7 +2,7 @@ module demo.instance_result_context
 
 # GEN-5, GEN-7 and ERR-12: an instance can select a nullable result
 # where its generic body selected a candidate that gives a whole value.
-operator find<T>(value: T) -> i64
+operator find<T>(value: T) -> i64?
 impl const fn find<T>(value: T) -> i64 => 5
 impl const fn find(value: i64) -> i64? {
     if value < 0 { return null }
@@ -32,7 +32,7 @@ test nullable_temporal_places {
 
 # ERR-15: nullable destinations and null comparisons turn a selected
 # candidate's failure into null. A place that requires i64 raises it.
-operator checked<T>(value: T) -> i64
+operator checked<T>(value: T) -> result<i64, error>
 impl const fn checked<T>(value: T) -> i64 => 5
 impl const fn checked(value: i64) -> result<i64, error> {
     if value < 0 { return err(error(message: "invalid input", code: "convert.invalid")) }
@@ -107,4 +107,31 @@ test checked_division_temporal_places {
     assert eval divide_node(a: [1.0, 1.0], b: [2.0, 0.0]) == [0.5, null]
     assert eval divide_graph(a: [1, 1], b: [2, 0]) == [0.5, null]
     assert eval divide_graph(a: [1.0, 1.0], b: [2.0, 0.0]) == [0.5, null]
+}
+
+# GEN-5, GEN-6: a candidate may guarantee the value of the operator's
+# complete result. A fallible caller gets the candidate's value as a success.
+operator guaranteed<T>(input: T) -> result<T, error>
+impl const fn guaranteed<U>(input: U) -> U => input
+
+operator published(input: i64) -> result<i64, error>
+impl fn published(input: i64) -> i64 {
+    when modified(input) { return input + 3 }
+}
+
+const fn complete<T>(input: T) -> result<T, error> => guaranteed(input)
+fn published_result(input: i64) -> result<i64, error> => published(input)
+fn read_success(outcome: result<i64, error>) -> i64 {
+    when { if is_ok(outcome) { return outcome.value } }
+}
+fn guaranteed_graph(input: i64) -> i64 => read_success(published_result(input))
+
+test guaranteed_success {
+    let from_place: result<str, error> = guaranteed("value")
+    assert is_ok(from_place)
+    if is_ok(from_place) { assert from_place.value == "value" }
+    let forwarded = complete(19)
+    assert is_ok(forwarded)
+    if is_ok(forwarded) { assert forwarded.value == 19 }
+    assert eval guaranteed_graph(input: [3, 4]) == [6, 7]
 }

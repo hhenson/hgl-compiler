@@ -132,6 +132,13 @@ impl Emitter<'_> {
     /// A HIR read applied to the C++ value from its temporal endpoint.
     fn apply_read(&mut self, form: &Expr, value: &str) -> String {
         match form.kind {
+            // GEN-6: publish the candidate's value as a complete success.
+            ExprKind::Tagged { success: true, .. } => {
+                let Some(ty) = self.written_type(&form.ty, form.at) else {
+                    return "0".to_string();
+                };
+                format!("{ty}{{{value}}}")
+            }
             ExprKind::Raised { raise, .. } => self.result_value(raise, value, form.at),
             ExprKind::OrNull { .. } => format!("::{}::result_or_null({value})", runtime::NAMESPACE),
             ExprKind::NullRead { raise, .. } => {
@@ -1135,6 +1142,10 @@ impl Family for Lifting {
             ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => {
                 Some(emitter.wire_read(scope, value, result))
             }
+            ExprKind::Tagged {
+                success: true,
+                payload,
+            } => Some(emitter.wire_read(scope, value, payload)),
             ExprKind::NullRead { value: operand, .. } => {
                 Some(emitter.wire_read(scope, value, operand))
             }
