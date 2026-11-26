@@ -586,19 +586,7 @@ impl<'a> Typer<'a> {
                 .kind
                 .role()
                 == Some(Role::Value);
-            let mut actual = function_type(taken, value);
-            for (parameter, position) in public
-                .parameters
-                .iter()
-                .zip(public.candidate_parameters(taken))
-            {
-                if let Some(position) = position
-                    && let FunctionParameter::Declared(input) = &mut actual.parameters[position]
-                {
-                    input.name.clone_from(&parameter.name);
-                    input.has_default |= parameter.has_default;
-                }
-            }
+            let actual = operator_callback_type(public, taken, value);
             let requirements = self.answers(module, declaration, &chosen.generics);
             let operator_generics = explicit.map_or_else(Vec::new, |reference| {
                 let mut found: Vec<_> = reference
@@ -745,6 +733,7 @@ impl<'a> Typer<'a> {
                 reflected: reflected.then_some(inputs.excluded),
                 result_shapes,
                 result_requirements,
+                supplied: inputs.supplied.unwrap_or_default(),
             }),
         };
         self.with_callback_role(template, |typer, role| {
@@ -1945,6 +1934,7 @@ fn reflected_arguments<'a>(
                     reflected: Some(inputs.excluded),
                     result_shapes: &shapes,
                     result_requirements: &[],
+                    supplied: &[],
                 }),
             };
             let possible = typer.with_callback_role(template, |typer, role| {
@@ -2145,6 +2135,28 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
             Some(Type::Parameter { at, .. }) if signature.generics.iter().any(|generic| generic.at == *at && generic.result_only)),
         reference: signature.reference,
     }
+}
+
+/// FN-17: a selected candidate reflects the operator's public names and defaults.
+pub(super) fn operator_callback_type(
+    public: &Signature,
+    taken: &Signature,
+    value: bool,
+) -> FunctionType {
+    let mut actual = function_type(taken, value);
+    for (parameter, position) in public
+        .parameters
+        .iter()
+        .zip(public.candidate_parameters(taken))
+    {
+        if let Some(position) = position
+            && let FunctionParameter::Declared(input) = &mut actual.parameters[position]
+        {
+            input.name.clone_from(&parameter.name);
+            input.has_default |= parameter.has_default;
+        }
+    }
+    actual
 }
 
 /// An explicit operator reference can learn a result-only generic from

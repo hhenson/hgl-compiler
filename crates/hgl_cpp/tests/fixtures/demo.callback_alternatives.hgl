@@ -179,3 +179,44 @@ test receiver_result_membership_selects_the_whole_input {
     assert eval membership_price(xs: [[23, 42]]) == [23]
     assert eval membership_operator_price(xs: [[23, 42]]) == [23]
 }
+
+const fn pack_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} && R in {As[k]} }
+    => f(...args)[0]
+
+operator fee_each<const N: i64, L, A, O>(enabled: L, value: A) -> O
+impl const fn fee_each(enabled: bool, value: i64) -> i64 => value + 1
+impl const fn fee_each(enabled: bool, value: list<i64, 2>) -> list<i64, 2> => value
+
+operator pack_head_op<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+        && any k in arg_keys(As) { R == As[k] }
+impl const fn pack_head_op<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64 =>
+    f(...{for k in arg_keys(Ps): first_or_whole<Ps[k]>(args[k])})[0]
+
+operator legal_list<T>(value: T) -> bool
+impl const fn legal_list(value: list<i64, 2>) -> bool => true
+
+const fn constrained_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires legal_list(R) -> bool
+        && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn configured_head<const B: bool, R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (B == true || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn actual_pack_price(xs: list<i64, 2>) -> i64 => pack_head(fee<4>, xs)
+fn named_pack_price(flags: list<bool, 2>, xs: list<i64, 2>) -> i64 =>
+    pack_head_op(fee_each<4>, value: xs, enabled: flags)
+fn constrained_price(xs: list<i64, 2>) -> i64 => constrained_head(fee<4>, xs)
+fn configured_price(xs: list<i64, 2>) -> i64 => configured_head<false>(fee<4>, xs)
+
+test receiver_requirements_use_the_known_pack_and_options {
+    assert eval actual_pack_price(xs: [[23, 42]]) == [23]
+    assert eval named_pack_price(flags: [[true, true]], xs: [[23, 42]]) == [23]
+    assert eval constrained_price(xs: [[23, 42]]) == [23]
+    assert eval configured_price(xs: [[23, 42]]) == [23]
+}

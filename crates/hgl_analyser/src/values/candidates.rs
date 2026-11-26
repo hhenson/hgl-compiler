@@ -19,7 +19,7 @@ use super::expressions::{takes_its_type, written_null};
 use super::fit::{
     accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
 };
-use super::function_arguments::{CallbackInputs, matches_template};
+use super::function_arguments::{CallbackInputs, matches_template, operator_callback_type};
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
@@ -35,7 +35,7 @@ use crate::declared::{
     substitute_within, weight,
 };
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
-use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Program, Role};
+use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter,
@@ -681,7 +681,12 @@ impl<'a> Typer<'a> {
                 // FN-17: a function reference supplies a signature.
                 // Contextual operand or result reads do not make it fit.
                 if let Some(callback) = &wanted.callback
-                    && !callback.matches(program, &taken, (given, &bound), wanted.place)
+                    && (!callback.matches(&taken, (given, &bound), wanted.place)
+                        || !callback.receiver_admits(
+                            self,
+                            (operator, public),
+                            ((module, declaration, &taken), &generics, &type_packs),
+                        ))
                 {
                     continue;
                 }
@@ -3132,6 +3137,8 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) result_shapes: &'w [&'w Type],
     /// Enclosing requirements that can be checked with the chosen result (GEN-3).
     pub(super) result_requirements: &'w [ResultRequirement],
+    /// The original expressions in the enclosing call's dependent pack (GEN-17).
+    pub(super) supplied: &'w [(Option<&'w str>, &'w Expr)],
 }
 
 /// ERR-6 requires a supplied fallback with the dictionary's exact value
@@ -3220,7 +3227,6 @@ fn widens_default_literals(public: &ConstantValue, fitted: &ConstantValue) -> bo
 impl CallbackRequest<'_> {
     fn matches(
         &self,
-        program: &Program,
         signature: &Signature,
         (given, bound): (&[Given], &[Place]),
         result: Option<&Type>,
@@ -3242,14 +3248,49 @@ impl CallbackRequest<'_> {
                 (Some(expected), Some(actual)) => {
                     agree(expected, actual)
                         && self.result_shapes.iter().all(|shape| agree(shape, actual))
-                        && self
-                            .result_requirements
-                            .iter()
-                            .all(|requirement| requirement.admits(program, actual))
                 }
                 (None, None) => true,
                 _ => false,
             }
+    }
+
+    fn receiver_admits(
+        &self,
+        typer: &mut Typer<'_>,
+        (operator, public): (OperatorRef, &Signature),
+        ((module, declaration, taken), generics, packs): (
+            Candidate<'_>,
+            &[Argument],
+            &[hir::TypePackArgument],
+        ),
+    ) -> bool {
+        if self.result_requirements.is_empty() {
+            return true;
+        }
+        // Bind the receiver's packs with the same public callback type
+        // as final selection and the original, unsplit argument types.
+        let declared = &typer.program.modules[module].declarations[declaration];
+        let actual =
+            operator_callback_type(public, taken, declared.kind.role() == Some(Role::Value));
+        let callback = Expr {
+            ty: Type::Function(Box::new(actual)),
+            kind: ExprKind::StaticCallable(Box::new(Callee::Candidate {
+                operator: (operator.module, operator.declaration),
+                operator_generics: Vec::new(),
+                operator_type_packs: Vec::new(),
+                module,
+                declaration,
+                generics: generics.to_vec(),
+                type_packs: packs.to_vec(),
+                requirements: Vec::new(),
+                test_candidates: typer.test_candidates,
+            })),
+            at: declared.at,
+            category: hir::ValueCategory::Value,
+        };
+        self.result_requirements
+            .iter()
+            .all(|requirement| requirement.admits(typer, &callback, self.supplied))
     }
 }
 

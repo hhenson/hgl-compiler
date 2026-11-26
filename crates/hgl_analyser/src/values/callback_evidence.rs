@@ -5,17 +5,19 @@ use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Candidate;
+use super::Typer;
 use super::candidates::{Specific, alternative_specificity};
-use super::dependent_packs::dependent_slot;
+use super::dependent_packs::{bind, dependent_slot, pack_exclusions, reflected_argument};
 use super::fit::{open, whole};
 use super::inference::{infer, mentions, type_pack, unsaid};
-use super::requirements::{conjoined_terms, pack_view, partial_requirement_holds};
+use super::requirements::{conjoined_terms, pack_view};
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_with_packs, substitute_within,
     weight,
 };
+use crate::hir::{Expr, TypePackArgument};
 use crate::syntax::{child, has_token, tokens};
-use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, GenericParameter, Type};
 use crate::{Program, ReflectedPack};
 
 /// Selection evidence only. The enclosing call still receives the original argument.
@@ -381,17 +383,75 @@ pub(super) struct ReflectedResultEvidence {
 /// The result type and known bindings of one receiving declaration.
 pub(super) struct ResultRequirement {
     declaration: (usize, usize),
-    result: Type,
-    generics: Vec<GenericParameter>,
     known: Vec<Option<Argument>>,
 }
 
 impl ResultRequirement {
     /// A candidate result cannot contradict a receiver requirement (GEN-3).
-    pub(super) fn admits(&self, program: &Program, actual: &Type) -> bool {
+    pub(super) fn admits(
+        &self,
+        typer: &mut Typer<'_>,
+        callback: &Expr,
+        supplied: &[(Option<&str>, &Expr)],
+    ) -> bool {
+        let program = typer.program;
+        let (module, declaration) = self.declaration;
+        let unit = &program.modules[module];
+        let Detail::Callable(signature) = &unit.details[declaration] else {
+            return true;
+        };
+        let Some(input) = dependent_slot(unit, signature).map(|slot| &signature.parameters[slot])
+        else {
+            return true;
+        };
+        let dependent = &unit.dependent_packs[&input.at];
+        let Some(template) = signature.parameters.iter().find_map(|parameter| {
+            if parameter.at == dependent.function
+                && let Type::Function(template) = &parameter.ty
+            {
+                Some(template)
+            } else {
+                None
+            }
+        }) else {
+            return true;
+        };
+        let Type::Function(actual) = &callback.ty else {
+            return true;
+        };
+        let generics = &signature.generics;
         let mut found = self.known.clone();
-        infer(&self.result, actual, &self.generics, &mut found);
-        partial_requirement_holds(program, self.declaration, &found) != Some(false)
+        if let (Some(expected), Some(actual)) = (&template.result, &actual.result) {
+            infer(expected, actual, generics, &mut found);
+        }
+        let map: Vec<_> = generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+            .collect();
+        let mut packs = Vec::new();
+        if let Ok(bound) = bind(
+            program,
+            template,
+            callback,
+            supplied,
+            &pack_exclusions(dependent, &map),
+        ) {
+            if let Some(index) = type_pack(input, generics) {
+                packs.push(TypePackArgument::keyed(index, bound.captured));
+            }
+            if let Some(pack) = &template.named_pack
+                && let Some(index) = generics.iter().position(|generic| generic.at == pack.at)
+            {
+                packs.push(reflected_argument(
+                    index,
+                    template,
+                    callback,
+                    bound.reflected,
+                ));
+            }
+        }
+        typer.callback_requirement_holds(self.declaration, &found, &packs) != Some(false)
     }
 }
 
@@ -422,11 +482,9 @@ impl EnclosingBindings {
         if learned {
             super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
         }
-        if include_requirements && let Some(result) = &self.result {
+        if include_requirements && self.result.is_some() {
             evidence.requirements.push(ResultRequirement {
                 declaration: (self.module, self.declaration),
-                result: result.clone(),
-                generics: self.generics.clone(),
                 known: found.clone(),
             });
         }

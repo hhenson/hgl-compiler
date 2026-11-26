@@ -1521,6 +1521,33 @@ impl<'a> Typer<'a> {
         )
     }
 
+    /// GEN-3 and FN-17: test the known bindings of a callback trial.
+    /// Unknown operands remain for the ordinary call check.
+    pub(super) fn callback_requirement_holds(
+        &mut self,
+        target: (usize, usize),
+        bindings: &[Option<Argument>],
+        packs: &[hir::TypePackArgument],
+    ) -> Option<bool> {
+        let (parameters, _) = required(self.program, target)?;
+        let arguments: Vec<_> = parameters
+            .iter()
+            .zip(bindings)
+            .map(|(parameter, bound)| {
+                bound.clone().unwrap_or_else(|| match parameter.kind {
+                    GenericKind::Value(_) => Argument::Constant(unsaid()),
+                    _ => Argument::Type(Type::Unknown),
+                })
+            })
+            .collect();
+        let mark = self.mark();
+        let verdict = self.requires_told_with_packs(target, &arguments, packs, None);
+        self.take_back(mark, false)
+            .then_some(verdict)
+            .flatten()
+            .and_then(|(_, held, _)| held)
+    }
+
     /// The same requirement with GEN-18 answers supplied by the call's
     /// static function arguments.
     pub(super) fn requires_told_with_laws(
@@ -5030,40 +5057,6 @@ pub(super) fn declared_requirement(
         &condition,
         &Told {
             constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
-            callable: &|_| None,
-            unvalued: &std::cell::Cell::new(false),
-            type_packs: &[],
-            member_fault: None,
-        },
-    )
-}
-
-/// GEN-3 and FN-17: an already known callback type may disprove a
-/// receiver's requirement. Unknown arguments and packs remain for the
-/// ordinary call check, and this trial supplies no additional bindings.
-pub(super) fn partial_requirement_holds(
-    program: &Program,
-    target: (usize, usize),
-    bindings: &[Option<Argument>],
-) -> Option<bool> {
-    let (parameters, condition) = required(program, target)?;
-    let arguments: Vec<_> = parameters
-        .iter()
-        .zip(bindings)
-        .map(|(parameter, bound)| {
-            bound.clone().unwrap_or_else(|| match parameter.kind {
-                GenericKind::Value(_) => Argument::Constant(unsaid()),
-                _ => Argument::Type(Type::Unknown),
-            })
-        })
-        .collect();
-    requires_holds(
-        program,
-        target,
-        &arguments,
-        &condition,
-        &Told {
-            constant: &|_, _| None,
             callable: &|_| None,
             unvalued: &std::cell::Cell::new(false),
             type_packs: &[],

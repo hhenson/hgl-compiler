@@ -866,7 +866,7 @@ pub(super) fn reflect(template: &FunctionType, callback: &Expr) -> Vec<(PackKey,
 }
 
 /// Keep the original inputs excluded from a reflection for later forwarding.
-fn reflected_argument(
+pub(super) fn reflected_argument(
     parameter: usize,
     template: &FunctionType,
     callback: &Expr,

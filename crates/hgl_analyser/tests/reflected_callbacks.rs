@@ -218,6 +218,30 @@ const fn entry(values: list<i64, 2>) -> i64 => receive(price<4>, values)
 }
 
 #[test]
+fn a_written_callback_leaves_an_unbound_receiver_type_unknown() {
+    // GEN-3: the callback's result does not decide the unrelated U.
+    let checked = module(
+        r#"operator fee<const N: i64, A, O>(value: A) -> O
+impl const fn fee(value: i64) -> i64 => value + 1
+impl const fn fee(value: list<i64, 2>) -> list<i64, 2> => value
+const fn receive<R, U, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires (R == str || U == str)
+        && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => 23
+const fn entry(values: list<i64, 2>) -> i64 => receive(fee<4>, values)
+"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    let unresolved = &checked.findings[0];
+    assert_eq!(
+        unresolved.code, "type/generic.unresolved",
+        "{}",
+        checked.report
+    );
+    assert!(unresolved.message.contains("`U`"), "{}", checked.report);
+}
+
+#[test]
 fn an_open_reflected_suffix_does_not_choose_a_callbacks_generic_type() {
     // FN-17: a bare generic callback needs enough evidence to resolve
     // its generic arguments. A pack in the template supplies no type
