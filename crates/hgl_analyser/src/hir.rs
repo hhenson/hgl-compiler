@@ -795,7 +795,7 @@ pub enum ExprKind {
         /// How the call is written.
         form: Form,
         /// The checked pattern and selected conversions for a native
-        /// formatter or collection conversion (FMT-3, FMT-5).
+        /// formatter (FMT-3, FMT-5).
         text: Option<Box<TextCall>>,
         /// Values explicitly supplied in braces (EXPR-10), by source
         /// location, for the instance's wiring-time check (EXPR-14).
@@ -1665,13 +1665,12 @@ pub struct Cell {
     pub value: Option<Expr>,
 }
 
-/// Analysed text work carried by a formatting or collection call.
+/// Analysed text work carried by a native formatting call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextCall {
-    /// The compile-time pattern of `format`; a collection has none.
-    pub pattern: Option<String>,
-    /// Selected FMT-5 conversions, indexed by arguments for `format`
-    /// or by members for a collection conversion.
+    /// The compile-time pattern of `format`.
+    pub pattern: String,
+    /// Selected FMT-5 conversions, indexed by arguments for `format`.
     pub conversions: Box<[Option<Expr>]>,
 }
 

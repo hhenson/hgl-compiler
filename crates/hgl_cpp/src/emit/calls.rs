@@ -139,16 +139,6 @@ impl Emitter<'_> {
         if let Some(signature) = hgl_analyser::formatting::value_signature(self.program, callee) {
             return self.format_call(scope, callee, signature, arguments, text, whole);
         }
-        if let [argument] = arguments
-            && let Some(members) = hgl_analyser::formatting::collection_members(
-                self.program,
-                callee,
-                &argument.value.ty,
-            )
-        {
-            let conversions = text.map_or(&[][..], |text| text.conversions.as_ref());
-            return self.collection_text(scope, &argument.value, &members, conversions);
-        }
         if let Callee::Anonymous(function) = callee {
             if !function.template.value {
                 return self.missing(at, "a call of a temporal function");
