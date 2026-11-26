@@ -353,13 +353,7 @@ pub(crate) fn check(
         selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
             if !module.paired_default_names.is_empty() {
-                constants::check_generic_default_names(
-                    program,
-                    module,
-                    position,
-                    found,
-                    diagnostics,
-                );
+                constants::check_default_names(program, module, position, found, diagnostics);
             }
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))

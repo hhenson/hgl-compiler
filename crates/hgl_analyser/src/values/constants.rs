@@ -1061,10 +1061,10 @@ fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNo
         .and_then(|member| default_of(&member))
 }
 
-/// UNIT-7 and FN-4/17: a generic value default is normally read by the
-/// constant evaluator. Resolve any excluded name used in a paired call by
-/// typing the surrounding expression, even if no caller uses this default.
-pub(super) fn check_generic_default_names(
+/// UNIT-7 and FN-4/17: resolve an excluded name against the paired
+/// callable role, in every branch of each written default. The generic,
+/// parameter and field default evaluators continue to execute their own arms.
+pub(super) fn check_default_names(
     program: &Program,
     module: &crate::program::Module,
     index: usize,
@@ -1074,21 +1074,47 @@ pub(super) fn check_generic_default_names(
     let declaration = &module.declarations[index];
     let written = &declaration.syntax;
     let struct_signature;
+    let mut defaults = Vec::new();
     let signature = match &module.details[index] {
-        Detail::Callable(signature) => signature,
+        Detail::Callable(signature) => {
+            defaults.extend(
+                signature
+                    .parameters
+                    .iter()
+                    .filter(|parameter| parameter.has_default)
+                    .filter_map(|parameter| {
+                        Some((default_at(written, parameter)?, Some(&parameter.ty)))
+                    }),
+            );
+            signature
+        }
         Detail::Struct(read) => {
+            defaults.extend(
+                read.fields
+                    .iter()
+                    .filter(|field| field.has_default)
+                    .filter_map(|field| {
+                        let ty = field.ty.as_ref().or_else(|| {
+                            read.members
+                                .iter()
+                                .find(|member| member.name == field.name)
+                                .map(|member| &member.ty)
+                        });
+                        Some((field_initializer(written, field)?, ty))
+                    }),
+            );
             struct_signature = Signature::of_struct(read);
             &struct_signature
         }
         _ => return,
     };
-    for generic in &signature.generics {
-        let GenericKind::Value(expected) = &generic.kind else {
-            continue;
+    defaults.extend(signature.generics.iter().filter_map(|generic| {
+        let GenericKind::Value(ty) = &generic.kind else {
+            return None;
         };
-        let Some(default) = generic_default(written, generic) else {
-            continue;
-        };
+        Some((generic_default(written, generic)?, Some(ty)))
+    }));
+    for (default, expected) in defaults {
         let span = default.span();
         if !module.paired_default_names.keys().any(|at| {
             at.file == declaration.at.file && span.start <= at.span.start && at.span.end <= span.end
@@ -1101,8 +1127,8 @@ pub(super) fn check_generic_default_names(
         typer.lexical_default_dependencies = true;
         let mark = typer.mark();
         let before = typer.diagnostics.len();
-        typer.expression(&default, Some(expected));
-        // The constant evaluator owns this default's other diagnostics.
+        typer.expression(&default, expected);
+        // The normal default reader owns all other diagnostics.
         let selected: Vec<_> = typer.diagnostics.as_slice()[before..]
             .iter()
             .filter(|report| {

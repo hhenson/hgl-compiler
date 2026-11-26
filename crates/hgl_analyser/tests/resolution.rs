@@ -1293,3 +1293,56 @@ const fn guarded_type<...Ts, const K:Type=if first in arg_keys(Ts) {{ type(pick<
         );
     }
 }
+
+/// UNIT-7 and UNIT-8 read names lexically in all four kinds of default.
+/// A GEN-10 guard can skip a value at execution but cannot hide its name.
+#[test]
+fn pack_guards_preserve_the_selected_role_in_every_default() {
+    let value_helper = "const fn measure<const N:i64>(v:i64)->i64=>N";
+    let temporal_helper = "fn measure<T>(v:T)->T=>v";
+    let type_helper = "const fn describe<T>(v:T)->T=>v";
+    let other_role = "fn describe<const N:i64>(v:i64)->i64=>N";
+    for helpers in [
+        format!("{value_helper}\n{type_helper}"),
+        format!("{value_helper}\n{temporal_helper}\n{type_helper}\n{other_role}"),
+        format!("{temporal_helper}\n{value_helper}\n{other_role}\n{type_helper}"),
+    ] {
+        for (name, query, rejects) in [
+            ("width", "type(measure<width>(8))", true),
+            ("Unit", "type(describe<Unit>(row))", false),
+            ("unused", "type(measure<width>(8))", false),
+        ] {
+            let conditional = format!("if first in arg_keys(Ts) {{ {query} }} else {{ type(0) }}");
+            let other_arm = format!("if first in arg_keys(Ts) {{ type(0) }} else {{ {query} }}");
+            let source = format!(
+                r#"module m
+const first:i64 = 0
+const width:i64 = 23
+struct Unit {{ n:i64 }}
+const row:Unit = Unit(n:11)
+{helpers}
+const fn generic<...Ts,const K:Type={conditional}>({name}:i64,xs:tuple<Ts>)->Type=>K
+const fn ordinary<...Ts>({name}:i64,xs:tuple<Ts>,fallback:Type={other_arm})->Type=>fallback
+const fn config<...Ts>{{{name}:i64, fallback:Type={conditional}}}(xs:tuple<Ts>)->Type=>fallback
+struct Fields<...Ts> {{
+    {name}:i64
+    xs:tuple<Ts>
+    fallback:Type={other_arm}
+}}
+"#
+            );
+            let checked = check(&[("m.hgl", &source)]);
+            let codes: Vec<_> = checked
+                .findings
+                .iter()
+                .map(|report| report.code.as_str())
+                .collect();
+            let expected = if rejects {
+                &["name/default.formal_argument"; 4][..]
+            } else {
+                &[]
+            };
+            assert_eq!(codes, expected, "{source}\n{}", checked.report);
+        }
+    }
+}
