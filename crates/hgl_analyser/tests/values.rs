@@ -4097,7 +4097,7 @@ const fn collect(k: str, n: i64) {
     let aliases: dict<duration, i64> = [1s: 1, 1000ms: 9]
     let good: dict<str, i64> = [k: 1, "bid": 9]
     let mixed: set<i64> = [n, FOUR]
-    let list = [4, FOUR]
+    let occurrences = [4, FOUR]
 }
 "#,
     );
