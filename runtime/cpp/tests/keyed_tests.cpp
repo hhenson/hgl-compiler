@@ -474,6 +474,159 @@ TEST_CASE("a set, a dictionary and their deltas have their HGL names and text") 
           "delta<dict<str, i64>>(updated: [\"a\": 1], removed: [\"b\"])");
 }
 
+// ---- Staged KeyedEvaluation observers (TIME-7, TIME-9, END-3) --------------
+
+struct StagedBookStep {
+    bool before_all_valid{};
+    bool mid_all_valid{};
+    bool after_all_valid{};
+    bool after_modified{};
+    std::optional<BookDelta> mid_delta{};
+    std::optional<BookDelta> after_delta{};
+
+    friend bool operator==(const StagedBookStep&, const StagedBookStep&) = default;
+};
+
+std::vector<StagedBookStep> staged_book_steps;
+
+struct StagedBookWriter {
+    static constexpr auto name = "test::staged_book_writer";
+
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<BookSchema> out) {
+        if (step.value() == 0) {
+            // Seed a large dictionary plus one allocated but invalid child slot.
+            Book initial;
+            for (i64 i = 0; i < 200; ++i) {
+                initial.insert_or_assign("k" + std::to_string(i), i);
+            }
+            hglrt::keyed_publish(out, initial);
+            static_cast<void>(out[str{"bad"}]);
+            return;
+        }
+        hglrt::KeyedEvaluation<decltype(out)> staged{out};
+        staged.run([&](auto& out_) {
+            StagedBookStep seen;
+            seen.before_all_valid = hglrt::fn_all_valid(out_);
+            if (step.value() == 1) {
+                // Touching another key leaves the pre-existing invalid slot unresolved.
+                hglrt::keyed_publish(out_, BookDelta{{{"tmp", 1}}, {}});
+                seen.mid_all_valid = hglrt::fn_all_valid(out_);
+                seen.mid_delta = hglrt::fn_delta_value(out_);
+                hglrt::keyed_publish(out_, BookDelta{{}, {"tmp"}});
+                seen.after_all_valid = hglrt::fn_all_valid(out_);
+                seen.after_modified = hglrt::fn_modified(out_);
+                if (auto d = hglrt::fn_delta_value_checked(out_); d.has_value()) {
+                    seen.after_delta = *d;
+                }
+            } else if (step.value() == 2) {
+                // Removing the invalid slot flips all_valid to true while committing only that key.
+                hglrt::keyed_publish(out_, BookDelta{{}, {"bad"}});
+                seen.mid_all_valid = hglrt::fn_all_valid(out_);
+                seen.mid_delta = hglrt::fn_delta_value(out_);
+                seen.after_all_valid = hglrt::fn_all_valid(out_);
+                seen.after_modified = hglrt::fn_modified(out_);
+                seen.after_delta = hglrt::fn_delta_value(out_);
+            } else if (step.value() == 3) {
+                // Sparse churn on an all-valid dictionary stays silent downstream.
+                hglrt::keyed_publish(out_, BookDelta{{{"tmp", 9}}, {}});
+                seen.mid_all_valid = hglrt::fn_all_valid(out_);
+                seen.mid_delta = hglrt::fn_delta_value(out_);
+                hglrt::keyed_publish(out_, BookDelta{{}, {"tmp"}});
+                seen.after_all_valid = hglrt::fn_all_valid(out_);
+                seen.after_modified = hglrt::fn_modified(out_);
+                if (auto d = hglrt::fn_delta_value_checked(out_); d.has_value()) {
+                    seen.after_delta = *d;
+                }
+            }
+            staged_book_steps.push_back(std::move(seen));
+        });
+    }
+};
+
+std::vector<datetime> staged_book_wakes;
+
+struct StagedBookWatcher {
+    static constexpr auto name = "test::staged_book_watcher";
+
+    static void eval(hgraph::In<"book", BookSchema, hgraph::InputValidity::Unchecked>, hgraph::DateTime now) {
+        staged_book_wakes.push_back(now);
+    }
+};
+
+TEST_CASE("KeyedEvaluation staged all_valid and delta_value track pre-existing invalid entries and stay silent on cancellation") {
+    staged_book_steps.clear();
+    staged_book_wakes.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<StagedBookWatcher>(
+            wiring, hgraph::wire<StagedBookWriter>(wiring, replayed(wiring, Dense<i64>{0, 1, 2, 3})));
+    });
+    REQUIRE(staged_book_steps.size() == 3);
+    CHECK(staged_book_steps[0] == StagedBookStep{
+        false, false, false, false, BookDelta{{{"tmp", 1}}, {}}, std::nullopt});
+    CHECK(staged_book_steps[1] == StagedBookStep{
+        false, true, true, true, BookDelta{{}, {"bad"}}, BookDelta{{}, {"bad"}}});
+    CHECK(staged_book_steps[2] == StagedBookStep{
+        true, true, true, false, BookDelta{{{"tmp", 9}}, {}}, std::nullopt});
+    // Steps 0 (seed) and 2 (remove "bad") wake downstream; cancelling steps 1 and 3 stay silent.
+    CHECK(staged_book_wakes == std::vector<datetime>{start, start + 2us});
+}
+
+using NestedSetBook = hglrt::dict<i64, hglrt::dict<i64, Members>>;
+using NestedSetBookDelta = hglrt::dict_delta<i64, hglrt::dict<i64, Members>>;
+using NestedSetBookSchema = hgraph::TSD<i64, hgraph::TSD<i64, MembersSchema>>;
+
+std::vector<Seen<NestedSetBook, NestedSetBookDelta>> nested_restore_seen;
+
+struct NestedRestoreWriter {
+    static constexpr auto name = "test::nested_restore_writer";
+
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<NestedSetBookSchema> out) {
+        if (step.value() == 0) {
+            hglrt::keyed_publish(out, NestedSetBook{{5, {{10, {1, 2}}, {20, {3}}}}});
+            return;
+        }
+        hglrt::KeyedEvaluation<decltype(out)> staged{out};
+        staged.run([&](auto& out_) {
+            // Remove outer key 5, then restore only inner key 10 with {9}.
+            hglrt::keyed_publish(out_, NestedSetBookDelta{{}, {5}});
+            hglrt::keyed_publish(
+                out_, NestedSetBookDelta{{{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{9}, {}}}}, {}}}},
+                                         {}});
+            const auto expected = NestedSetBookDelta{
+                {{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{9}, {1, 2}}}}, {20}}}}, {}};
+            CHECK(hglrt::fn_delta_value(out_) == expected);
+        });
+    }
+};
+
+struct NestedRestoreWatcher {
+    static constexpr auto name = "test::nested_restore_watcher";
+
+    static void eval(hgraph::In<"book", NestedSetBookSchema, hgraph::InputValidity::Unchecked> book,
+                     hgraph::DateTime now) {
+        nested_restore_seen.push_back(seen_of(now, book));
+    }
+};
+
+TEST_CASE("KeyedEvaluation resets nested keyed descendants when restoring a removed key (TIME-7)") {
+    nested_restore_seen.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<NestedRestoreWatcher>(
+            wiring, hgraph::wire<NestedRestoreWriter>(wiring, replayed(wiring, Dense<i64>{0, 1})));
+    });
+    const auto expected_delta = NestedSetBookDelta{
+        {{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{9}, {1, 2}}}}, {20}}}}, {}};
+    CHECK(nested_restore_seen ==
+          std::vector<Seen<NestedSetBook, NestedSetBookDelta>>{
+              {start, true, true, NestedSetBook{{5, {{10, {1, 2}}, {20, {3}}}}},
+               NestedSetBookDelta{
+                   {{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{1, 2}, {}}}, {20, MembersDelta{{3}, {}}}},
+                                                        {}}}},
+                   {}}},
+              {start + 1us, true, true, NestedSetBook{{5, {{10, {9}}}}}, expected_delta},
+          });
+}
+
 // The generated code sets the HGL file and line at each read.
 void read_whole_book_at_hgl_source(const TupleBookInput& book) {
 #line 12 "demo/dictionary_reads.hgl"

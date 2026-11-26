@@ -1002,9 +1002,14 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         template: &FunctionType,
     ) -> ValueCategory {
+        let outer_saw_temporal = std::mem::replace(&mut self.probe_saw_temporal, false);
         let mark = self.mark();
+        self.probing_pair_role += 1;
         let read = self.anonymous_target(node, template, true);
+        self.probing_pair_role -= 1;
+        let saw_temporal = self.probe_saw_temporal;
         self.take_back(mark, false);
+        self.probe_saw_temporal = outer_saw_temporal;
         let Some((Callee::Anonymous(function), _)) = read else {
             return ValueCategory::Value;
         };
@@ -1013,7 +1018,7 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|&local| self.locals[local].category)
             .fold(ValueCategory::Value, super::lifting::join_categories);
-        let mut temporal = captured == ValueCategory::Connection;
+        let mut temporal = captured == ValueCategory::Connection || saw_temporal;
         super::forwarded_packs::walk_nested_calls(&function.body.statements, &mut |value| {
             if let ExprKind::Call { callee, .. } = &value.kind {
                 temporal |= matches!(callee, Callee::Parameter { temporal: true, .. })
@@ -1038,6 +1043,8 @@ impl<'a> Typer<'a> {
         template: &FunctionType,
         probing_role: bool,
     ) -> Option<(Callee, FunctionType)> {
+        #[cfg(test)]
+        super::calls::count_anonymous_read();
         let mut parameters = self.anonymous_parameters(node);
         if !takes_input_count(template, parameters.len()) {
             let count = template.parameters.len();

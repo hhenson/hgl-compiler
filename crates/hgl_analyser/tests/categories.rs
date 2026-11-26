@@ -203,6 +203,62 @@ fn scalar_guarded_subtrees_keep_their_flow_inside_temporal_logic() {
     assert!(recorded(&checked, body(&checked, "as_scalar"))[0].ends_with(": value"));
 }
 
+/// EXPR-6, ERR-3/12 and FN-6: a scalar negation keeps its operand's
+/// category while an outer connective learns its short-circuit facts.
+#[test]
+fn negated_scalar_calls_keep_short_circuit_presence_facts() {
+    for expression in [
+        "a == null || !positive(a)",
+        "a != null && !positive(a)",
+        "a == null || !!positive(a)",
+        "!(a != null && !positive(a))",
+        "a == null || !(positive(a) && positive(a))",
+    ] {
+        for (phase, parameter) in [("const fn", "a: i64?"), ("fn", "const a: i64?")] {
+            let checked = module(&format!(
+                "const fn positive<T>(value: T) -> bool requires T in {{i64}} => value > 0\n\
+                 {phase} guarded({parameter}) -> bool => {expression}\n"
+            ));
+            assert_eq!(checked.summary(), NONE, "{expression}: {}", checked.report);
+            assert!(
+                recorded(&checked, body(&checked, "guarded"))[0].ends_with(": value"),
+                "{expression}: scalar arguments remain values"
+            );
+        }
+        let checked = module(&format!(
+            "const fn positive<T>(value: T) -> bool requires T in {{i64}} => value > 0\n\
+             fn mixed(tick: bool, const a: i64?) -> bool => tick || ({expression})\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{expression}: {}", checked.report);
+        assert!(recorded(&checked, body(&checked, "mixed"))[0].ends_with(": connection lifted"));
+    }
+}
+
+/// ERR-12 and FN-3/6: scalar facts do not protect the wrong binding,
+/// the wrong branch, an earlier read, or a separate temporal argument.
+#[test]
+fn negated_calls_still_require_their_own_presence_fact() {
+    for (parameters, expression) in [
+        ("const a: i64?", "a == null && !positive(a)"),
+        ("const a: i64?", "a != null || !positive(a)"),
+        ("const a: i64?", "!positive(a) || a == null"),
+        ("const a: i64?, const b: i64?", "a == null || !positive(b)"),
+        ("a: i64?", "a == null || !positive(a)"),
+    ] {
+        let checked = module(&format!(
+            "const fn positive<T>(value: T) -> bool requires T in {{i64}} => value > 0\n\
+             fn guarded({parameters}) -> bool => {expression}\n"
+        ));
+        assert!(
+            checked.findings.iter().any(|finding| {
+                finding.code == "constraint/requires.unmet" && finding.rule == "GEN-3"
+            }),
+            "{expression}: {}",
+            checked.report
+        );
+    }
+}
+
 /// FN-6: a value helper "with temporal arguments in composition is
 /// lifted ... All-scalar calls execute directly and invent no source
 /// timing". A temporal function's call is the node or the graph itself,

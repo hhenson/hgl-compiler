@@ -52,7 +52,7 @@ analyser: partial
 - A call in a graph takes the temporal definition of a pair when given a connection, and the value definition when all arguments are ordinary (FN-6, GEN-5)
 - A temporal function name, or an anonymous function that captures a connection or calls a temporal function, selects the temporal definition (FN-17, GEN-6). A callable both roles admit directly leaves the choice to the other arguments. The selected definition checks its template's input types.
 - The selected definition checks the call's signature
-- An inner pair can reuse its phase check across a change to an enclosing anonymous formal it does not read. A referenced formal keeps its actual category.
+- Nested anonymous callbacks given to pairs reuse phase checks across unread lexical locals, branches, and monotonic temporal probes, and skip redundant inner committed reads while probing a role so each callback is read a bounded number of times at arbitrary nesting depth. A referenced local whose category or type affects selection still keeps its actual phase and type. In a generic pair, an unresolved callback input leaves independent result and parameter-annotation evidence in declared argument order (GEN-2, FN-17).
 - A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
 - Left: named-pair selection where an operand's category settles only after instance selection or after it receives a contextual type
 
@@ -253,12 +253,12 @@ analyser: partial
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - A named operator call reads a fixed callback against each candidate's function template. The other arguments can resolve its input types, its template sets an anonymous callback's phase, and the supplied function can resolve its result type (GEN-2, GEN-6).
 - A function type written with no result accepts only a callback with no result. A result-only generic accepts that callback and binds its result to none (GEN-1).
-- An anonymous callback is read against the result type its template already knows, including one a later argument resolved (GEN-2). With an unresolved result-only generic and no written result, its arrow or block body supplies a value type or no result.
+- An anonymous callback is read against the result type its template already knows, including one a candidate supplies or a later argument resolves (GEN-2, GEN-6). With an unresolved result-only generic and no written result, its arrow or block body supplies a value type or no result.
 - Applies the proposed plain-parameter restriction to fixed inputs of plain functions and operator candidates, including where only the candidate gives a named callback its template. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A bare operator or generic function takes its reflected input evidence from positive memberships and equalities of the enclosing declaration (GEN-3). Those readings must agree with the known types of the call and the callback's signature, including a candidate's signature for an operator. Ordinary forwarding supplies the actual argument types.
 - A written operator reference supplies its resolved fixed input types to candidate selection. The enclosing dependent call keeps the actual argument types, including split inputs given to `map` (MAP-2).
-- A reflected anonymous parameter beyond the fixed template needs a written type. Arguments of a homogeneous callback pack can determine its generic element type.
+- A reflected anonymous parameter beyond the fixed template needs a written type. This also applies when only a candidate supplies the reflected template. Arguments of a homogeneous callback pack can determine its generic element type.
 - A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 
 transpiler: partial
