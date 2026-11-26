@@ -62,11 +62,9 @@ analyser: partial
 - In a graph each value is a connection or an ordinary value: a temporal parameter and the result of a temporal or lifted call are connections
 - A reassignment across the two is rejected (`binding.category`, with CTRL-14)
 
-transpiler: partial
-
-- A whole connection reassignment rewires subsequent reads. Earlier aliases
-  keep their original connection. A supported temporal branch selects the
-  replacement or the previous connection (CTRL-14).
+C++ rebinding is recorded under CTRL-14. A whole connection reassignment
+rewires subsequent reads, and earlier aliases keep their original connection.
+A supported temporal branch selects the replacement or the previous connection.
 
 ## EXPR-5
 
