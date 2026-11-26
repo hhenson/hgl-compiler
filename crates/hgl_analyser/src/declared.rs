@@ -463,37 +463,24 @@ fn substitute(
             _ => None,
         })
     };
-    let constant = |constant: &Constant| match &constant.value {
-        ConstantValue::Type(ty) => Constant {
-            text: constant.text.clone(),
-            value: ConstantValue::Type(part(ty)),
-        },
-        ConstantValue::InstanceTypeQuery { at, bindings } => Constant {
-            text: constant.text.clone(),
-            value: specialize_query_bindings(*at, bindings, map, &|inner| *part(inner), resolve),
-        },
-        ConstantValue::Parameter { at, .. } => {
-            given(*at).cloned().unwrap_or_else(|| constant.clone())
+    let constant = |constant: &Constant| {
+        if let ConstantValue::Parameter { at, .. } = &constant.value {
+            return given(*at).cloned().unwrap_or_else(|| constant.clone());
         }
-        // `N + 1`: worked out with what `N` is given; `[N]` and
-        // `Side(N)` hold it.
-        ConstantValue::Unary(..)
-        | ConstantValue::Binary(..)
-        | ConstantValue::RangeLength(..)
-        | ConstantValue::List(_)
-        | ConstantValue::Tuple(_)
-        | ConstantValue::Constructed { .. } => {
-            let value = constant
-                .value
-                .substituted(&|at| given(at).map(|given| given.value.clone()));
-            // The constant is still written as it was (`N + 1`): only
-            // its value changes.
-            Constant {
-                text: constant.text.clone(),
-                value,
+        let descriptor = |value: &ConstantValue| match value {
+            ConstantValue::Type(ty) => ConstantValue::Type(part(ty)),
+            ConstantValue::InstanceTypeQuery { at, bindings } => {
+                specialize_query_bindings(*at, bindings, map, &|inner| *part(inner), resolve)
             }
+            _ => unreachable!("only a descriptor calls this projection"),
+        };
+        Constant {
+            text: constant.text.clone(),
+            value: constant.value.substituted_with_types(
+                &|at| given(at).map(|given| given.value.clone()),
+                &descriptor,
+            ),
         }
-        _ => constant.clone(),
     };
     match ty {
         Type::Parameter { at, .. } => map

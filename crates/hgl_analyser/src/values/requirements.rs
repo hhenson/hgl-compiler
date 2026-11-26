@@ -822,7 +822,7 @@ impl<'a> Typer<'a> {
                     .iter()
                     .map(|argument| match argument {
                         Argument::Type(ty) => Argument::Type(project(ty)),
-                        _ => given_in(argument, &given, &own),
+                        _ => given_in(program, argument, &given, &own),
                     })
                     .collect::<Vec<_>>();
                 let placed_packs = type_packs
@@ -3278,7 +3278,7 @@ pub(super) fn instances_hold(
                         let generics: Vec<Argument> = call
                             .generics
                             .iter()
-                            .map(|argument| given_in(argument, &map, &declared))
+                            .map(|argument| given_in(program, argument, &map, &declared))
                             .collect();
                         // ERR-9: "Failure during argument evaluation
                         // precedes later admission checks."
@@ -3314,7 +3314,9 @@ pub(super) fn instances_hold(
                             generics,
                             call.answers
                                 .iter()
-                                .map(|answer| answered_in(answer, &map, &declared, &made.answers))
+                                .map(|answer| {
+                                    answered_in(program, answer, &map, &declared, &made.answers)
+                                })
                                 .collect(),
                         )
                     }
@@ -4263,20 +4265,26 @@ fn packs_pass_on(packs: &[hir::TypePackArgument], declared: &[Location]) -> bool
 
 /// `argument`, a generic argument a call in a generic body gives, with
 /// what a call of that body gives its parameters, `map`, in place.
-fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Location]) -> Argument {
+fn given_in(
+    program: &Program,
+    argument: &Argument,
+    map: &[(Location, &Argument)],
+    declared: &[Location],
+) -> Argument {
     match argument {
         Argument::Constant(constant) => Argument::Constant(Constant {
             text: constant.text.clone(),
-            value: constant.value.substituted(&|at| {
-                map.iter()
-                    .find(|(own, _)| *own == at)
-                    .and_then(|(_, given)| match given {
-                        Argument::Constant(given) => Some(given.value.clone()),
-                        Argument::Type(_) | Argument::NoResult => None,
+            value: constant.value.substituted_with_types(
+                &|at| {
+                    map.iter().find_map(|(own, given)| match given {
+                        Argument::Constant(given) if *own == at => Some(given.value.clone()),
+                        _ => None,
                     })
-            }),
+                },
+                &|descriptor| program.specialize_query(descriptor, map),
+            ),
         }),
-        Argument::Type(ty) => Argument::Type(placed(substitute_within(ty, map), declared)),
+        Argument::Type(ty) => Argument::Type(placed(program.specialize_type(ty, map), declared)),
         Argument::NoResult => Argument::NoResult,
     }
 }
@@ -4686,6 +4694,7 @@ pub(super) fn made_forwarded_callee(
 /// the instance's caller answers the body's own requirements with,
 /// `answers`, in place of each it states (`Answer::Stated`).
 fn answered_in(
+    program: &Program,
     answer: &hir::Answer,
     map: &[(Location, &Argument)],
     declared: &[Location],
@@ -4704,11 +4713,11 @@ fn answered_in(
             declaration: *declaration,
             generics: generics
                 .iter()
-                .map(|argument| given_in(argument, map, declared))
+                .map(|argument| given_in(program, argument, map, declared))
                 .collect(),
             requirements: requirements
                 .iter()
-                .map(|answer| answered_in(answer, map, declared, answers))
+                .map(|answer| answered_in(program, answer, map, declared, answers))
                 .collect(),
         },
         hir::Answer::Stated(position) => answers

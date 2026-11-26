@@ -2470,19 +2470,26 @@ fn scaled_tenor(tenor: Tenor, factor: i64) -> Option<Tenor> {
 /// True when `value` contains a `type(...)` query deferred from `read`
 /// until declaration details, struct fields, and body locals exist (TYPE-18).
 pub(crate) fn has_deferred_type_query(value: &ConstantValue) -> bool {
+    contains_query(value, &|value| {
+        matches!(
+            value,
+            ConstantValue::DeferredTypeQuery(_) | ConstantValue::DeferredDefaultQuery(_)
+        )
+    })
+}
+
+fn contains_query(value: &ConstantValue, matches: &dyn Fn(&ConstantValue) -> bool) -> bool {
+    let nested = |value: &ConstantValue| contains_query(value, matches);
     match value {
-        ConstantValue::DeferredTypeQuery(_) | ConstantValue::DeferredDefaultQuery(_) => true,
-        ConstantValue::Type(ty) => type_has_deferred_query(ty),
+        ConstantValue::Type(ty) => ty.any_part(&|_| false, &|c| nested(&c.value)),
         ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
-            has_deferred_type_query(operand)
+            nested(operand)
         }
         ConstantValue::Binary(_, left, right) | ConstantValue::RangeLength(left, right) => {
-            has_deferred_type_query(left) || has_deferred_type_query(right)
+            nested(left) || nested(right)
         }
-        ConstantValue::List(values) | ConstantValue::Tuple(values) => {
-            values.iter().any(has_deferred_type_query)
-        }
-        _ => false,
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().any(nested),
+        _ => matches(value),
     }
 }
 
@@ -2495,10 +2502,10 @@ pub(crate) fn type_has_deferred_query(ty: &Type) -> bool {
 
 /// Whether a type still carries the operand of an instance-dependent query.
 pub(crate) fn type_has_instance_query(ty: &Type) -> bool {
-    ty.any_part(&|_| false, &|c| match &c.value {
-        ConstantValue::InstanceTypeQuery { .. } => true,
-        ConstantValue::Type(ty) => type_has_instance_query(ty),
-        _ => false,
+    ty.any_part(&|_| false, &|c| {
+        contains_query(&c.value, &|value| {
+            matches!(value, ConstantValue::InstanceTypeQuery { .. })
+        })
     })
 }
 
@@ -3069,25 +3076,33 @@ impl ConstantValue {
         &self,
         given: &dyn Fn(Location) -> Option<ConstantValue>,
     ) -> ConstantValue {
+        self.substituted_with_types(given, &Clone::clone)
+    }
+
+    /// Evaluate the constant after placing both ordinary generic values
+    /// and Type-valued descriptors, including those inside aggregates.
+    pub(crate) fn substituted_with_types(
+        &self,
+        given: &dyn Fn(Location) -> Option<ConstantValue>,
+        descriptor: &dyn Fn(&ConstantValue) -> ConstantValue,
+    ) -> ConstantValue {
+        let part = |value: &ConstantValue| value.substituted_with_types(given, descriptor);
         match self {
+            ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. } => descriptor(self),
             ConstantValue::Parameter { at, .. } => given(*at).unwrap_or_else(|| self.clone()),
-            ConstantValue::Unary(operator, operand) => {
-                negated_or_not(*operator, &operand.substituted(given))
+            ConstantValue::Unary(operator, operand) => negated_or_not(*operator, &part(operand)),
+            ConstantValue::Binary(operator, left, right) => {
+                combined(*operator, &part(left), &part(right))
             }
-            ConstantValue::Binary(operator, left, right) => combined(
-                *operator,
-                &left.substituted(given),
-                &right.substituted(given),
-            ),
             ConstantValue::RangeLength(lower, upper) => {
-                Self::range_length(lower.substituted(given), upper.substituted(given))
+                Self::range_length(part(lower), part(upper))
             }
             // TYPE-7: "`Side(1)` is the member whose number is 1, and
             // `Side("buy")` the member of that exact name." One that
             // names none is rejected where it is called, and has no
             // value here.
             ConstantValue::Constructed { of, members, from } => {
-                let from = from.substituted(given);
+                let from = part(from);
                 let named = match &from {
                     ConstantValue::Int(number)
                         if members.iter().all(|(_, value)| value.is_some()) =>
@@ -3109,18 +3124,8 @@ impl ConstantValue {
                 }
             }
             // `[N, 1]`: each element given its value.
-            ConstantValue::List(values) => ConstantValue::List(
-                values
-                    .iter()
-                    .map(|value| value.substituted(given))
-                    .collect(),
-            ),
-            ConstantValue::Tuple(values) => ConstantValue::Tuple(
-                values
-                    .iter()
-                    .map(|value| value.substituted(given))
-                    .collect(),
-            ),
+            ConstantValue::List(values) => ConstantValue::List(values.iter().map(part).collect()),
+            ConstantValue::Tuple(values) => ConstantValue::Tuple(values.iter().map(part).collect()),
             _ => self.clone(),
         }
     }

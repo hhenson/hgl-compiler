@@ -1635,3 +1635,63 @@ impl const fn configured{v: Stamp<INTEGER>}(x: str) -> i64 => v.id
         }
     }
 }
+
+/// GEN-3, TYPE-18: concrete outer arguments reach requirements on nested
+/// struct fields and parents, including tags determined by a cold overload.
+#[test]
+fn nested_requirements_receive_the_concrete_type_value() {
+    let library = r#"module library
+export const INTEGER: Type = type(1)
+export const PAIR: tuple<Type, Type> = (INTEGER, type(true))
+export const fn rows<T>() -> list<T> => []
+export operator select<A,R>(value: A) -> R
+impl const fn select<A>(value: A) -> i64 => 1
+impl const fn select(value: list<str>) -> bool => true
+export abstract struct Base<const K: Type> requires K == INTEGER { id: i64? }
+export struct Only<const K: Type> requires K == INTEGER { id: i64? }
+export struct Pair<const K: tuple<Type, Type>> requires K == PAIR { id: i64? }
+"#;
+    for (declaration, required) in [
+        (
+            "struct Outer<T> { item:T?\n nested:lib::Only<type(lib::rows<T>()[0])>? }",
+            "Only",
+        ),
+        (
+            "struct Outer<T> : lib::Base<type(lib::select(lib::rows<T>()))> { item:T? }",
+            "Base",
+        ),
+        (
+            "struct Relay<const K:Type> { nested:lib::Only<K>? }\nstruct Outer<T> { item:T?\n nested:Relay<type(lib::select(lib::rows<T>()))>? }",
+            "Only",
+        ),
+        (
+            "struct Outer<T> { item:T?\n nested:lib::Pair<(type(lib::select(lib::rows<T>())), type(true))>? }",
+            "Pair",
+        ),
+    ] {
+        for (argument, valid) in [("i64", true), ("str", false)] {
+            let source = format!(
+                "module m\nuse library as lib\n{declaration}\ntest make {{ let x = Outer<{argument}>() }}\n"
+            );
+            let checked = check(&[("library.hgl", library), ("m.hgl", &source)]);
+            if valid {
+                assert_eq!(
+                    checked.summary(),
+                    Vec::<String>::new(),
+                    "{}",
+                    checked.report
+                );
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+                assert!(
+                    checked
+                        .report
+                        .contains(&format!("the `requires` of `{required}`")),
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
