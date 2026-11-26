@@ -34,7 +34,7 @@ impl Emitter<'_> {
             return self.missing(whole.at, "a format call without a pattern");
         };
         let Some(TextCall {
-            pattern: Some(text),
+            pattern: text,
             conversions,
         }) = text
         else {
@@ -310,64 +310,6 @@ impl Emitter<'_> {
                 let converted = self.convert_to_text(scope, value, ty, at, conversion);
                 let _ = write!(text, "{output} += {converted}; ");
             }
-        }
-    }
-
-    /// The selected native collection conversion uses the ordinary
-    /// selected converter of each member type (FMT-5, OPS-4).
-    pub(super) fn collection_text(
-        &mut self,
-        scope: &mut Scope,
-        value: &Expr,
-        members: &[&Type],
-        conversions: &[Option<Expr>],
-    ) -> String {
-        self.piece.formatting = true;
-        scope.acted = true;
-        let rendered = self.expression(scope, value);
-        let renderers: Vec<_> = members
-            .iter()
-            .enumerate()
-            .map(|(index, ty)| {
-                let part = temporary("collection_member", self.temporary());
-                let conversion = conversions.get(index).and_then(Option::as_ref);
-                let content = self.collection_member(scope, &part, ty, value.at, conversion);
-                format!("[&](const auto& {part}) -> ::hglrt::str {{ return {content}; }}")
-            })
-            .collect();
-        let function = if renderers.len() == 1 {
-            "collection"
-        } else {
-            "dictionary"
-        };
-        format!(
-            "::hglrt::format_{function}({rendered}, {})",
-            renderers.join(", ")
-        )
-    }
-
-    fn collection_member(
-        &mut self,
-        scope: &mut Scope,
-        value: &str,
-        ty: &Type,
-        at: Location,
-        conversion: Option<&Expr>,
-    ) -> String {
-        match ty {
-            Type::Nullable(inner) => {
-                let text =
-                    self.collection_member(scope, &format!("(*{value})"), inner, at, conversion);
-                format!("({value} ? {text} : ::hglrt::str{{\"null\"}})")
-            }
-            Type::Scalar(Scalar::Str) => format!("::hglrt::format_quoted({value})"),
-            Type::Scalar(Scalar::I64 | Scalar::F64 | Scalar::Bool) => {
-                format!("::hglrt::convert_{ty}<::hglrt::str>({value})")
-            }
-            Type::Scalar(Scalar::Date | Scalar::Time | Scalar::Datetime | Scalar::Duration) => {
-                format!("::hglrt::format_default({value})")
-            }
-            _ => self.convert_to_text(scope, value, ty, at, conversion),
         }
     }
 

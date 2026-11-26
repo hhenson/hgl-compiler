@@ -531,32 +531,6 @@ pub fn needs_text_conversion(ty: &Type) -> bool {
     )
 }
 
-/// The collection's component types for a selected Core text conversion.
-pub fn collection_members<'a>(
-    program: &Program,
-    callee: &Callee,
-    ty: &'a Type,
-) -> Option<Vec<&'a Type>> {
-    let (module, declaration) = callee.declaration()?;
-    let owner = &program.modules[module];
-    if Some(module) != program.core()
-        || owner.declarations[declaration].name != "convert"
-        || !matches!(
-            owner.declarations[declaration].kind,
-            DeclarationKind::NativeCandidate(Role::Value, _)
-        )
-        || !matches!(&owner.details[declaration], Detail::Callable(signature)
-            if signature.result == Some(Type::Scalar(Scalar::Str)))
-    {
-        return None;
-    }
-    match ty {
-        Type::List { element, .. } | Type::Set(element) => Some(vec![element]),
-        Type::Dict { key, value } => Some(vec![key, value]),
-        _ => None,
-    }
-}
-
 /// The pattern of a Core format call whose value candidate is selected
 /// during specialization. Use the public signature while the call is open.
 pub(crate) fn deferred_pattern<'a>(
@@ -620,10 +594,6 @@ pub(crate) fn has_dependent_formatting(
             // A generic caller can supply a concrete ordinary const value
             // only after substituting its own generic arguments.
             dependent = true;
-        } else if let [argument] = arguments.as_slice()
-            && let Some(members) = collection_members(program, callee, &argument.value.ty)
-        {
-            dependent = members.into_iter().any(crate::declared::names_parameter);
         }
     });
     dependent
