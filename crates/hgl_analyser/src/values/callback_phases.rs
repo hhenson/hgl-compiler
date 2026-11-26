@@ -9,7 +9,16 @@ use hgl_diagnostics::{Diagnostic, Diagnostics, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::{Tables, Typer};
-use crate::{Binding, LocalKind, Type, hir::ValueCategory};
+use crate::{
+    Binding, LocalKind, Type,
+    hir::{Callee, ValueCategory},
+};
+
+struct OpenCapture {
+    at: Location,
+    slot: usize,
+    classes: Vec<usize>,
+}
 
 impl Typer<'_> {
     /// A clean reading is evidence that the declaration's original errors
@@ -20,18 +29,12 @@ impl Typer<'_> {
         if original.iter().all(|r| r.severity != Severity::Error) || original.iter().any(limit) {
             return;
         }
-        let callbacks: Vec<_> = self
-            .signature
-            .parameters
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, parameter)| {
-                matches!(&parameter.ty, Type::Function(f) if f.value)
-                    .then_some((parameter.at, slot))
-            })
-            .collect();
+        let callbacks = self.open_callback_captures();
+        let Some(last_class) = callbacks.iter().flat_map(|cb| &cb.classes).max() else {
+            return;
+        };
         let mut possible = vec![true; original.len()];
-        let mut pending = vec![(vec![None; self.signature.parameters.len()], None)];
+        let mut pending = vec![(vec![None; last_class + 1], None)];
         let mut deps = HashMap::new();
         let mut budgets = HashMap::new();
         let mut unresolved = None;
@@ -41,7 +44,7 @@ impl Typer<'_> {
             let failures = if let Some(previous) = previous {
                 previous
             } else {
-                let reports = self.read_capture_categories(found, &assigned);
+                let reports = self.read_capture_categories(found, &assigned, &callbacks);
                 if !reports.has_errors() {
                     let kept: Vec<_> = original
                         .iter()
@@ -146,14 +149,71 @@ impl Typer<'_> {
         }
     }
 
+    /// Each outer formal has one capture category, shared by every receiving
+    /// slot that forwards it directly or closes over it in an anonymous body.
+    fn open_callback_captures(&self) -> Vec<OpenCapture> {
+        let mut classes = HashMap::new();
+        let mut open = Vec::new();
+        for (slot, parameter) in self.signature.parameters.iter().enumerate() {
+            if !matches!(&parameter.ty, Type::Function(f) if f.value) {
+                continue;
+            }
+            let target = self.pack_functions.iter().find(|(id, _)| *id == slot);
+            let mut used = Vec::new();
+            match target {
+                None => used.push(slot),
+                Some((
+                    _,
+                    Callee::Parameter {
+                        parameter,
+                        temporal: false,
+                        ..
+                    },
+                )) => used.push(*parameter),
+                Some((_, Callee::Anonymous(function))) if function.template.value => {
+                    crate::instance::used_function_parameters(&function.body, &mut used);
+                }
+                _ => {}
+            }
+            if used.is_empty() {
+                continue;
+            }
+            used.sort_unstable();
+            used.dedup();
+            let capture_classes = used
+                .into_iter()
+                .map(|id| {
+                    // An unsupplied formal belongs to this declaration, while a
+                    // forwarded reference denotes a formal in the caller.
+                    let next = classes.len();
+                    *classes.entry((target.is_some(), id)).or_insert(next)
+                })
+                .collect();
+            open.push(OpenCapture {
+                at: parameter.at,
+                slot,
+                classes: capture_classes,
+            });
+        }
+        open
+    }
+
+    pub(super) fn mark_open_instance_captures(&mut self) {
+        self.callback_captures = vec![ValueCategory::Value; self.signature.parameters.len()];
+        for callback in self.open_callback_captures() {
+            self.callback_captures[callback.slot] = ValueCategory::Unsettled;
+        }
+    }
+
     fn read_capture_categories(
         &self,
         found: Tables<'_>,
         assigned: &[Option<ValueCategory>],
+        callbacks: &[OpenCapture],
     ) -> Diagnostics {
         let selecting = RefCell::new(Vec::new());
         let mut reports = Diagnostics::new();
-        let mut trial = Typer::new(
+        let mut trial = Typer::with_test_candidates(
             self.program,
             self.module,
             self.declaration,
@@ -163,11 +223,23 @@ impl Typer<'_> {
                 ..found
             },
             &mut reports,
+            self.test_candidates,
         );
-        trial.callback_captures = assigned
-            .iter()
-            .map(|slot| slot.unwrap_or(ValueCategory::Value))
-            .collect();
+        // Keep the actual inputs of a partially bound instance, changing
+        // only captures whose caller still supplied another open formal.
+        trial.absent_type_uses = self.absent_type_uses;
+        trial.instance.clone_from(&self.instance);
+        trial.const_inputs.clone_from(&self.const_inputs);
+        trial.pack_inputs = self.pack_inputs;
+        trial.pack_functions.clone_from(&self.pack_functions);
+        trial.callback_captures = vec![ValueCategory::Value; self.signature.parameters.len()];
+        for callback in callbacks {
+            trial.callback_captures[callback.slot] = callback
+                .classes
+                .iter()
+                .filter_map(|&id| assigned[id])
+                .fold(ValueCategory::Value, super::lifting::join_categories);
+        }
         trial.graph();
         reports
     }
@@ -201,7 +273,7 @@ impl Typer<'_> {
     /// Which formal captures can affect a statement, including initializers
     /// through local definitions. Each use of a mutable binding can pass
     /// it to a writing callee or assign it in its enclosing statement.
-    fn capture_slots(&self, scope: &SyntaxNode, callbacks: &[(Location, usize)]) -> Vec<usize> {
+    fn capture_slots(&self, scope: &SyntaxNode, callbacks: &[OpenCapture]) -> Vec<usize> {
         let mut slots = Vec::new();
         let mut seen = HashSet::new();
         let mut variables = HashSet::new();
@@ -219,9 +291,11 @@ impl Typer<'_> {
                 else {
                     continue;
                 };
-                if let Some((_, slot)) = callbacks.iter().find(|(id, _)| id == at) {
-                    if !slots.contains(slot) {
-                        slots.push(*slot);
+                if let Some(cb) = callbacks.iter().find(|cb| cb.at == *at) {
+                    for class in &cb.classes {
+                        if !slots.contains(class) {
+                            slots.push(*class);
+                        }
                     }
                 } else if matches!(kind, LocalKind::Let | LocalKind::Var | LocalKind::Iteration) {
                     pending.push(self.report_scope(*at));

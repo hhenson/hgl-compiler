@@ -818,3 +818,46 @@ fn subject({callbacks}, tick: i64) -> bool {{
         checked.report
     );
 }
+
+/// FN-4/17: forwarding keeps the outer formal open, including when two
+/// receiver slots share it. Bound slots and unrelated errors stay fixed.
+#[test]
+fn partial_callback_bindings_preserve_source_and_instance_errors() {
+    let checked = check(&[(
+        "relay.hgl",
+        r#"module relay
+const fn pair(n: i64) -> i64 => n
+fn pair(n: i64) -> str => "live"
+const fn need_number(n: i64) -> i64 => n
+const fn need_text(s: str) -> i64 => 17
+const fn inc(n: i64) -> i64 => n + 1
+fn both(f: const fn(i64) -> i64, g: const fn(i64) -> i64, t: i64) -> i64 {
+    let a = pair(f(1))
+    let b = pair(g(1))
+    return t + need_number(a) + need_text(b)
+}
+fn partly(f: const fn(i64) -> i64, t: i64) -> i64 => both(f, fn(n) => t + n, t)
+fn again(t: i64, f: const fn(i64) -> i64) -> i64 => partly(f, t)
+fn good(t: i64) -> i64 => again(t, inc)
+fn bad(t: i64) -> i64 => again(t, fn(n) => t + n)
+fn same(f: const fn(i64) -> i64, t: i64) -> i64 => both(f, fn(n) => f(n), t)
+fn fixed(f: const fn(i64) -> i64, t: i64) -> i64 => both(f, inc, t)
+fn wrong_local(f: const fn(i64) -> i64, t: i64) -> i64 {
+    let wrong: bool = 17
+    return again(t, f)
+}
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 4, "{}", checked.report);
+    for line in [15, 16, 17, 19] {
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|r| r.at.starts_with(&format!("relay.hgl:{line}:"))
+                    && r.code == "type/type.mismatch"),
+            "{}",
+            checked.report
+        );
+    }
+}

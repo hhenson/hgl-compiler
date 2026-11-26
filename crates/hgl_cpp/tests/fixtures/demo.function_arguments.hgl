@@ -51,8 +51,20 @@ fn signature_results(f: const fn(i64) -> i64, g: const fn(i64) -> i64, tick: i64
 fn bound_signatures(tick: i64) -> i64 =>
     signature_inputs(increment, tick) + signature_results(increment, fn(n) => n + tick, tick)
 
+fn forward_signatures(f: const fn(i64) -> i64, tick: i64) -> i64 =>
+    signature_inputs(f, tick)
+fn forward_again(tick: i64, f: const fn(i64) -> i64) -> i64 =>
+    forward_signatures(f, tick)
+fn two_relays(tick: i64) -> i64 => forward_again(tick, increment)
+
+fn forward_wrapped(f: const fn(i64) -> i64, tick: i64) -> i64 =>
+    signature_results(increment, fn(n) => f(n), tick)
+fn live_relay(tick: i64) -> i64 => forward_wrapped(fn(n) => tick + n, tick)
+
 test callback_pair_signatures_wait_for_the_binding {
     assert eval bound_signatures(tick: [2, 3]) == [29, 31]
+    assert eval two_relays(tick: [2, 6]) == [6, 10]
+    assert eval live_relay(tick: [2, 6]) == [23, 27]
 }
 
 const fn double<T>(input: T) -> T requires T in {i64, f64} => input + input

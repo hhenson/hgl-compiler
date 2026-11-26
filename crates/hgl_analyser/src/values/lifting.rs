@@ -355,16 +355,26 @@ fn category_with_functions(
             let given = all(&mut arguments.iter().map(|argument| &argument.value));
             // FN-17: the binding of a value formal supplies the actual
             // callback's role and its captures for the FN-6 category below.
-            let callee = match callee {
-                Callee::Parameter {
-                    parameter,
-                    temporal: false,
-                    ..
-                } => functions
+            let (callee, given) = if let Callee::Parameter {
+                parameter,
+                temporal: false,
+                ..
+            } = callee
+            {
+                let target = functions
                     .iter()
                     .find(|(slot, _)| slot == parameter)
-                    .map_or(callee, |(_, target)| target),
-                _ => callee,
+                    .map_or(callee, |(_, target)| target);
+                // The trial category belongs to the receiving slot, even if
+                // the target names a different slot in the forwarding call.
+                let captured = match callback_captures.get(*parameter) {
+                    Some(&category) => category,
+                    None if matches!(target, Callee::Parameter { .. }) => Unsettled,
+                    None => Value,
+                };
+                (target, join(given, captured))
+            } else {
+                (callee, given)
             };
             match callee {
                 Callee::Function {
@@ -399,13 +409,8 @@ fn category_with_functions(
                     .map(|&local| locals[local].category)
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                Callee::Parameter { parameter, .. } if *parameter < callback_captures.len() => {
-                    join(given, callback_captures[*parameter])
-                }
-                // An unbound callback may capture a connection. An operation
-                // awaiting instance selection may choose a temporal candidate.
-                Callee::Parameter { .. }
-                | Callee::Required { .. }
+                // An operation awaiting selection may choose a temporal candidate.
+                Callee::Required { .. }
                 | Callee::DeferredOperator(_)
                 | Callee::DeferredPackCall
                 | Callee::Unread => join(given, Unsettled),

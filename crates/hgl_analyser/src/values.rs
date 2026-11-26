@@ -644,17 +644,18 @@ pub(crate) fn reread_instance_body(
         ..signature.clone()
     };
     let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
+    let found = Tables {
+        bindings: &bindings,
+        written: &written,
+        calls: &calls,
+        selecting: &selecting,
+    };
     let mut typer = Typer::with_test_candidates(
         program,
         owner,
         declared,
         &reading,
-        Tables {
-            bindings: &bindings,
-            written: &written,
-            calls: &calls,
-            selecting: &selecting,
-        },
+        found,
         diagnostics,
         inputs.test_candidates,
     );
@@ -678,7 +679,21 @@ pub(crate) fn reread_instance_body(
         types: &pack_types,
     });
     typer.pack_functions = inputs.functions.to_vec();
-    typer.body_at_phase(owner.phases[declaration])
+    if owner.phases[declaration] == Some(Phase::Graph)
+        && program
+            .callback_phase_bodies
+            .contains(&(module, declaration))
+    {
+        typer.mark_open_instance_captures();
+        let before = typer.diagnostics.len();
+        let (body, _) = typer.graph();
+        if typer.unsettled_callback_pair {
+            typer.check_open_pair_reports(found, before);
+        }
+        body
+    } else {
+        typer.body_at_phase(owner.phases[declaration])
+    }
 }
 
 /// GEN-1: a written argument needs a type unless it takes a whole result.
