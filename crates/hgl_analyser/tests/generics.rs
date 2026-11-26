@@ -103,6 +103,9 @@ fn a_written_list_element_type_keeps_fixed_list_admission() {
         "impl const fn nest(rows: list<list<str, 2>, 2>) -> i64 => 5\n",
         "const fn nested(rows: list<list<i64, 2>, 2>) -> i64 => nest<i64>(rows)\n",
         "const fn wrong_nested(rows: list<list<str, 2>, 2>) -> i64 => nest<i64>(rows)\n",
+        "operator full_result<T>(items: result<list<T>, error>) -> i64\n",
+        "impl const fn full_result(items: result<list<i64, 2>, error>) -> i64 => 6\n",
+        "const fn pass_result(items: result<list<i64, 2>, error>) -> i64 => full_result<i64>(items)\n",
     ));
     assert_eq!(
         checked.summary(),

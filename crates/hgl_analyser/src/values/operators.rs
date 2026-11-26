@@ -1878,19 +1878,25 @@ impl<'a> Typer<'a> {
             } else {
                 let value = self.argument_read(argument.clone(), &ty);
                 // TYPE-10: keep extents supplied to an unsized input
-                // pattern. Fit the original value so its ordinary read
-                // checks still apply.
-                let given_type = received_type(&value.ty, |_| true);
-                let known = whole(given_type) && !open(given_type);
-                let ty = match &ty {
-                    Type::Nullable(payload)
-                        if known && agree_with_input_pattern(given_type, payload) =>
-                    {
-                        Type::Nullable(Box::new(given_type.clone()))
+                // pattern. A full result can itself match the pattern.
+                // Try it before looking at what an ordinary read takes.
+                let fitted_pattern = |supplied: &Type| {
+                    if !whole(supplied) || open(supplied) {
+                        return None;
                     }
-                    _ if known && agree_with_input_pattern(given_type, &ty) => given_type.clone(),
-                    _ => ty,
+                    if agree_with_input_pattern(supplied, &ty) {
+                        return Some(supplied.clone());
+                    }
+                    match &ty {
+                        Type::Nullable(payload) if agree_with_input_pattern(supplied, payload) => {
+                            Some(Type::Nullable(Box::new(supplied.clone())))
+                        }
+                        _ => None,
+                    }
                 };
+                let ty = fitted_pattern(&value.ty)
+                    .or_else(|| fitted_pattern(received_type(&value.ty, |_| true)))
+                    .unwrap_or(ty);
                 let place = format!("the parameter `{}`", parameter.name);
                 self.fit_input(value, &ty, &place);
             }
