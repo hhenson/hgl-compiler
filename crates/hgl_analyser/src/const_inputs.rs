@@ -524,7 +524,8 @@ impl Program {
 
 struct Reader<'a> {
     program: &'a Program,
-    locals: &'a [(LocalId, Rc<Expr>)],
+    /// Present only when reading a reached immediate expression.
+    locals: Option<&'a [(LocalId, Rc<Expr>)]>,
     steps_left: usize,
     text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
@@ -557,7 +558,7 @@ pub(crate) fn immediate_value(
         .map(|(at, argument)| (*at, argument))
         .collect();
     let mut reader = Reader::new(program);
-    reader.locals = locals;
+    reader.locals = Some(locals);
     reader.read_string_helpers = false;
     reader.read(expression, INPUT_DEPTH, &generics)
 }
@@ -566,7 +567,7 @@ impl<'a> Reader<'a> {
     fn new(program: &'a Program) -> Self {
         Self {
             program,
-            locals: &[],
+            locals: None,
             steps_left: INPUT_BUDGET,
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
@@ -590,7 +591,8 @@ impl<'a> Reader<'a> {
         self.reading.push(dependency);
         // A followed declaration has its own lexical local IDs (UNIT-7,
         // UNIT-13). The immediate call's bindings do not belong to it.
-        let locals = std::mem::take(&mut self.locals);
+        let locals = self.locals;
+        self.locals = locals.map(|_| &[][..]);
         let read = self.read(value, depth, generics);
         self.locals = locals;
         self.reading.pop();
@@ -624,7 +626,7 @@ impl<'a> Reader<'a> {
                 member: *member,
             },
             ExprKind::Local(local) => {
-                let locals = self.locals;
+                let locals = self.locals.ok_or(Unread)?;
                 let (_, value) = locals.iter().find(|(id, _)| id == local).ok_or(Unread)?;
                 return self.read(value, next, generics);
             }
@@ -712,6 +714,20 @@ impl<'a> Reader<'a> {
                     ExprKind::Sequence(parts)
                 }
             }
+            ExprKind::Pairs(entries)
+                if self.locals.is_some() && matches!(expression.ty, Type::Dict { .. }) =>
+            {
+                let entries = entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            self.read(key, next, generics)?,
+                            self.read(value, next, generics)?,
+                        ))
+                    })
+                    .collect::<Result<_, _>>()?;
+                ExprKind::Pairs(entries)
+            }
             ExprKind::Construct {
                 module,
                 declaration,
@@ -773,16 +789,20 @@ impl<'a> Reader<'a> {
             }
             ExprKind::Index { base, index } => {
                 // The bounded const-input reader normalizes tuples and lists.
-                let ConstantValue::Int(position) = self.scalar(index, next, generics)? else {
-                    return Err(Unread);
-                };
-                let position = usize::try_from(position).map_err(|_| Unread)?;
-                let (ExprKind::Tuple(entries) | ExprKind::Sequence(entries)) =
-                    self.read(base, next, generics)?.kind
-                else {
-                    return Err(Unread);
-                };
-                entries.into_iter().nth(position).ok_or(Unread)?.kind
+                if self.locals.is_some() && matches!(base.ty, Type::Dict { .. }) {
+                    self.dictionary_entry(base, index, next, generics)?.kind
+                } else {
+                    let ConstantValue::Int(position) = self.scalar(index, next, generics)? else {
+                        return Err(Unread);
+                    };
+                    let position = usize::try_from(position).map_err(|_| Unread)?;
+                    let (ExprKind::Tuple(entries) | ExprKind::Sequence(entries)) =
+                        self.read(base, next, generics)?.kind
+                    else {
+                        return Err(Unread);
+                    };
+                    entries.into_iter().nth(position).ok_or(Unread)?.kind
+                }
             }
             ExprKind::Widen(inner) => match self.scalar(inner, next, generics)? {
                 ConstantValue::Int(value) => ExprKind::Literal(Value::Float(value as f64)),
@@ -791,7 +811,16 @@ impl<'a> Reader<'a> {
             ExprKind::Block {
                 statements,
                 value: Some(value),
-            } if statements.is_empty() => {
+            } if statements.is_empty()
+                || self.locals.is_some_and(|known| {
+                    statements.iter().all(|statement| {
+                        matches!(statement, Stmt::Declare { local, value: Some(_) }
+                        if known.iter().any(|(id, _)| id == local))
+                    })
+                }) =>
+            {
+                // A known immutable declaration adds no effect to the
+                // block's final expression (CTRL-10).
                 return self.read(value, next, generics);
             }
             ExprKind::If {
@@ -827,6 +856,39 @@ impl<'a> Reader<'a> {
             ExprKind::Literal(literal) => Ok(literal.into()),
             _ => Err(ConstInputFault::Unread),
         }
+    }
+
+    /// A known ordinary dictionary supplies its last entry for a key
+    /// (EXPR-7, EXPR-9). Missing or unknown keys supply no fixed value.
+    fn dictionary_entry(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        depth: usize,
+        generics: &[(Location, &GenericArgument)],
+    ) -> Result<Expr, ConstInputFault> {
+        use ConstInputFault::Unread;
+
+        let ExprKind::Pairs(entries) = self.read(base, depth, generics)?.kind else {
+            return Err(Unread);
+        };
+        let index = self.read(index, depth, generics)?;
+        if index.ty == Type::Scalar(Scalar::Any) {
+            return Err(Unread);
+        }
+        let mut wanted = String::new();
+        key_value(&index, &mut wanted)?;
+        let mut read = String::new();
+        for (key, value) in entries.into_iter().rev() {
+            if key.ty == index.ty {
+                read.clear();
+                key_value(&key, &mut read)?;
+                if read == wanted {
+                    return Ok(value);
+                }
+            }
+        }
+        Err(Unread)
     }
 
     fn operation(

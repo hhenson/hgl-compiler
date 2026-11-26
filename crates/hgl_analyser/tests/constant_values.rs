@@ -1157,6 +1157,42 @@ fn a_local_list_size_uses_the_resolved_value_of_a_switch_selector() {
     expect(&aliases("input", "key"), &["10 list.size"]);
 }
 
+/// CTRL-10, CTRL-15 and EXPR-7: an immutable block value or a known
+/// ordinary dictionary entry can select the reached case.
+#[test]
+fn a_local_list_size_resolves_ordinary_block_and_dictionary_selectors() {
+    let selector = |before: &str, value: &str| {
+        format!(
+            "const NUMBER: i64 = 8\n\
+             const WORDS: dict<str, i64> = [\"primary\": 8, \"secondary\": 9]\n\
+             const NUMBERS: dict<i64, i64> = [0: 8, 1: 9]\n\
+             fn measured(input: i64) -> i64 {{\n\
+                 let first = {before}\n\
+                 let second = first + 1\n\
+                 let width = (fn() -> i64 {{\n\
+                     switch {value} {{ case 7: return 3\n\
+                                      default: return input }}\n\
+                 }})()\n\
+                 var held: list<i64, width>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for value in [
+        "NUMBER - 2",
+        "{ let item = NUMBER - 2\nitem }",
+        "WORDS[\"primary\"] - 2",
+        "NUMBERS[0] - 2",
+    ] {
+        expect(&selector(value, "second"), &[]);
+    }
+    expect(
+        &selector("WORDS[\"secondary\"] - 2", "second"),
+        &["12 list.size"],
+    );
+    expect(&selector("NUMBERS[input] - 2", "second"), &["12 list.size"]);
+}
+
 /// TYPE-10 and FN-17: a static callback can still capture a connection.
 /// Report the instance that supplies the live callback and keep the
 /// capture-free and ordinary named callbacks admissible.
