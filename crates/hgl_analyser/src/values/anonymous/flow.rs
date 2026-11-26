@@ -266,26 +266,24 @@ impl Flow<'_, '_> {
         body: &[Stmt],
         controlled: bool,
     ) -> Result<(), Return> {
-        if range.start.abs_diff(range.end) <= self.range_passes_left {
-            while self.range_passes_left != 0 {
-                let Some(value) = range.next() else {
-                    return Ok(());
-                };
-                self.range_passes_left -= 1;
-                let enclosing = self.bindings.len();
-                self.bindings.push((
-                    binding,
-                    Rc::new(Expr {
-                        kind: ExprKind::Literal(Value::Int(value)),
-                        at: sequence.at,
-                        ty: Type::Scalar(Scalar::I64),
-                        category: Ordinary,
-                    }),
-                ));
-                let checked = self.statements(body, controlled);
-                self.bindings.truncate(enclosing);
-                checked?;
-            }
+        while self.range_passes_left != 0 {
+            let Some(value) = range.next() else {
+                return Ok(());
+            };
+            self.range_passes_left -= 1;
+            let enclosing = self.bindings.len();
+            self.bindings.push((
+                binding,
+                Rc::new(Expr {
+                    kind: ExprKind::Literal(Value::Int(value)),
+                    at: sequence.at,
+                    ty: Type::Scalar(Scalar::I64),
+                    category: Ordinary,
+                }),
+            ));
+            let checked = self.statements(body, controlled);
+            self.bindings.truncate(enclosing);
+            checked?;
         }
         if range.is_empty() {
             return Ok(());

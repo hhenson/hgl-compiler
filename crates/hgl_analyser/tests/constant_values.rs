@@ -1099,6 +1099,7 @@ fn a_local_list_size_uses_reached_fixed_range_values() {
         "for n in 2..<4 { if n == 2 { return 3 }\nif n == 3 { return input } }",
         "for n in 0..<100 { for m in 0..<3 { if n == 100 && m == 2 { return input } } }",
         "for n in 0..<1000000000000 { if n == 1000000000000 { return input } }",
+        "for n in 0..<1000000000000 { if n == 0 { return 3 }\nif n == 1 { return input } }",
         "for n in 0..<1000000000000 { for m in 2..<4 { if 1000000000000 <= n { return input } } }",
     ] {
         expect(&program(body), &[]);
