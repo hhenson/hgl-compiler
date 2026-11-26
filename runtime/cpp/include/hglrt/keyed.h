@@ -311,14 +311,18 @@ struct endpoint_read<hgraph::TSS<K>> {
 
     template <class E>
     static set_delta<K> delta(const E& endpoint) {
-        set_delta<K> change;
-        for (const auto& member : detail::viewed(endpoint).added()) {
-            change.added.insert(keyed_detail::key_of<K>(member));
+        if constexpr (requires { endpoint.staged_delta(); }) {
+            return endpoint.staged_delta();
+        } else {
+            set_delta<K> change;
+            for (const auto& member : detail::viewed(endpoint).added()) {
+                change.added.insert(keyed_detail::key_of<K>(member));
+            }
+            for (const auto& member : detail::viewed(endpoint).removed()) {
+                change.removed.insert(keyed_detail::key_of<K>(member));
+            }
+            return change;
         }
-        for (const auto& member : detail::viewed(endpoint).removed()) {
-            change.removed.insert(keyed_detail::key_of<K>(member));
-        }
-        return change;
     }
 };
 
@@ -332,14 +336,18 @@ struct endpoint_read<hgraph::TSD<K, V>> {
 
     template <class E>
     static delta_type delta(const E& endpoint) {
-        delta_type change;
-        for (const auto& [key, child] : detail::viewed(endpoint).modified_items()) {
-            change.updated.insert_or_assign(keyed_detail::key_of<K>(key), endpoint_read<V>::delta(child));
+        if constexpr (requires { endpoint.staged_delta(); }) {
+            return endpoint.staged_delta();
+        } else {
+            delta_type change;
+            for (const auto& [key, child] : detail::viewed(endpoint).modified_items()) {
+                change.updated.insert_or_assign(keyed_detail::key_of<K>(key), endpoint_read<V>::delta(child));
+            }
+            for (const auto& [key, child] : detail::viewed(endpoint).removed_items()) {
+                change.removed.insert(keyed_detail::key_of<K>(key));
+            }
+            return change;
         }
-        for (const auto& [key, child] : detail::viewed(endpoint).removed_items()) {
-            change.removed.insert(keyed_detail::key_of<K>(key));
-        }
-        return change;
     }
 
     /// TIME-9: "`all_valid` is true where every one is, by its own `valid`,
@@ -348,15 +356,19 @@ struct endpoint_read<hgraph::TSD<K, V>> {
     /// false."
     template <class E>
     static bool all_valid(const E& endpoint) {
-        if (!endpoint.valid()) {
-            return false;
-        }
-        for (const auto& child : detail::viewed(endpoint).values()) {
-            if (!fn_valid(child)) {
+        if constexpr (requires { endpoint.staged_all_valid(); }) {
+            return endpoint.staged_all_valid();
+        } else {
+            if (!endpoint.valid()) {
                 return false;
             }
+            for (const auto& child : detail::viewed(endpoint).values()) {
+                if (!fn_valid(child)) {
+                    return false;
+                }
+            }
+            return true;
         }
-        return true;
     }
 };
 
@@ -399,22 +411,33 @@ struct Membership {
 /// A scalar publication, including an equal value, stays in the batch.
 template <class S>
 struct KeyedWrites {
-    template <class D>
-    bool record(const hgraph::TSDataView&, const D&, std::size_t) { return true; }
+    using Delta = typename endpoint_read<S>::delta_type;
 
-    template <class D>
-    bool filter(D&, std::size_t) const { return true; }
+    void record(const hgraph::TSDataView&, const Delta& value) { latest = value; }
+
+    bool has_change() const { return latest.has_value(); }
+
+    Delta delta() const { return *latest; }
+
+    std::optional<Delta> latest{};
 };
 
 template <class K>
 struct KeyedWrites<hgraph::TSS<K>> {
-    bool record(const hgraph::TSDataView& original, const set_delta<K>& delta, std::size_t) {
-        bool changed = false;
+    void record(const hgraph::TSDataView& original, const set_delta<K>& delta) {
         const auto write = [&](const K& key, bool present) {
             const bool held = original.valid() && original.as_set().contains(hgraph::Value{key}.view());
             auto& member = members.try_emplace(key, Membership{held, held}).first->second;
-            changed |= member.current != present;
+            const bool was = member.initial != member.current;
             member.current = present;
+            const bool now = member.initial != member.current;
+            if (was != now) {
+                if (now) {
+                    ++active_changes;
+                } else {
+                    --active_changes;
+                }
+            }
         };
         for (const auto& key : delta.removed) {
             write(key, false);
@@ -422,41 +445,58 @@ struct KeyedWrites<hgraph::TSS<K>> {
         for (const auto& key : delta.added) {
             write(key, true);
         }
-        return changed;
     }
 
-    bool filter(set_delta<K>& delta, std::size_t) const {
-        const auto unchanged = [&](const K& key) {
-            // A key containing NaN compares unequal even to itself (NUM-5).
-            // It cannot cancel another write through the sparse lookup.
-            const auto member = members.find(key);
-            return member != members.end() && member->second.initial == member->second.current;
-        };
-        std::erase_if(delta.added, unchanged);
-        std::erase_if(delta.removed, unchanged);
-        return !delta.added.empty() || !delta.removed.empty();
+    bool has_change() const { return active_changes > 0; }
+
+    set_delta<K> delta() const {
+        set_delta<K> result;
+        for (const auto& [key, member] : members) {
+            if (!member.initial && member.current) {
+                result.added.insert(key);
+            } else if (member.initial && !member.current) {
+                result.removed.insert(key);
+            }
+        }
+        return result;
     }
 
     dict<K, Membership> members{};
+    std::size_t active_changes{};
 };
 
 template <class K, class V>
 struct KeyedWrites<hgraph::TSD<K, V>> {
     using Value = typename keyed_form<V>::type;
     using Delta = dict_delta<K, Value>;
-    // A scalar update carries the whole value, as opposed to a keyed child's delta.
-    static constexpr bool scalar_entry = std::is_same_v<delta_t<Value>, Value>;
 
     struct Entry {
         Membership member;
         bool valid;
-        bool withdrawn{};
-        std::size_t last_update{};
+        bool active{};
         KeyedWrites<V> child{};
     };
 
-    bool record(const hgraph::TSDataView& original, const Delta& delta, std::size_t index) {
-        bool changed = false;
+    static bool entry_active(const Entry& entry) {
+        if (!entry.member.current) {
+            return entry.member.initial;
+        }
+        return !entry.member.initial || !entry.valid || entry.child.has_change();
+    }
+
+    void update_active(Entry& entry) {
+        const bool now = entry_active(entry);
+        if (entry.active != now) {
+            entry.active = now;
+            if (now) {
+                ++active_changes;
+            } else {
+                --active_changes;
+            }
+        }
+    }
+
+    void record(const hgraph::TSDataView& original, const Delta& delta) {
         const auto initial = [&](const K& key) -> hgraph::TSDataView {
             return original.valid() ? original.as_dict().at(hgraph::Value{key}.view())
                                     : hgraph::TSDataView{};
@@ -469,62 +509,73 @@ struct KeyedWrites<hgraph::TSD<K, V>> {
         };
         for (const auto& key : delta.removed) {
             auto& entry = entry_for(key, initial(key));
-            changed |= entry.member.current;
-            entry.withdrawn |= entry.member.current;
             entry.member.current = false;
+            entry.child = KeyedWrites<V>{};
+            update_active(entry);
         }
         for (const auto& [key, value] : delta.updated) {
             const auto source = initial(key);
             auto& entry = entry_for(key, source);
-            changed |= !entry.member.current;
             entry.member.current = true;
-            if constexpr (scalar_entry) {
-                entry.last_update = index;
-            }
-            // A keyed child restored after withdrawal still needs its ordered operations.
-            changed |= entry.withdrawn || entry.child.record(source, value, index);
+            entry.child.record(source.valid() && source.has_current_value()
+                                   ? source.borrowed_ref()
+                                   : hgraph::TSDataView{},
+                               value);
+            update_active(entry);
         }
-        return changed;
     }
 
-    bool filter(Delta& delta, std::size_t index) const {
-        const auto absent = [](const Entry& entry) {
-            return !entry.member.initial && !entry.member.current;
-        };
-        // TIME-7: an update restores the scalar entry with its final value.
-        // Replaying the intervening removals can hide that update from the SDK's delta.
-        const auto restored = [](const Entry& entry) {
-            return scalar_entry && entry.withdrawn && entry.member.current;
-        };
-        std::erase_if(delta.removed, [&](const K& key) {
-            const auto entry = entries.find(key);
-            return entry != entries.end() && (absent(entry->second) || restored(entry->second));
-        });
-        for (auto it = delta.updated.begin(); it != delta.updated.end();) {
-            // As in the set form, an unmatched key keeps its ordinary write.
-            const auto found = entries.find(it->first);
-            if (found == entries.end()) {
-                ++it;
+    bool has_change() const { return active_changes > 0; }
+
+    Delta delta() const {
+        Delta result;
+        for (const auto& [key, entry] : entries) {
+            if (!entry.active) {
                 continue;
             }
-            const auto& entry = found->second;
-            if (absent(entry) || (restored(entry) && index != entry.last_update) ||
-                (!entry.withdrawn && !entry.child.filter(it->second, index) && entry.valid)) {
-                it = delta.updated.erase(it);
+            if (!entry.member.current) {
+                result.removed.insert(key);
             } else {
-                ++it;
+                result.updated.insert_or_assign(key, entry.child.delta());
             }
         }
-        return !delta.updated.empty() || !delta.removed.empty();
+        return result;
+    }
+
+    template <class O>
+    bool all_valid(const O& output, bool wrote) const {
+        if (!wrote && !output.valid()) {
+            return false;
+        }
+        if (!output.valid() || base_all_valid_.value_or(false)) {
+            return true;
+        }
+        bool initial_valid = true;
+        bool current_valid = true;
+        for (const auto& [key, child] : output.items()) {
+            if (!fn_valid(child)) {
+                initial_valid = false;
+                if (!entries.contains(key_of<K>(key))) {
+                    current_valid = false;
+                    break;
+                }
+            }
+        }
+        if (initial_valid) {
+            base_all_valid_ = true;
+        }
+        return current_valid;
     }
 
     dict<K, Entry> entries{};
+    std::size_t active_changes{};
+    mutable std::optional<bool> base_all_valid_{};
 };
 
 } // namespace keyed_detail
 
 /// Hold the changes of a multiply written keyed result until the evaluation
-/// ends. Within the evaluation, the endpoint reads its staged validity and time.
+/// ends. Within the evaluation, the endpoint reads its staged state and delta.
 template <class O>
 class KeyedEvaluation {
   public:
@@ -535,24 +586,41 @@ class KeyedEvaluation {
     explicit KeyedEvaluation(const O& output) : output_(output) {}
 
     /// Whether an earlier action in this evaluation established validity.
-    bool valid() const { return !changes_.empty() || output_.valid(); }
+    bool valid() const { return wrote_ || output_.valid(); }
 
-    /// An intermediate write can already count as modified inside the node.
-    bool modified() const { return changed_ || output_.modified(); }
+    /// Whether the staged writes would publish a tick on top of `output_`.
+    bool modified() const { return staged_tick() || output_.modified(); }
 
     /// Time of the most recent staged or already published change.
     hgraph::DateTime last_modified_time() const {
-        return changed_ ? output_.evaluation_time() : output_.last_modified_time();
+        return staged_tick() ? output_.evaluation_time() : output_.last_modified_time();
+    }
+
+    /// TIME-9: one-level validity of a staged dictionary evaluation.
+    bool staged_all_valid() const
+        requires requires(const keyed_detail::KeyedWrites<schema>& writes, const O& output) {
+            writes.all_valid(output, true);
+        }
+    {
+        return staged_.all_valid(output_, wrote_);
+    }
+
+    /// END-3: the effective delta accumulated so far in this evaluation.
+    Delta staged_delta() const {
+        if (!wrote_) {
+            return endpoint_read<schema>::delta(output_);
+        }
+        return staged_.delta();
     }
 
     /// A whole return is the evaluation's final action (TIME-7, FN-7).
     void finish(Value value) { whole_.emplace(std::move(value)); }
 
-    /// Read a delta against the current sparse record, in source order.
-    void write(Delta delta) {
-        changed_ |= !valid();
-        changed_ |= staged_.record(output_.base().data_view(), delta, changes_.size());
-        changes_.push_back(std::move(delta));
+    /// Record a delta against the sparse state of touched keys, in source order.
+    void write(const Delta& delta) {
+        wrote_ = true;
+        staged_.record(output_.valid() ? output_.base().data_view().borrowed_ref() : hgraph::TSDataView{},
+                       delta);
     }
 
     /// Ordinary early returns leave the lambda and commit at the same boundary.
@@ -568,30 +636,28 @@ class KeyedEvaluation {
     }
 
   private:
+    bool staged_tick() const { return wrote_ && (staged_.has_change() || !output_.valid()); }
+
     void commit() {
         if (whole_) {
             keyed_publish(output_, *whole_);
             return;
         }
-        for (std::size_t index = 0; index < changes_.size(); ++index) {
-            auto& change = changes_[index];
-            if (staged_.filter(change, index) || !output_.valid()) {
-                keyed_publish(output_, change);
-            }
+        if (staged_tick()) {
+            keyed_publish(output_, staged_.delta());
         }
     }
 
     const O& output_;
     keyed_detail::KeyedWrites<schema> staged_{};
-    std::vector<Delta> changes_{};
     std::optional<Value> whole_{};
-    bool changed_{};
+    bool wrote_{};
 };
 
 /// A keyed write within an evaluation is held until its result is known.
 template <class O>
-void keyed_publish(KeyedEvaluation<O>& out, typename KeyedEvaluation<O>::Delta delta) {
-    out.write(std::move(delta));
+void keyed_publish(KeyedEvaluation<O>& out, const typename KeyedEvaluation<O>::Delta& delta) {
+    out.write(delta);
 }
 
 /// A whole keyed return supplies the result of the evaluation.

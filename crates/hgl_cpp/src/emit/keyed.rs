@@ -201,8 +201,10 @@ fn stages_writes(selected: &[(&Handler<'_>, Location)], out: usize) -> bool {
                 eligible &= matches!(
                     operation,
                     EndpointOperation::Valid
+                        | EndpointOperation::AllValid
                         | EndpointOperation::Modified
                         | EndpointOperation::LastModified
+                        | EndpointOperation::DeltaValue
                 );
             }
             Node::Expression(Expr {
