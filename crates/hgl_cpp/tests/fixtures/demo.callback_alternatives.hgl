@@ -79,3 +79,322 @@ test map_requires_a_shared_key_only_for_split_arguments {
     assert eval reversed_keys(x: [["a": 1.0, "b": 2.0]], y: [[10: 3.0]]) ==
         [["a": 7, "b": 7]]
 }
+
+operator typed<O, T>(value: T) -> O
+impl const fn typed(value: i64?) -> i64 => 500
+impl const fn typed(value: f64) -> i64 => 1000
+impl const fn typed(value: i64) -> i64 => value + 1
+
+abstract struct Shape { id: i64 }
+struct Round: Shape { radius: f64 }
+operator round_value<O, T>(value: T) -> O
+impl const fn round_value(value: Shape) -> i64 => 70
+impl const fn round_value(value: Round) -> i64 => value.id
+
+fn mapped_typed(items: list<i64, 2>) -> list<i64, 2> => map(typed<i64>, value: items)
+fn mapped_structs(items: list<Round, 2>) -> list<i64, 2> => map(round_value<i64>, items)
+
+test written_operator_arguments_keep_exact_member_ranking {
+    assert eval mapped_typed(items: [[3, 4]]) == [[4, 5]]
+    assert eval mapped_structs(items: [[Round(id: 3, radius: 1.0), Round(id: 4, radius: 2.0)]]) ==
+        [[3, 4]]
+}
+
+operator with_result<O, L, R>(left: L, right: R) -> O
+impl const fn with_result(left: bool, right: i64) -> i64 => right
+impl const fn with_result(left: bool, right: list<i64, 2>) -> list<i64, 2> => right
+
+fn written_members(flags: list<bool, 2>, xs: list<i64, 2>) -> list<i64, 2> =>
+    map(with_result<i64>, flags, xs)
+fn written_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(with_result<list<i64, 2>>, flags, xs)
+fn written_whole_user(flags: list<bool, 2>, xs: list<i64, 2>) -> tuple<list<i64, 2>, bool> =>
+    choose_arguments(with_result<list<i64, 2>>, flags, xs)
+fn fixed_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(with_result<list<i64, 2>, bool, list<i64, 2>>, flags, xs)
+
+const fn forward<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> R =>
+    f(...args)
+
+test written_operator_arguments_constrain_the_complete_reading {
+    assert eval written_members(flags: [[true, false]], xs: [[3, 4]]) == [[3, 4]]
+    assert eval written_whole(flags: [[true, false]], xs: [[3, 4]]) ==
+        [[[3, 4], [3, 4]]]
+    assert eval written_whole_user(flags: [[true, false]], xs: [[3, 4]]) == [([3, 4], true)]
+    assert eval fixed_whole(flags: [[true, false]], xs: [[3, 4]]) == [[[3, 4], [3, 4]]]
+    let xs: list<i64, 2> = [3, 4]
+    assert forward(with_result<list<i64, 2>>, true, xs) == xs
+}
+
+operator fee<const N: i64, A, O>(x: A) -> O
+impl const fn fee(x: i64) -> i64 => x + 1
+impl const fn fee(x: list<i64, 2>) -> list<i64, 2> => x
+
+const fn head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == list<i64, 2> && each k in arg_keys(As) {
+        As[k] in {Ps[k], list<Ps[k], 2>}
+    }
+    => f(...args)[0]
+
+operator operator_head<R, O, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> O
+impl const fn operator_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == list<i64, 2> && each k in arg_keys(As) {
+        As[k] in {Ps[k], list<Ps[k], 2>}
+    }
+    => f(...args)[0]
+
+fn first_price(xs: list<i64, 2>) -> i64 => head(fee<4>, xs)
+fn operator_first_price(xs: list<i64, 2>) -> i64 => operator_head(fee<4>, xs)
+
+operator price<A, O>(x: A) -> O
+impl const fn price(x: list<i64, 2>) -> i64 => x[0] + 1
+impl const fn price(x: list<i64, 2>) -> list<i64, 2> => x
+
+fn price_with_written_input(xs: list<i64, 2>) -> i64 => head(price<list<i64, 2>>, xs)
+
+test receiver_result_constraint_selects_the_whole_input {
+    assert eval first_price(xs: [[23, 42]]) == [23]
+    assert eval operator_first_price(xs: [[23, 42]]) == [23]
+    assert eval price_with_written_input(xs: [[23, 42]]) == [23]
+}
+
+const fn membership_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R in {list<i64, 2>} && each k in arg_keys(As) {
+        As[k] in {Ps[k], list<Ps[k], 2>}
+    }
+    => f(...args)[0]
+
+operator membership_operator_head<R, O, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> O requires R in {list<i64, 2>, list<i64, 3>}
+impl const fn membership_operator_head<R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn membership_price(xs: list<i64, 2>) -> i64 => membership_head(fee<4>, xs)
+fn membership_operator_price(xs: list<i64, 2>) -> i64 => membership_operator_head(fee<4>, x: xs)
+
+test receiver_result_membership_selects_the_whole_input {
+    assert eval membership_price(xs: [[23, 42]]) == [23]
+    assert eval membership_operator_price(xs: [[23, 42]]) == [23]
+}
+
+const fn pack_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} && R in {As[k]} }
+    => f(...args)[0]
+
+operator fee_each<const N: i64, L, A, O>(enabled: L, value: A) -> O
+impl const fn fee_each(enabled: bool, value: i64) -> i64 => value + 1
+impl const fn fee_each(enabled: bool, value: list<i64, 2>) -> list<i64, 2> => value
+
+operator pack_head_op<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+        && any k in arg_keys(As) { R == As[k] }
+impl const fn pack_head_op<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64 =>
+    f(...{for k in arg_keys(Ps): first_or_whole<Ps[k]>(args[k])})[0]
+
+operator legal_list<T>(value: T) -> bool
+impl const fn legal_list(value: list<i64, 2>) -> bool => true
+
+const fn constrained_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires legal_list(R) -> bool
+        && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn configured_head<const B: bool, R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (B == true || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn actual_pack_price(xs: list<i64, 2>) -> i64 => pack_head(fee<4>, xs)
+fn named_pack_price(flags: list<bool, 2>, xs: list<i64, 2>) -> i64 =>
+    pack_head_op(fee_each<4>, value: xs, enabled: flags)
+fn constrained_price(xs: list<i64, 2>) -> i64 => constrained_head(fee<4>, xs)
+fn configured_price(xs: list<i64, 2>) -> i64 => configured_head<false>(fee<4>, xs)
+
+test receiver_requirements_use_the_known_pack_and_options {
+    assert eval actual_pack_price(xs: [[23, 42]]) == [23]
+    assert eval named_pack_price(flags: [[true, true]], xs: [[23, 42]]) == [23]
+    assert eval constrained_price(xs: [[23, 42]]) == [23]
+    assert eval configured_price(xs: [[23, 42]]) == [23]
+}
+
+operator meld<const N: i64, T>(a: T, b: T) -> T
+    properties<list<i64, 2>> { associative }
+impl const fn meld(a: i64, b: i64) -> i64 => a + b
+impl const fn meld(a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> =>
+    [a[0] + b[0], a[1] + b[1]]
+
+operator inverse_meld<const N: i64, T>(a: T, b: T) -> T
+    properties<i64> { associative }
+impl const fn inverse_meld(a: i64, b: i64) -> i64 => a + b
+impl const fn inverse_meld(a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> =>
+    [a[0] + b[0], a[1] + b[1]]
+
+const fn sibling(a: i64, b: i64) -> i64 => a - b
+
+const fn law_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires associative(f) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn inverse_law_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires !associative(f) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn sibling_law_head<R, ...Ps, ...As>(
+    other: const fn(i64, i64) -> i64, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (associative(other) || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn default_law_head<R, const Permits: bool = associative(f), ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires Permits && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn sibling_default_law_head<R, const Permits: bool = associative(other), ...Ps, ...As>(
+    other: const fn(i64, i64) -> i64, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (Permits || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 => law_head(meld<4>, a, b)
+fn inverse_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    inverse_law_head(inverse_meld<4>, a, b)
+fn sibling_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_law_head(sibling, meld<4>, a, b)
+fn default_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    default_law_head(meld<4>, a, b)
+fn inferred_sibling_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_law_head(fn(left, right) => left - right, meld<4>, a, b)
+fn written_sibling_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_law_head((fn(left: i64, right: i64) => left - right), meld<4>, a, b)
+fn inferred_default_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_default_law_head(fn(left, right) => left - right, meld<4>, a, b)
+fn written_default_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_default_law_head(fn(left: i64, right: i64) => left - right, meld<4>, a, b)
+
+test receiver_requirements_use_laws_for_each_trial {
+    assert eval law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval inverse_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval sibling_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval default_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval inferred_sibling_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval written_sibling_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval inferred_default_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval written_default_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+}
+
+operator domain_sibling<T>(a: T, b: T) -> T
+    properties<list<i64, 2>> { associative }
+impl const fn domain_sibling(a: i64, b: i64) -> i64 => a - b
+impl const fn domain_sibling(a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> => a
+
+const fn fitted_sibling_head<R, ...Ps, ...As>(
+    other: const fn(R, R) -> R, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires associative(other) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn fitted_default_head<R, const Permits: bool = associative(other), ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, other: const fn(R, R) -> R, args: ...{As for f},
+) -> i64 requires Permits && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn fitted_sibling_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    fitted_sibling_head(domain_sibling, meld<4>, a, b)
+fn fitted_default_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    fitted_default_head(meld<4>, domain_sibling, a, b)
+
+const fn symbolic_sibling<X>(a: X, b: X) -> X => a
+
+const fn symbolic_head<H, R, ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (associative(other) || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn symbolic_default_head<H, R, const Permits: bool = associative(other), ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (Permits || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn symbolic_meld<G>(a: list<i64, 2>, b: list<i64, 2>, token: G) -> i64 =>
+    symbolic_head(token, symbolic_sibling, meld<4>, a, b)
+const fn symbolic_default_meld<G>(a: list<i64, 2>, b: list<i64, 2>, token: G) -> i64 =>
+    symbolic_default_head(token, symbolic_sibling<G>, meld<4>, a, b)
+fn check_symbolic_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    symbolic_meld(a, b, 17)
+fn check_symbolic_default_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    symbolic_default_meld(a, b, true)
+
+const fn reversed_symbolic_head<H, R, ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (R == list<i64, 2> || associative(other))
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn forwarded_symbolic_meld<G>(
+    token: G, other: const fn(G, G) -> G, a: list<i64, 2>, b: list<i64, 2>,
+) -> i64 => symbolic_head(token, other, meld<4>, a, b)
+    + reversed_symbolic_head(token, other, meld<4>, a, b)
+
+const fn strict_symbolic_head<H, R, ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires associative(other) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => 23
+
+const fn strict_forwarded_meld<G>(
+    token: G, other: const fn(G, G) -> G, a: list<i64, 2>, b: list<i64, 2>,
+) -> i64 {
+    # expect-error(constraint, "requires.unmet")
+    return strict_symbolic_head(token, other, meld<4>, a, b)
+}
+
+fn check_forwarded_symbolic_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    forwarded_symbolic_meld(17, symbolic_sibling, a, b)
+
+test receiver_law_siblings_take_the_trials_result_type {
+    assert eval fitted_sibling_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval fitted_default_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval check_symbolic_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval check_symbolic_default_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval check_forwarded_symbolic_meld(a: [[1, 2]], b: [[3, 4]]) == [8]
+}
+
+# FN-17, GEN-7/18: these candidates share their inputs. Only the str
+# result satisfies the receiver independently of the forwarded law.
+operator describe<const N: i64, A, R>(value: A) -> R
+impl const fn describe(value: list<i64, 2>) -> bool => false
+impl const fn describe(value: list<i64, 2>) -> str => "forward"
+impl const fn describe(value: list<i64, 2>) -> i64 => 37
+operator describe_reversed<const N: i64, A, R>(value: A) -> R
+impl const fn describe_reversed(value: list<i64, 2>) -> i64 => 37
+impl const fn describe_reversed(value: list<i64, 2>) -> str => "reverse"
+impl const fn describe_reversed(value: list<i64, 2>) -> bool => false
+
+const fn describe_result<R, ...Ps, ...As>(
+    other: const fn(i64, i64) -> i64, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> str requires ((R == bool && commutative(other)) || R == str)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => format("{}", f(...args))
+
+const fn descriptions(other: const fn(i64, i64) -> i64, xs: list<i64, 2>) -> tuple<str, str> =>
+    (describe_result(other, describe<9>, xs), describe_result(other, describe_reversed<9>, xs))
+
+const fn descriptions_at_list(other: const fn(i64, i64) -> i64, xs: list<i64, 2>) -> tuple<str, str> =>
+    (describe_result(other, describe<9, list<i64, 2>>, xs),
+     describe_result(other, describe_reversed<9, list<i64, 2>>, xs))
+
+test proven_results_with_identical_inputs {
+    assert descriptions(sibling, [8, 5]) == ("forward", "reverse")
+    assert descriptions_at_list(sibling, [8, 5]) == ("forward", "reverse")
+}
+
+const fn ambiguous_description(other: const fn(i64, i64) -> i64, xs: list<i64, 2>) -> str
+    requires commutative(other) {
+    # expect-error(type, "type.mismatch")
+    return describe_result(other, describe<9>, xs)
+}

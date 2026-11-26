@@ -204,6 +204,118 @@ const fn with_types() -> i64 => inspect(total<i64, f64>)",
 }
 
 #[test]
+fn written_operator_callbacks_respect_finite_result_memberships() {
+    // GEN-3 and FN-17: admit any member of each stated set. The receiver
+    // still checks its requirement if none of the callback's results fit.
+    let read = |restriction| {
+        module(&format!(
+            r#"operator fee<const N: i64, A, O>(x: A) -> O
+impl const fn fee(x: i64) -> i64 => x + 1
+impl const fn fee(x: list<i64, 2>) -> list<i64, 2> => x
+const fn receive<R, ...Ps, ...As>(f: const fn(...{{Ps}}) -> R, args: ...{{As for f}}) -> i64
+    requires {restriction} && each k in arg_keys(As) {{ As[k] in {{Ps[k], list<Ps[k], 2>}} }}
+    => 7
+const fn entry(items: list<i64, 2>) -> i64 => receive(fee<4>, items)
+"#,
+        ))
+    };
+    for (restriction, expected) in [
+        ("R in {list<i64, 2>, i64}", "i64"),
+        ("R in {i64, list<i64, 2>}", "i64"),
+        (
+            "R in {i64, list<i64, 2>} && R in {list<i64, 3>, list<i64, 2>}",
+            "list<i64, 2>",
+        ),
+    ] {
+        let checked = read(restriction);
+        assert!(!checked.rejected, "{}", checked.report);
+        let (_, actual) = callback(&checked, "entry");
+        assert_eq!(actual.result.as_ref().unwrap().to_string(), expected);
+    }
+    let rejected = read("R in {str, bool}");
+    assert_eq!(
+        rejected
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        ["constraint/requires.unmet"],
+        "{}",
+        rejected.report,
+    );
+}
+
+#[test]
+fn written_callback_result_membership_uses_types_from_the_reading() {
+    // GEN-3: splitting flags determines K. The selected result must
+    // then fit dict<K, i64>, which leaves prices whole.
+    let checked = module(
+        r#"operator price<const N: i64, L, A, O>(flag: L, value: A) -> O
+impl const fn price(flag: bool, value: i64) -> i64 => value + 1
+impl const fn price(flag: bool, value: dict<str, i64>) -> dict<str, i64> => value
+const fn receive<K, R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires any k in arg_keys(As) { As[k] == dict<K, Ps[k]> }
+        && each k in arg_keys(As) { As[k] in {Ps[k], dict<K, Ps[k]>} }
+        && R in {dict<K, i64>}
+    => 23
+const fn entry(flags: dict<str, bool>, prices: dict<str, i64>) -> i64 =>
+    receive(price<4>, flags, prices)
+"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    let (_, actual) = callback(&checked, "entry");
+    assert_eq!(
+        actual.result.as_ref().unwrap().to_string(),
+        "dict<str, i64>"
+    );
+}
+
+#[test]
+fn written_callback_result_requirements_use_the_known_nested_type() {
+    // GEN-3: the candidate gives a known result member type even where
+    // a disjunction or inequality cannot supply a type on its own.
+    let source = r#"operator price<const N: i64, A, O>(value: A) -> O
+impl const fn price(value: i64) -> list<f64, 2> => [1.0, 2.0]
+impl const fn price(value: list<i64, 2>) -> list<i64, 2> => value
+const fn receive<R, ...Ps, ...As>(f: const fn(...{Ps}) -> list<R, 2>, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+        && RESULT_REQUIREMENT
+    => 23
+const fn entry(values: list<i64, 2>) -> i64 => receive(price<4>, values)
+"#;
+    for requirement in ["R in {i64}", "(R in {i64} || R == bool)", "R != f64"] {
+        let checked = module(&source.replace("RESULT_REQUIREMENT", requirement));
+        assert!(!checked.rejected, "{}", checked.report);
+        let (_, actual) = callback(&checked, "entry");
+        assert_eq!(actual.result.as_ref().unwrap().to_string(), "list<i64, 2>");
+    }
+}
+
+#[test]
+fn a_written_callback_leaves_an_unbound_receiver_type_unknown() {
+    // GEN-3: the callback's result does not decide the unrelated U.
+    let checked = module(
+        r#"operator fee<const N: i64, A, O>(value: A) -> O
+impl const fn fee(value: i64) -> i64 => value + 1
+impl const fn fee(value: list<i64, 2>) -> list<i64, 2> => value
+const fn receive<R, U, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires (R == str || U == str)
+        && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => 23
+const fn entry(values: list<i64, 2>) -> i64 => receive(fee<4>, values)
+"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    let unresolved = &checked.findings[0];
+    assert_eq!(
+        unresolved.code, "type/generic.unresolved",
+        "{}",
+        checked.report
+    );
+    assert!(unresolved.message.contains("`U`"), "{}", checked.report);
+}
+
+#[test]
 fn an_open_reflected_suffix_does_not_choose_a_callbacks_generic_type() {
     // FN-17: a bare generic callback needs enough evidence to resolve
     // its generic arguments. A pack in the template supplies no type

@@ -1544,6 +1544,39 @@ impl<'a> Typer<'a> {
         )
     }
 
+    /// GEN-3 and FN-17: test the known bindings of a callback trial.
+    /// Unknown operands remain for the ordinary call check.
+    pub(super) fn callback_requirement_holds(
+        &mut self,
+        (target, signature): ((usize, usize), &Signature),
+        (bindings, defaulted): (&mut [Option<Argument>], &[usize]),
+        packs: &[hir::TypePackArgument],
+        argument: &dyn Fn(&Typer<'_>, usize, crate::laws::Law) -> Option<bool>,
+    ) -> Option<bool> {
+        let (_, condition) = required(self.program, target)?;
+        self.apply_law_defaults(target, signature, defaulted, bindings, argument);
+        let laws = crate::laws::verdicts(&condition, &|node| {
+            self.law_answer(target, signature, node, argument)
+        });
+        let arguments: Vec<_> = signature
+            .generics
+            .iter()
+            .zip(bindings.iter())
+            .map(|(parameter, bound)| {
+                bound.clone().unwrap_or_else(|| match parameter.kind {
+                    GenericKind::Value(_) => Argument::Constant(unsaid()),
+                    _ => Argument::Type(Type::Unknown),
+                })
+            })
+            .collect();
+        let mark = self.mark();
+        let verdict = self.requires_told_with_laws(target, &arguments, packs, None, &laws);
+        self.take_back(mark, false)
+            .then_some(verdict)
+            .flatten()
+            .and_then(|(_, held, _)| held)
+    }
+
     /// The same requirement with GEN-18 answers supplied by the call's
     /// static function arguments.
     pub(super) fn requires_told_with_laws(

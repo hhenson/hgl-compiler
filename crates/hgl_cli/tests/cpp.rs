@@ -1136,6 +1136,34 @@ fn endpoint_read_forms_run_on_the_sdk() {
     );
 }
 
+/// GEN-7 and FN-17/19: finite callback contexts preserve their selected
+/// functions, concrete types and captured constants through pack forwarding.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn finite_forwarded_callback_contexts_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("finite-forwarded-callback-contexts");
+    let file = write(
+        &root,
+        "demo.forwarded_callback_contexts.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.forwarded_callback_contexts.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-6 and ERR-12: nested scalar guards in a graph short-circuit
 /// in order, and a guard still admits the nullable read it protects.
 #[test]
@@ -3149,7 +3177,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 28 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
