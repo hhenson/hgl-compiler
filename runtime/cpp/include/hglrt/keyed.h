@@ -423,6 +423,8 @@ template <class S>
 struct KeyedWrites {
     using Delta = typename endpoint_read<S>::delta_type;
 
+    static const Delta& additions(const Delta& value) { return value; }
+
     void record(const hgraph::TSDataView&, const Delta& value) { latest = value; }
 
     void withdraw(const hgraph::TSDataView&) { latest.reset(); }
@@ -436,6 +438,8 @@ struct KeyedWrites {
 
 template <class K>
 struct KeyedWrites<hgraph::TSS<K>> {
+    static set_delta<K> additions(const set<K>& value) { return {.added = value}; }
+
     void record(const hgraph::TSDataView& original, const set_delta<K>& delta) {
         const auto write = [&](const K& key, bool present) {
             const bool held = original.valid() && original.as_set().contains(hgraph::Value{key}.view());
@@ -493,6 +497,14 @@ template <class K, class V>
 struct KeyedWrites<hgraph::TSD<K, V>> {
     using Value = typename keyed_form<V>::type;
     using Delta = dict_delta<K, Value>;
+
+    static Delta additions(const dict<K, Value>& value) {
+        Delta result;
+        for (const auto& [key, child] : value) {
+            result.updated.emplace(key, KeyedWrites<V>::additions(child));
+        }
+        return result;
+    }
 
     struct Entry {
         Membership member;
@@ -647,7 +659,7 @@ class KeyedEvaluation {
             writes.all_valid(output, true);
         }
     {
-        return staged_.all_valid(output_, wrote_);
+        return whole_.has_value() || staged_.all_valid(output_, wrote_);
     }
 
     /// END-3: the effective delta accumulated so far in this evaluation.
@@ -655,17 +667,22 @@ class KeyedEvaluation {
         if (!wrote_) {
             return endpoint_read<schema>::delta(output_);
         }
+        materialize_whole();
         return staged_.delta();
     }
 
-    /// A whole return is the evaluation's final action (TIME-7, FN-7).
-    void finish(Value value) { whole_.emplace(std::move(value)); }
+    /// TIME-7: a whole write supersedes every earlier write. Leave it whole
+    /// for direct publication if nothing subsequently needs its effective delta.
+    void write(Value value) {
+        whole_.emplace(std::move(value));
+        wrote_ = true;
+    }
 
     /// Record a delta against the sparse state of touched keys, in source order.
     void write(const Delta& delta) {
+        materialize_whole();
         wrote_ = true;
-        staged_.record(output_.valid() ? output_.base().data_view().borrowed_ref() : hgraph::TSDataView{},
-                       delta);
+        staged_.record(original(), delta);
     }
 
     /// Ordinary early returns leave the lambda and commit at the same boundary.
@@ -681,7 +698,25 @@ class KeyedEvaluation {
     }
 
   private:
-    bool staged_tick() const { return wrote_ && (staged_.has_change() || !output_.valid()); }
+    hgraph::TSDataView original() const {
+        return output_.valid() ? output_.base().data_view().borrowed_ref() : hgraph::TSDataView{};
+    }
+
+    void materialize_whole() const {
+        if (whole_) {
+            // Replace from the value at entry, discarding any prior staged delta.
+            // Unmentioned keys stay withdrawn. Nested keyed values do the same.
+            const auto base = original();
+            staged_.withdraw(base);
+            staged_.record(base, keyed_detail::KeyedWrites<schema>::additions(*whole_));
+            whole_.reset();
+        }
+    }
+
+    bool staged_tick() const {
+        materialize_whole();
+        return wrote_ && (staged_.has_change() || !output_.valid());
+    }
 
     void commit() {
         if (whole_) {
@@ -694,8 +729,8 @@ class KeyedEvaluation {
     }
 
     const O& output_;
-    keyed_detail::KeyedWrites<schema> staged_{};
-    std::optional<Value> whole_{};
+    mutable keyed_detail::KeyedWrites<schema> staged_{};
+    mutable std::optional<Value> whole_{};
     bool wrote_{};
 };
 
@@ -705,10 +740,10 @@ void keyed_publish(KeyedEvaluation<O>& out, const typename KeyedEvaluation<O>::D
     out.write(delta);
 }
 
-/// A whole keyed return supplies the result of the evaluation.
+/// A whole keyed publication replaces what the evaluation currently holds.
 template <class O>
 void keyed_publish(KeyedEvaluation<O>& out, typename KeyedEvaluation<O>::Value value) {
-    out.finish(std::move(value));
+    out.write(std::move(value));
 }
 
 namespace keyed_detail {
