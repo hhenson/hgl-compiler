@@ -219,7 +219,7 @@ impl<'a> Typer<'a> {
                 return Requested::rejected(Unfit::Mismatch {
                     generic: index,
                     described,
-                    resolved,
+                    resolved: Box::new(resolved),
                 });
             }
         }
@@ -2406,7 +2406,7 @@ pub(super) enum Unfit {
     Mismatch {
         generic: usize,
         described: String,
-        resolved: Type,
+        resolved: Box<Type>,
     },
 }
 
