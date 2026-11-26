@@ -489,6 +489,7 @@ impl<'a> Typer<'a> {
         let ReflectedArguments {
             mut given,
             result: reflected_result,
+            require_receiver_proof,
             ..
         } = if reflected {
             reflected_arguments(
@@ -562,12 +563,20 @@ impl<'a> Typer<'a> {
             node,
             (operator, public, &candidates),
             (template, inputs),
-            (&result_shapes, &reflected_result.requirements, false),
+            (
+                &result_shapes,
+                &reflected_result.requirements,
+                require_receiver_proof,
+            ),
             (explicit.as_ref(), &mut given),
         );
         // GEN-3: when the receiver rejects every result, its ordinary
         // requires check still diagnoses the selected callback.
-        if !reflected_result.requirements.is_empty() && matches.is_empty() && !unknown {
+        if !require_receiver_proof
+            && !reflected_result.requirements.is_empty()
+            && matches.is_empty()
+            && !unknown
+        {
             (matches, unknown) = self.operator_callback_matches(
                 node,
                 (operator, public, &candidates),
@@ -1744,6 +1753,9 @@ struct ReflectedArguments {
     given: Vec<Given>,
     projected: bool,
     result: ReflectedResultEvidence,
+    // Different results can share these operands. Final selection must use
+    // the same requirement check that admitted the reading (GEN-7, FN-17).
+    require_receiver_proof: bool,
 }
 
 fn reflected_arguments<'a>(
@@ -1991,6 +2003,7 @@ fn reflected_arguments<'a>(
             typer.take_back(mark, false);
             possible
         })
+        .map(|readings| (readings, check == ReflectedTrial::Proven))
     };
     let mut readings = if include_requirements && operator_trial.is_some() {
         select(ReflectedTrial::Proven)
@@ -2005,7 +2018,7 @@ fn reflected_arguments<'a>(
         // still needs evidence from an enclosing formal or instance.
         readings = select(ReflectedTrial::Compatible);
     }
-    let readings = match readings {
+    let (readings, require_receiver_proof) = match readings {
         // The ordinary operator reference check reports a failed
         // candidate selection using the best structural reading.
         Err(ReadingFailure::NoMatch) if operator_trial.is_some() => {
@@ -2049,6 +2062,7 @@ fn reflected_arguments<'a>(
         given,
         projected,
         result,
+        require_receiver_proof,
     })
 }
 
