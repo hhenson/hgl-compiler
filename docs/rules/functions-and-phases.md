@@ -79,7 +79,7 @@ transpiler: partial
 - Wires a helper's temporal inputs and binds ordinary arguments and omitted defaults as
   configuration. Includes the value-function eval path.
 - Ordinary positional packs, statement defaults and constant set or dictionary inputs work on supported schemas.
-- Left: A lifted call that omits a nullable parameter with a fallible default is declined (#1003).
+- Left: C++ declines a lifted call that omits a nullable parameter when the default calls a value function returning a result or a nullable value (#1003).
 
 ## FN-7
 
@@ -96,7 +96,7 @@ transpiler: partial
 
 - Graph returns choose a connection, hook returns publish and exit the evaluation, and
   ordinary functions return values.
-- Left: C++ declines an early return inside an ordinary call argument (#985) and some temporal branch continuations and nonlocal loops (#986). A valued source return already rejects during analysis (SOURCE-1).
+- Left: C++ declines an early return inside an ordinary call argument (#985) and some temporal branch continuations and nonlocal loops (#986). The analyser also rejects a valued source return under the proposed SOURCE-4.
 
 ## FN-8
 
