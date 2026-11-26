@@ -6,6 +6,34 @@ const fn apply(f: const fn(i64) -> i64, input: i64 = 3) -> i64 => f(input)
 
 const fn increment(input: i64) -> i64 => input + 1
 
+# FN-4/6/17: the bound callback's result selects the named pair.
+const fn by_phase(input: i64) -> i64 => input * 2
+fn by_phase(input: i64) -> i64 => input * 3
+
+fn from_callback(f: const fn(i64) -> i64, tick: i64) -> i64 {
+    let sampled = f(1)
+    return tick + by_phase(sampled)
+}
+fn pass_callback(f: const fn(i64) -> i64, tick: i64) -> i64 => from_callback(f, tick)
+fn from_named(tick: i64) -> i64 => pass_callback(increment, tick)
+fn from_value(tick: i64) -> i64 {
+    let offset = 2
+    return from_callback(fn(n) => n + offset, tick)
+}
+fn from_capture(tick: i64) -> i64 => from_callback(fn(n) => n + tick, tick)
+fn from_input(f: const fn(i64) -> i64, tick: i64) -> i64 => tick + by_phase(f(tick))
+fn from_lift(tick: i64) -> i64 => from_input(increment, tick)
+fn from_temporal(f: fn(i64) -> i64, tick: i64) -> i64 => tick + by_phase(f(1))
+fn from_temporal_name(tick: i64) -> i64 => from_temporal(live_double, tick)
+
+test bound_callback_result_selects_pair {
+    assert eval from_named(tick: [2, 4]) == [6, 8]
+    assert eval from_value(tick: [2, 4]) == [8, 10]
+    assert eval from_capture(tick: [2, 4]) == [11, 19]
+    assert eval from_lift(tick: [2, 4]) == [11, 19]
+    assert eval from_temporal_name(tick: [2, 4]) == [8, 10]
+}
+
 const fn double<T>(input: T) -> T requires T in {i64, f64} => input + input
 
 operator triple<T>(input: T) -> T
