@@ -569,7 +569,7 @@ fn field_arguments(
         pending.extend(
             read.parents
                 .iter()
-                .map(|parent| program.specialize_type(parent, &bindings)),
+                .map(|parent| program.checked_layout_type(parent, &bindings)),
         );
         applications.push(arguments);
     }

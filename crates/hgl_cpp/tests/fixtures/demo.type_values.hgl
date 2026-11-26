@@ -367,3 +367,22 @@ test bare_dependent_type_defaults {
 }
 # expect-error(type, "type.mismatch")
 const fn wrong_default_frame(f: DefaultFrame<2, type(Counted<3>(n: 0)), type(true)>) -> Type => frame_kind(f)
+
+# TYPE-3, TYPE-18: a generic parent supplies its selected Type to the
+# grandparent. Both concrete children convert directly to their own base.
+abstract struct LabelBase<const Kind: Type> { tag: Tagged<Kind> }
+abstract struct LabelFamily<T> : LabelBase<type(label_kind(empty_items<T>()))>
+    requires T in {i64, str} {}
+struct NumberLabel : LabelFamily<i64> {}
+struct TextLabel : LabelFamily<str> {}
+const fn bool_label_id(label: LabelBase<type(true)>) -> i64 => label.tag.value
+const fn str_label_id(label: LabelBase<type("")>) -> i64 => label.tag.value
+test instance_selected_grandparent {
+    let number = NumberLabel(tag: Tagged<type(true)>(value: 12))
+    let text = TextLabel(tag: Tagged<type("")>(value: 37))
+    assert type(number.tag) != type(text.tag)
+    assert bool_label_id(number) == 12
+    assert str_label_id(text) == 37
+}
+# expect-error(type, "type.mismatch")
+const fn crossed_label_base(label: TextLabel) -> i64 => bool_label_id(label)

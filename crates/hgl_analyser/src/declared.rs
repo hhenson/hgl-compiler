@@ -439,21 +439,22 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
     )
 }
 
-/// `ty` with each generic parameter in `map` replaced by the argument
-/// given for it. `map` pairs where a parameter is declared with its
-/// argument.
+/// Resolve a bound query by checking it, or by reading its lowered identity.
+pub(crate) type QueryResolver<'a> = dyn Fn(Location, &[(Location, Argument)]) -> Option<Type> + 'a;
+
 type PackMember<'a> = dyn Fn(Location, &str, &Constant) -> Option<Type> + 'a;
 
+/// Replace generic parameters with their bound arguments throughout a type.
 fn substitute(
     ty: &Type,
     map: &[(Location, &Argument)],
     member: &PackMember<'_>,
     pack: &dyn Fn(Location) -> Option<Vec<Type>>,
     applications: bool,
-    program: Option<&Program>,
+    resolve: Option<&QueryResolver<'_>>,
 ) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
-    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack, applications, program));
+    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack, applications, resolve));
     // The constant given for the generic value parameter declared at
     // `at`, where `map` gives one.
     let given = |at: Location| {
@@ -469,7 +470,7 @@ fn substitute(
         },
         ConstantValue::InstanceTypeQuery { at, bindings } => Constant {
             text: constant.text.clone(),
-            value: specialize_query_bindings(*at, bindings, map, &|inner| *part(inner), program),
+            value: specialize_query_bindings(*at, bindings, map, &|inner| *part(inner), resolve),
         },
         ConstantValue::Parameter { at, .. } => {
             given(*at).cloned().unwrap_or_else(|| constant.clone())
@@ -541,7 +542,7 @@ fn substitute(
                             member,
                             pack,
                             applications,
-                            program,
+                            resolve,
                         )),
                         Argument::Constant(argument) => Argument::Constant(constant(argument)),
                         Argument::NoResult => Argument::NoResult,
@@ -569,13 +570,13 @@ fn substitute(
                         member,
                         pack,
                         applications,
-                        program,
+                        resolve,
                     )]
                 })
                 .collect(),
         ),
         Type::List { element, size } => Type::list(
-            substitute(element, map, member, pack, applications, program),
+            substitute(element, map, member, pack, applications, resolve),
             size.as_ref().map(constant),
         ),
         Type::Set(inner) => Type::Set(part(inner)),
@@ -614,7 +615,7 @@ fn substitute(
             let mut function = function.as_ref().clone();
             for parameter in &mut function.parameters {
                 let ty = parameter.ty_mut();
-                *ty = substitute(ty, map, member, pack, applications, program);
+                *ty = substitute(ty, map, member, pack, applications, resolve);
             }
             // GEN-1: only an unresolved result-only parameter can learn
             // the absence of a result. Another type parameter is a binding.
@@ -626,13 +627,13 @@ fn substitute(
                 _ => false,
             };
             function.result = bind_result(function.result.as_ref(), map)
-                .map(|ty| substitute(ty, map, member, pack, applications, program));
+                .map(|ty| substitute(ty, map, member, pack, applications, resolve));
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
         Type::Delta(inner) => {
-            Type::delta(substitute(inner, map, member, pack, applications, program))
+            Type::delta(substitute(inner, map, member, pack, applications, resolve))
         }
         // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
         // which the tuple's delta formed again would not. A generic
@@ -646,17 +647,17 @@ fn substitute(
         Type::Trace { cell, style } => {
             let cell = match &**cell {
                 Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
-                    Type::trace_cell(substitute(of, map, member, pack, applications, program))
+                    Type::trace_cell(substitute(of, map, member, pack, applications, resolve))
                 }
                 own if names_parameter(own) => {
-                    match substitute(own, map, member, pack, applications, program) {
+                    match substitute(own, map, member, pack, applications, resolve) {
                         of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
                             Type::trace_cell(of)
                         }
                         other => other,
                     }
                 }
-                other => substitute(other, map, member, pack, applications, program),
+                other => substitute(other, map, member, pack, applications, resolve),
             };
             Type::Trace {
                 cell: Box::new(cell),
@@ -666,7 +667,7 @@ fn substitute(
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
         Type::Nullable(inner) => {
-            match substitute(inner, map, member, pack, applications, program) {
+            match substitute(inner, map, member, pack, applications, resolve) {
                 inner @ Type::Nullable(_) => inner,
                 inner => Type::Nullable(Box::new(inner)),
             }
@@ -761,7 +762,7 @@ fn specialize_query_bindings(
     bindings: &[(Location, Argument)],
     map: &[(Location, &Argument)],
     project: &dyn Fn(&Type) -> Type,
-    program: Option<&Program>,
+    resolver: Option<&QueryResolver<'_>>,
 ) -> ConstantValue {
     let bindings: Vec<_> = bindings
         .iter()
@@ -773,8 +774,8 @@ fn specialize_query_bindings(
             (*declared, argument)
         })
         .collect();
-    program
-        .and_then(|p| p.instance_query_type(at, &bindings))
+    resolver
+        .and_then(|resolve| resolve(at, &bindings))
         .map(|ty| ConstantValue::Type(Box::new(ty)))
         .unwrap_or(ConstantValue::InstanceTypeQuery { at, bindings })
 }
@@ -782,33 +783,43 @@ fn specialize_query_bindings(
 impl Program {
     /// Specialize a declared type, including cold queries whose overload is
     /// chosen by a concrete generic application (TYPE-18).
-    pub fn specialize_type(&self, ty: &Type, map: &[(Location, &Argument)]) -> Type {
+    pub(crate) fn specialize_type(&self, ty: &Type, map: &[(Location, &Argument)]) -> Type {
         self.resolve_instance_type(substitute_within(ty, map))
     }
 
     pub(crate) fn resolve_instance_type(&self, ty: Type) -> Type {
+        self.resolve_query_types(ty, &|at, args| self.instance_query_type(at, args))
+    }
+
+    pub(crate) fn resolve_query_types(&self, ty: Type, resolve: &QueryResolver<'_>) -> Type {
         if self.has_dependent_type_queries && crate::constant::type_has_instance_query(&ty) {
-            substitute(&ty, &[], &|_, _, _| None, &|_| None, false, Some(self))
+            substitute(&ty, &[], &|_, _, _| None, &|_| None, false, Some(resolve))
         } else {
             ty
         }
     }
 
     /// Specialize a type-valued generic argument in its lexical environment.
-    pub fn specialize_query(
+    pub(crate) fn specialize_query(
         &self,
         value: &ConstantValue,
         map: &[(Location, &Argument)],
     ) -> ConstantValue {
+        self.project_query(value, map, &|at, args| self.instance_query_type(at, args))
+    }
+
+    pub(crate) fn project_query(
+        &self,
+        value: &ConstantValue,
+        map: &[(Location, &Argument)],
+        resolve: &QueryResolver<'_>,
+    ) -> ConstantValue {
+        let project = |ty: &Type| self.resolve_query_types(substitute_within(ty, map), resolve);
         match value {
-            ConstantValue::Type(ty) => ConstantValue::Type(Box::new(self.specialize_type(ty, map))),
-            ConstantValue::InstanceTypeQuery { at, bindings } => specialize_query_bindings(
-                *at,
-                bindings,
-                map,
-                &|ty| self.specialize_type(ty, map),
-                Some(self),
-            ),
+            ConstantValue::Type(ty) => ConstantValue::Type(Box::new(project(ty))),
+            ConstantValue::InstanceTypeQuery { at, bindings } => {
+                specialize_query_bindings(*at, bindings, map, &project, Some(resolve))
+            }
             _ => value.clone(),
         }
     }

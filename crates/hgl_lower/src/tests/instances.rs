@@ -236,3 +236,54 @@ const fn also_two() -> i64 => gather(4, 5)
         }
     }
 }
+
+/// A backend can only project the identities supplied by lowering. Even an
+/// unused concrete parameter needs the selected field type for its layout.
+#[test]
+fn checked_layout_projection_reads_only_reached_applications() {
+    let program = program(&[(
+        "m.hgl",
+        r#"module m
+const fn values<T>() -> list<T> => []
+operator pick<A,R>(value: A) -> R
+impl const fn pick(value: list<i64>) -> bool { assert false
+    return true }
+impl const fn pick(value: list<str>) -> str { assert false
+    return "cold" }
+struct Marker<const Kind: Type> { id: i64 }
+struct Frame<T> requires T in {i64, str} { tag: Marker<type(pick(values<T>()))> }
+const fn unused(x: Frame<i64>) -> i64 => 3
+"#,
+    )]);
+    let module = program.module("m").unwrap();
+    let Detail::Struct(frame) = &module.details[declaration(module, "Frame")] else {
+        panic!("fixture defines Frame");
+    };
+    let field = &frame.members[0].ty;
+    let project = |scalar| {
+        let argument = hgl_analyser::Argument::Type(Type::Scalar(scalar));
+        program.checked_layout_type(field, &[(frame.generics[0].at, &argument)])
+    };
+    let identity = |ty: Type| {
+        let Type::Named { mut arguments, .. } = ty else {
+            panic!("field has type Marker");
+        };
+        let Some(hgl_analyser::Argument::Constant(c)) = arguments.pop() else {
+            panic!("Marker takes a constant");
+        };
+        c.value
+    };
+    assert!(matches!(
+        identity(project(Scalar::I64)),
+        hgl_analyser::ConstantValue::InstanceTypeQuery { .. }
+    ));
+    Instances::typed(&program, TEST_CALLABLE_LIMITS);
+    assert!(matches!(
+        identity(project(Scalar::I64)),
+        hgl_analyser::ConstantValue::Type(ty) if *ty == Type::Scalar(Scalar::Bool)
+    ));
+    assert!(matches!(
+        identity(project(Scalar::Str)),
+        hgl_analyser::ConstantValue::InstanceTypeQuery { .. }
+    ));
+}

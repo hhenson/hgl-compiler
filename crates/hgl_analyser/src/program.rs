@@ -10,7 +10,7 @@ use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
-use crate::declared::{names_one_of, substitute_within};
+use crate::declared::names_one_of;
 use crate::hir::{Body, DefaultExpr, Run};
 use crate::types::{
     Argument, CallArguments, DeltaInput, Detail, GenericKind, NamedKind, Type, WrittenType,
@@ -21,6 +21,8 @@ use crate::types::{
 pub struct Program {
     /// A declaration contains an overload-dependent static type query (TYPE-18).
     pub(crate) has_dependent_type_queries: bool,
+    /// Checked TYPE-18 identities needed by reached struct applications.
+    pub(crate) layout_queries: crate::layout_queries::LayoutQueries,
     /// Storage dependencies after declared struct fields resolve (TYPE-18).
     /// Later passes fill bodies, leaving this immutable summary reusable.
     pub(crate) type_value_storage: std::sync::OnceLock<crate::type_values::TypeStorage>,
@@ -162,7 +164,7 @@ impl Program {
             read.members
                 .iter()
                 .map(|member| {
-                    let ty = substitute_within(&member.ty, &map);
+                    let ty = self.checked_layout_type(&member.ty, &map);
                     if names_one_of(&ty, &own) {
                         Type::Unknown
                     } else {

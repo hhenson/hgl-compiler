@@ -138,7 +138,7 @@ fn template_arguments(
     let mut written = written?;
     let bindings: Vec<_> = read.generics.iter().map(|p| p.at).zip(arguments).collect();
     for reflected in layout_queries(program, struct_of) {
-        let applied = program.specialize_query(&reflected, &bindings);
+        let applied = program.checked_layout_query(&reflected, &bindings);
         written.push(type_tag(&applied, queries)?);
     }
     Some(format!("<{}>", written.join(", ")))
@@ -282,12 +282,17 @@ fn template_keeps(
             }
         });
     }
+    let bindings: Vec<_> = generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(arguments)
+        .collect();
     nested.into_iter().all(|(of, given)| {
         let given: Vec<GenericArgument> = given
             .iter()
             .map(|argument| match argument {
                 GenericArgument::Type(ty) => {
-                    GenericArgument::Type(substituted(ty, generics, arguments))
+                    GenericArgument::Type(program.checked_layout_type(ty, &bindings))
                 }
                 GenericArgument::Constant(_) | GenericArgument::NoResult => argument.clone(),
             })
@@ -453,7 +458,7 @@ fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<ConstantValue>
                         .zip(arguments)
                         .collect();
                     for query in nested {
-                        record(program.specialize_query(&query, &map));
+                        record(program.checked_layout_query(&query, &map));
                     }
                 }
             });
@@ -547,97 +552,6 @@ fn collect_structs(ty: &Type, found: &mut Vec<(usize, usize)>) {
     }
 }
 
-/// `ty` with each generic parameter of `generics` replaced by the
-/// argument of the same place in `arguments` (GEN-2), a parameter being
-/// known by where it is declared.
-fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArgument]) -> Type {
-    let argument_of = |at: &Location| {
-        generics
-            .iter()
-            .position(|generic| generic.at == *at)
-            .and_then(|position| arguments.get(position))
-    };
-    let again = |inner: &Type| Box::new(substituted(inner, generics, arguments));
-    match ty {
-        Type::Parameter { at, .. } => match argument_of(at) {
-            Some(GenericArgument::Type(argument)) => argument.clone(),
-            _ => ty.clone(),
-        },
-        Type::Named {
-            name,
-            module,
-            declaration,
-            arguments: own,
-            kind,
-        } => Type::Named {
-            name: name.clone(),
-            module: *module,
-            declaration: *declaration,
-            arguments: own
-                .iter()
-                .map(|argument| match argument {
-                    GenericArgument::Type(argument) => {
-                        GenericArgument::Type(substituted(argument, generics, arguments))
-                    }
-                    GenericArgument::NoResult => argument.clone(),
-                    GenericArgument::Constant(constant) => match &constant.value {
-                        ConstantValue::Parameter { at, .. } => match argument_of(at) {
-                            Some(given @ GenericArgument::Constant(_)) => given.clone(),
-                            _ => argument.clone(),
-                        },
-                        ConstantValue::Type(inner) => {
-                            GenericArgument::Constant(hgl_analyser::Constant {
-                                text: constant.text.clone(),
-                                value: ConstantValue::Type(again(inner)),
-                            })
-                        }
-                        _ => argument.clone(),
-                    },
-                })
-                .collect(),
-            kind: *kind,
-        },
-        // As the analyser substitutes (`declared::substitute`): TYPE-14,
-        // "A `T?` whose T is given a nullable type is that type"; an
-        // atomic and a delta formed again with what they now hold
-        // (TYPE-9, TYPE-16).
-        Type::Nullable(inner) => match substituted(inner, generics, arguments) {
-            inner @ Type::Nullable(_) => inner,
-            inner => Type::Nullable(Box::new(inner)),
-        },
-        Type::Set(inner) => Type::Set(again(inner)),
-        Type::Delta(inner) => Type::delta(substituted(inner, generics, arguments)),
-        Type::Atomic(inner) => Type::atomic(substituted(inner, generics, arguments)),
-        // A size that is a generic value parameter of `generics` is the
-        // constant its argument gives (GEN-13).
-        Type::List { element, size } => Type::List {
-            element: again(element),
-            size: size.as_ref().map(|size| match &size.value {
-                ConstantValue::Parameter { at, .. } => match argument_of(at) {
-                    Some(GenericArgument::Constant(given)) => given.clone(),
-                    _ => size.clone(),
-                },
-                _ => size.clone(),
-            }),
-        },
-        Type::Dict { key, value } => Type::Dict {
-            key: again(key),
-            value: again(value),
-        },
-        Type::Tuple(positions) => Type::Tuple(
-            positions
-                .iter()
-                .map(|position| substituted(position, generics, arguments))
-                .collect(),
-        ),
-        Type::Result { value, error } => Type::Result {
-            value: again(value),
-            error: again(error),
-        },
-        other => other.clone(),
-    }
-}
-
 /// The abstract structs the struct `(module, declaration)` inherits
 /// from, at any depth, each with the arguments the struct gives it, in
 /// its own generic parameters (TYPE-3: "through any number of parents,
@@ -665,8 +579,14 @@ fn ancestors(program: &Program, (module, declaration): (usize, usize)) -> Vec<Ty
             .details
             .get(*parent_declaration)
         {
+            let bindings: Vec<_> = above
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(arguments)
+                .collect();
             for grand in &above.parents {
-                next.push(substituted(grand, &above.generics, arguments));
+                next.push(program.checked_layout_type(grand, &bindings));
             }
         }
         found.push(parent);

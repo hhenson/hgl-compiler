@@ -50,8 +50,8 @@ use hgl_analyser::hir::{
     ValueCategory, walk_statement_nodes_at, walk_statements,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Program, Role,
-    Signature, Type,
+    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LayoutApplications,
+    LocalKind, Program, Role, Signature, Type,
 };
 use hgl_diagnostics::Location;
 
@@ -856,6 +856,7 @@ impl Instances {
     /// each set of generic arguments it is called with (GEN-2), as a
     /// temporal one is.
     pub fn typed(program: &Program, callable_limits: CallableLimits) -> Instances {
+        let mut layouts = program.prepare_layout_queries();
         let mut instances = Instances {
             callable_limits,
             ..Instances::default()
@@ -878,16 +879,16 @@ impl Instances {
                 // `twice(1)` of `const fn pair<T>(value: T) -> i64`.
                 let own = instances.instanced(program, index, declaration);
                 if let (Some(body), false) = (body, own) {
-                    waiting.extend(instances.asked(program, &body.statements));
+                    waiting.extend(instances.asked(program, &mut layouts, &body.statements));
                 }
             }
             for body in module.test_bodies.iter().flatten() {
-                waiting.extend(instances.asked(program, &body.statements));
+                waiting.extend(instances.asked(program, &mut layouts, &body.statements));
             }
             // UNIT-14: an application's run statement, which names its
             // entry and is recorded by core's `record`.
             if let Some(run) = &module.run_body {
-                waiting.extend(instances.asked_in(program, &run.call));
+                waiting.extend(instances.asked_in(program, &mut layouts, &run.call));
                 let record = core_function(program, "record");
                 if let (Some((module, declaration)), Some(result)) =
                     (record, run_result(program, run))
@@ -910,7 +911,7 @@ impl Instances {
             // store with, whose values may call what is written by
             // instance.
             if let Some(body) = &module.store_body {
-                waiting.extend(instances.asked(program, &body.statements));
+                waiting.extend(instances.asked(program, &mut layouts, &body.statements));
             }
             // Generic struct defaults ask for instances at omitted
             // fields, with the struct's arguments in place (TYPE-5).
@@ -927,7 +928,7 @@ impl Instances {
             // Constants and other defaults are read in their defining
             // scope (UNIT-13, UNIT-8).
             for value in module.constants.iter().flatten().chain(defaults) {
-                waiting.extend(instances.asked_in(program, &value.value));
+                waiting.extend(instances.asked_in(program, &mut layouts, &value.value));
             }
         }
         // Each call asked from where the search starts is a root, and
@@ -994,6 +995,7 @@ impl Instances {
                 continue;
             };
             let (slots, pack_use) = next.captures.expand(&mut signature, &mut body);
+            layouts.instance(&signature, &body);
             // The arguments as part of a name.
             let mut plain: String = key[..key.len() - next.constants.len()]
                 .iter()
@@ -1042,7 +1044,7 @@ impl Instances {
             };
             waiting.extend(
                 instances
-                    .asked(program, &body.statements)
+                    .asked(program, &mut layouts, &body.statements)
                     .into_iter()
                     .map(|asked| (asked, root, parent)),
             );
@@ -1070,6 +1072,7 @@ impl Instances {
     fn asks(
         &self,
         program: &Program,
+        layouts: &mut LayoutApplications<'_>,
         value: &Expr,
         expanding: &mut Vec<(usize, usize, usize)>,
     ) -> Vec<Asked> {
@@ -1099,10 +1102,11 @@ impl Instances {
                 if let Some(DefaultValue::Specialized(default)) =
                     applied_field_default(program, field, &value.ty, &expected)
                 {
+                    layouts.default_expr(&default);
                     expanding.push(key);
-                    default
-                        .value
-                        .walk(&mut |value| found.extend(self.asks(program, value, expanding)));
+                    default.value.walk(&mut |value| {
+                        found.extend(self.asks(program, layouts, value, expanding))
+                    });
                     expanding.pop();
                 }
             }
@@ -1144,7 +1148,7 @@ impl Instances {
         if let Callee::Anonymous(function) = callee {
             let mut found = Vec::new();
             walk_statements(&function.body.statements, &mut |value| {
-                found.extend(self.asks(program, value, expanding));
+                found.extend(self.asks(program, layouts, value, expanding));
             });
             return found;
         }
@@ -1171,10 +1175,10 @@ impl Instances {
         };
         let mut found = Vec::new();
         if let Some(reduction) = crate::calls::ordered_list_reduction(program, value) {
-            found.extend(self.asks(program, &reduction.combiner, expanding));
+            found.extend(self.asks(program, layouts, &reduction.combiner, expanding));
         }
         if let Some(Ok(map)) = crate::calls::keyed_map_call(program, value) {
-            found.extend(self.asks(program, &map.callback, expanding));
+            found.extend(self.asks(program, layouts, &map.callback, expanding));
         }
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced_call(program, callee)
@@ -1219,10 +1223,11 @@ impl Instances {
                 if let Some(LeftOut::Default(DefaultValue::Specialized(default))) =
                     left_out(program, callee, index, parameter)
                 {
+                    layouts.default_expr(&default);
                     expanding.push(key);
-                    default
-                        .value
-                        .walk(&mut |value| found.extend(self.asks(program, value, expanding)));
+                    default.value.walk(&mut |value| {
+                        found.extend(self.asks(program, layouts, value, expanding))
+                    });
                     expanding.pop();
                 }
             }
@@ -1232,21 +1237,32 @@ impl Instances {
 
     /// The instances the calls in `statements` ask for, in the order
     /// the calls are met.
-    fn asked(&self, program: &Program, statements: &[Stmt]) -> Vec<Asked> {
+    fn asked(
+        &self,
+        program: &Program,
+        layouts: &mut LayoutApplications<'_>,
+        statements: &[Stmt],
+    ) -> Vec<Asked> {
         let mut found = Vec::new();
         let mut expanding = Vec::new();
         walk_statements(statements, &mut |value| {
-            found.extend(self.asks(program, value, &mut expanding));
+            found.extend(self.asks(program, layouts, value, &mut expanding));
         });
         found
     }
 
     /// The instances the calls in `expression` ask for, in the order
     /// the calls are met.
-    fn asked_in(&self, program: &Program, expression: &Expr) -> Vec<Asked> {
+    fn asked_in(
+        &self,
+        program: &Program,
+        layouts: &mut LayoutApplications<'_>,
+        expression: &Expr,
+    ) -> Vec<Asked> {
         let mut found = Vec::new();
         let mut expanding = Vec::new();
-        expression.walk(&mut |value| found.extend(self.asks(program, value, &mut expanding)));
+        expression
+            .walk(&mut |value| found.extend(self.asks(program, layouts, value, &mut expanding)));
         found
     }
 

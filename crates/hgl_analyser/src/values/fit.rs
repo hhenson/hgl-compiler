@@ -12,7 +12,7 @@ use hgl_parser::SyntaxKind;
 use super::Typer;
 use super::arguments::Takes;
 use super::calls::removes;
-use crate::declared::{agree, names_one_of, substitute_within};
+use crate::declared::{agree, names_one_of};
 use crate::hir::{
     BinaryOperator, Callee, ConfigurationRead, EndpointOperation, Expr, ExprKind, UnaryOperator,
     Value, ValueCategory,
@@ -329,7 +329,7 @@ impl<'a> Typer<'a> {
             // once the arguments are in place has been given none here.
             let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
             for parent in &read.parents {
-                let parent = substitute_within(parent, &map);
+                let parent = self.program.specialize_type(parent, &map);
                 // Where the struct passes a type pack on to its parent,
                 // the pack is not put in place here: the parent may be
                 // the application expected, and nothing is reported of
