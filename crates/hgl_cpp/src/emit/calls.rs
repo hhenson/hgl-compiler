@@ -380,7 +380,7 @@ impl Emitter<'_> {
                         index,
                         view,
                         self.may_fail_here(&argument.value),
-                        Held::Value("auto".to_string()),
+                        Held::Borrow,
                     ));
                     continue;
                 }
@@ -629,6 +629,7 @@ impl Emitter<'_> {
                     given[index] = value;
                     continue;
                 }
+                Held::Borrow => "const auto&".to_string(),
                 Held::Place => "auto&".to_string(),
                 Held::Reference(ty) if !changing => format!("const {ty}&"),
                 Held::Reference(ty) | Held::Value(ty) => format!("const {ty}"),
@@ -762,6 +763,8 @@ impl Emitter<'_> {
 /// call is made, with the C++ type of the value it holds.
 #[derive(Clone)]
 enum Held {
+    /// A native endpoint view, borrowed until return even if another argument writes.
+    Borrow,
     /// A place given to a `var` parameter: a reference to it.
     Place,
     /// A place given to a `var` parameter beside an argument that runs
