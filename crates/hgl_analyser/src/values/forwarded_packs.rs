@@ -2,7 +2,10 @@
 //! (FN-19). Argument placement uses each entry's key and reads the input
 //! slot that holds it.
 
-use hgl_diagnostics::{Category, Location};
+use std::collections::{HashMap, HashSet};
+
+use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_parser::ast::AstNode;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
@@ -15,10 +18,64 @@ use crate::hir::{
 };
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{
-    child, has_token, is_arg_keys_call, name_token, pack_member_names, tokens, ungrouped,
+    child, has_token, is_arg_keys_call, name_token, pack_key_branches, pack_member_names, tokens,
+    ungrouped,
 };
 use crate::types::{Argument, Constant, ConstantValue, GenericKind, Pack, Parameter, Scalar, Type};
 use crate::{codes, error};
+
+/// Binding and written-type passes still record source information for
+/// both arms. Keep their diagnostics with the innermost CTRL-16 arm.
+pub(crate) fn defer_pack_branch_reports(
+    program: &mut crate::Program,
+    diagnostics: &mut Diagnostics,
+    start: usize,
+) {
+    if diagnostics.len() == start {
+        return;
+    }
+    let files: HashSet<_> = diagnostics.as_slice()[start..]
+        .iter()
+        .map(|report| report.primary.file)
+        .collect();
+    let mut branches = HashMap::<_, Vec<_>>::new();
+    for file in program
+        .modules
+        .iter()
+        .flat_map(|module| &module.files)
+        .filter(|file| files.contains(&file.file))
+    {
+        let found: Vec<_> = pack_key_branches(file.syntax.syntax())
+            .map(|branch| branch.span())
+            .collect();
+        if !found.is_empty() {
+            branches.insert(file.file, found);
+        }
+    }
+    if branches.is_empty() {
+        return;
+    }
+    let reports = diagnostics.as_slice()[start..].to_vec();
+    diagnostics.truncate(start);
+    for report in reports {
+        let at = report.primary;
+        let branch = branches.get(&at.file).and_then(|branches| {
+            branches
+                .iter()
+                .filter(|span| span.start <= at.span.start && at.span.end <= span.end)
+                .min_by_key(|span| span.end - span.start)
+        });
+        if let Some(branch) = branch {
+            program
+                .pack_branch_reports
+                .entry(Location::new(at.file, *branch))
+                .or_default()
+                .push(report);
+        } else {
+            diagnostics.emit(report);
+        }
+    }
+}
 
 /// A concrete entry supplied by one spread in the original call.
 pub(super) struct ForwardedArgument {
@@ -41,6 +98,15 @@ pub(super) enum BoundPack {
 }
 
 impl<'a> Typer<'a> {
+    /// A concrete membership condition selects this arm's source reports.
+    pub(super) fn report_pack_branch(&mut self, branch: &SyntaxNode) {
+        if let Some(reports) = self.program.pack_branch_reports.get(&self.at(branch)) {
+            for report in reports {
+                self.diagnostics.emit(report.clone());
+            }
+        }
+    }
+
     /// A form that does not implement pack forwarding must not discard
     /// the spread and emit a call using only its written arguments.
     pub(super) fn unread_pack_call(&mut self, list: &SyntaxNode) -> Option<(ExprKind, Type)> {
@@ -503,39 +569,54 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// `key in arg_keys(Ps)` is a compile-time bool with its pack still
-    /// symbolic in this pass (GEN-17).
+    /// A membership test uses only compile-time keys (GEN-17, CTRL-16).
     pub(super) fn pack_key_membership(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let boolean = Type::Scalar(Scalar::Bool);
         let mut operands = node.children();
-        if let Some(key) = operands.next().and_then(|node| name_token(&node))
-            && let Some(binding) = self.bindings.get(&(self.file, key.span().start))
-            && !matches!(
-                binding,
-                Binding::Local {
-                    kind: LocalKind::PackIterationKey,
-                    ..
-                }
-            )
-        {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                Location::new(self.file, key.span()),
-                format!("`{}` is not a pack key", key.text()),
-                "GEN-17",
-            ));
-        }
-        if let Some(pack) = operands.next().and_then(|node| name_token(&node)) {
-            self.check_key_pack(&pack);
-        }
-        (ExprKind::Unread, Type::Scalar(Scalar::Bool))
+        let (Some(key), Some(pack)) = (
+            operands.next(),
+            operands.next().and_then(|pack| name_token(&pack)),
+        ) else {
+            return (ExprKind::Unread, boolean);
+        };
+        let key_valid = match self.typed_in(self.file, &key, None) {
+            Ok(read)
+                if read.ty().is_none_or(|ty| {
+                    matches!(ty, Type::Unknown | Type::Scalar(Scalar::I64 | Scalar::Str))
+                }) =>
+            {
+                true
+            }
+            Err(Fault::Reported | Fault::Failed) => false,
+            _ => {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(&key),
+                    "a pack membership key must be a module constant or a generic value parameter of type `i64` or `str`".to_string(),
+                    "CTRL-16",
+                ));
+                false
+            }
+        };
+        let pack_valid = self.check_key_pack(&pack);
+        let kind = if key_valid && pack_valid {
+            self.read_pack_condition(node, None)
+                .map_or(ExprKind::DeferredPackCondition, |selected| {
+                    ExprKind::Literal(crate::hir::Value::Bool(selected))
+                })
+        } else {
+            ExprKind::Unread
+        };
+        (kind, boolean)
     }
 
-    fn check_key_pack(&mut self, name: &SyntaxToken) {
+    fn check_key_pack(&mut self, name: &SyntaxToken) -> bool {
         let Some(binding) = self.bindings.get(&(self.file, name.span().start)) else {
-            return;
+            return false;
         };
-        if !self.is_type_pack(binding) {
+        let valid = self.is_type_pack(binding);
+        if !valid {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
@@ -547,6 +628,7 @@ impl<'a> Typer<'a> {
                 "GEN-17",
             ));
         }
+        valid
     }
 
     fn is_type_pack(&self, binding: &Binding) -> bool {
@@ -703,6 +785,7 @@ impl<'a> Typer<'a> {
                     self.bound.push((key_binding, argument));
                     self.pack_passes
                         .push((name.text().to_string(), key.clone()));
+                    self.report_pack_branch(&source);
                     let value = self.expression(&source, None);
                     forwarded.push(ForwardedArgument { key, source, value });
                     self.pack_passes.pop();
@@ -921,6 +1004,7 @@ fn needs_pack_inputs(value: &Expr) -> bool {
             callee: Callee::DeferredPackCall,
             ..
         } | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
     )
 }
 

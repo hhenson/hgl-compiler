@@ -13,6 +13,19 @@ pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
     node.children().find(|child| child.kind() == kind)
 }
 
+/// Branches checked only when a pack-key condition selects them (CTRL-16).
+pub(crate) fn pack_key_branches(root: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
+    root.descendants()
+        .filter(|node| {
+            node.kind() == SyntaxKind::IfExpr
+                && node
+                    .children()
+                    .next()
+                    .is_some_and(|guard| ungrouped(guard).kind() == SyntaxKind::PackKeyMembership)
+        })
+        .flat_map(|node| node.children().skip(1))
+}
+
 /// The tokens directly inside `node`, without whitespace and comments.
 pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()

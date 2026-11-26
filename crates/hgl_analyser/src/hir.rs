@@ -608,6 +608,8 @@ pub enum ExprKind {
     /// An indexed pack read awaiting the concrete entries and key of an
     /// instance. The source expression is read again there (FN-19).
     DeferredPackRead,
+    /// A membership test or branch awaiting its instance's pack keys (CTRL-16).
+    DeferredPackCondition,
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -1847,6 +1849,7 @@ impl Expr {
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
             | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -2019,6 +2022,7 @@ impl Expr {
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
             | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)

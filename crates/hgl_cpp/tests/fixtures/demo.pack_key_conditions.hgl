@@ -1,0 +1,73 @@
+module demo.pack_key_conditions
+
+const first_key: i64 = 1 - 1
+const wanted: str = "weight"
+
+const fn hold<T>(value: T) -> T => value
+
+# CTRL-16, FN-19: the branch is checked with the chosen instance's
+# value and type pack members. An empty pack skips both lookups.
+const fn first<...Ps>(items: ...Ps) -> i64 =>
+    if first_key in arg_keys(Ps) { hold<Ps[first_key]>(items[first_key]) } else { 17 }
+const fn by_key<const Key: i64 = 0, ...Ps>(items: ...Ps) -> i64 =>
+    if Key in arg_keys(Ps) { hold<Ps[Key]>(items[Key]) } else { 23 }
+
+fn graph<...Ps>(tick: i64, items: ...Ps) -> i64 =>
+    if first_key in arg_keys(Ps) { items[first_key] } else { tick + 20 }
+
+fn node<...Ps>(tick: i64, items: ...Ps) -> i64 {
+    when {
+        if first_key in arg_keys(Ps) { return items[first_key] }
+        else { return tick + 20 }
+    }
+}
+
+fn graph_present(tick: i64) -> i64 => graph(tick, tick + 5)
+fn graph_absent(tick: i64) -> i64 => graph(tick)
+fn node_present(tick: i64) -> i64 => node(tick, tick + 5)
+fn node_absent(tick: i64) -> i64 => node(tick)
+
+const fn scale(price: i64, weight: i64 = 2) -> i64 => price * weight
+const fn named<...Ps, ...As>(f: const fn(...{Ps}) -> i64, items: ...{As for f}) -> i64 =>
+    if wanted in arg_keys(As) { items[wanted] } else { 19 }
+const fn forwarded<...Ps, ...As>(f: const fn(...{Ps}) -> i64, items: ...{As for f}) -> i64 =>
+    named(f, ...items)
+
+const fn identity(value: i64) -> i64 => value
+const fn inside_pass<...Ps>(items: ...Ps) -> i64 =>
+    identity(...{for current in arg_keys(Ps):
+        if first_key in arg_keys(Ps) { items[first_key] } else { not_bound() }})
+
+const fn assigned<...Ps>(items: ...Ps) -> i64 {
+    var answer: i64
+    if first_key in arg_keys(Ps) { answer = 3 } else { answer = 8 }
+    return answer
+}
+
+test constant_keys_choose_graph_and_node_branches {
+    assert eval graph_present(tick: [3, 7]) == [8, 12]
+    assert eval graph_absent(tick: [3, 7]) == [23, 27]
+    assert eval node_present(tick: [3, 7]) == [8, 12]
+    assert eval node_absent(tick: [3, 7]) == [23, 27]
+}
+
+test constant_keys_choose_value_and_type_entries {
+    assert first(9) == 9
+    assert first() == 17
+    assert by_key<1>(3, 6) == 6
+    assert by_key<1>(3) == 23
+}
+
+test a_named_pack_uses_its_supplied_keys {
+    assert forwarded(scale, price: 3, weight: 5) == 5
+    assert forwarded(scale, price: 4) == 19
+}
+
+test only_the_selected_iteration_entry_is_checked {
+    assert inside_pass(9) == 9
+}
+
+test only_the_selected_branch_assigns {
+    assert assigned(2) == 3
+    assert assigned() == 8
+}

@@ -47,6 +47,7 @@ use crate::program::{
 use crate::types::{Argument, CallArguments, Detail, Scalar, Signature, Type};
 use anonymous::Anonymous;
 use control::label;
+use dependent_packs::MemberFault;
 use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
@@ -93,7 +94,9 @@ mod format_calls;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod forwarded_packs;
-pub(crate) use forwarded_packs::{ForwardingInstance, has_forwarded_calls};
+pub(crate) use forwarded_packs::{
+    ForwardingInstance, defer_pack_branch_reports, has_forwarded_calls,
+};
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
@@ -575,6 +578,33 @@ pub(crate) fn reread_instance_body(
                 &|_| false,
             )
     };
+    let reading = Signature {
+        generics: match &owner.details[declaration] {
+            Detail::Callable(declared) => candidates::in_instance(declared, map).generics,
+            _ => Vec::new(),
+        },
+        ..signature.clone()
+    };
+    let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
+    let branches: Vec<_> = if inputs.type_packs.is_empty() {
+        Vec::new()
+    } else {
+        crate::syntax::pack_key_branches(&declared.syntax)
+            .map(|branch| branch.span())
+            .collect()
+    };
+    let mut guarded_pack_faults = HashMap::new();
+    let mut project_written = |key, at: Location, ty: &Type| {
+        if branches
+            .iter()
+            .any(|branch| branch.start <= at.span.start && at.span.end <= branch.end)
+            && let Err(fault) = pack_types.project(ty, map)
+        {
+            guarded_pack_faults.entry(key).or_insert((at, fault));
+            return Type::Unknown;
+        }
+        project(ty)
+    };
     let mut absent_type_uses = HashMap::new();
     let projected: Vec<_> = sites_in(&sites.written, declared)
         .iter()
@@ -583,7 +613,7 @@ pub(crate) fn reread_instance_body(
             if needs_absent_type(&written.ty) {
                 absent_type_uses.insert(key, written.at);
             }
-            (key, project(&written.ty))
+            (key, project_written(key, written.at, &written.ty))
         })
         .collect();
     let written = projected.iter().map(|(at, ty)| (*at, ty)).collect();
@@ -606,7 +636,7 @@ pub(crate) fn reread_instance_body(
                             if needs_absent_type(ty) {
                                 absent_type_uses.entry(at_key).or_insert(*at);
                             }
-                            Argument::Type(project(ty))
+                            Argument::Type(project_written(at_key, *at, ty))
                         }
                         crate::Argument::Constant(_) => crate::instance::placed(argument, map),
                         crate::Argument::NoResult => crate::Argument::NoResult,
@@ -628,14 +658,6 @@ pub(crate) fn reread_instance_body(
         .map(|(at, call)| (*at, call))
         .collect();
     let selecting = RefCell::new(Vec::new());
-    let reading = Signature {
-        generics: match &owner.details[declaration] {
-            Detail::Callable(declared) => candidates::in_instance(declared, map).generics,
-            _ => Vec::new(),
-        },
-        ..signature.clone()
-    };
-    let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
     let mut typer = Typer::with_test_candidates(
         program,
         owner,
@@ -651,6 +673,7 @@ pub(crate) fn reread_instance_body(
         inputs.test_candidates,
     );
     typer.absent_type_uses = Some(&absent_type_uses);
+    typer.guarded_pack_faults = Some(&guarded_pack_faults);
     typer.instance = map
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
@@ -776,6 +799,8 @@ struct Typer<'a> {
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// Locations where the instance has no type for a written generic.
     absent_type_uses: Option<&'a HashMap<(FileId, u32), Location>>,
+    /// Written pack lookups reported only when their guard selects them (CTRL-16).
+    guarded_pack_faults: Option<&'a HashMap<(FileId, u32), (Location, MemberFault)>>,
     /// The generic arguments each call writes, by where its callee
     /// starts (GEN-8).
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
@@ -1087,6 +1112,7 @@ impl<'a> Typer<'a> {
             bindings: tables.bindings,
             written: tables.written,
             absent_type_uses: None,
+            guarded_pack_faults: None,
             calls: tables.calls,
             locals: Vec::new(),
             pair_phases: None,
@@ -1197,6 +1223,12 @@ impl<'a> Typer<'a> {
     /// Check a written use when the body reads it, including in the
     /// selected branch of a concrete pack condition (GEN-1, CTRL-16).
     fn check_written_type(&mut self, start: u32) {
+        if let Some((at, fault)) = self
+            .guarded_pack_faults
+            .and_then(|uses| uses.get(&(self.file, start)))
+        {
+            self.pack_member_fault(*at, fault);
+        }
         if let Some(at) = self
             .absent_type_uses
             .and_then(|uses| uses.get(&(self.file, start)))

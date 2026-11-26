@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hgl_diagnostics::Location;
+use hgl_diagnostics::{Diagnostic, Location};
 use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
@@ -46,6 +46,8 @@ pub struct Program {
     pub(crate) instance_sites: Vec<crate::values::InstanceSites>,
     /// Concrete selected calls already examined for an ordinary const slot.
     pub(crate) selected_const_demands: crate::const_inputs::SelectedDemands,
+    /// Source diagnostics for a branch selected only by a pack key (CTRL-16).
+    pub(crate) pack_branch_reports: HashMap<Location, Vec<Diagnostic>>,
 }
 
 impl Program {

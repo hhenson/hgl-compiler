@@ -1454,3 +1454,58 @@ fn discarding_a_call_does_not_bind_a_result_parameter_to_none() {
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "type/generic.unresolved");
 }
+
+/// CTRL-16 admits module constants and generic value parameters as keys.
+#[test]
+fn ordinary_parameters_are_not_pack_membership_keys() {
+    for modifier in ["", "const "] {
+        let checked = module(&format!(
+            "const fn pick<...Ps>({modifier}key: i64, items: ...Ps) -> i64 =>
+    if key in arg_keys(Ps) {{ 1 }} else {{ 2 }}"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        assert_eq!(checked.findings[0].rule, "CTRL-16");
+    }
+}
+
+/// Only an instance that selects the branch reports its errors (CTRL-16).
+#[test]
+fn a_chosen_pack_branch_reports_its_own_error_at_the_making_call() {
+    for (other, code) in [
+        (r#""wrong""#, "type/type.mismatch"),
+        ("not_bound()", "name/name.unknown"),
+        ("hold<Ps[Key]>(4)", "type/pack.name"),
+    ] {
+        let checked = module(&format!(
+            "const Key: i64 = 0
+const fn hold<T>(value: T) -> T => value
+const fn pick<...Ps>(items: ...Ps) -> i64 =>
+    if Key in arg_keys(Ps) {{ items[Key] }} else {{ {other} }}
+const fn good() -> i64 => pick(7)
+const fn bad() -> i64 => pick()",
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, code);
+        assert_eq!(checked.findings[0].at, "m.hgl:7:26", "{}", checked.report);
+    }
+}
+
+/// Deferring a membership test does not establish a later assignment
+/// in an instance whose selected branch has no assignment (CTRL-11/16).
+#[test]
+fn a_pack_branch_must_assign_where_the_instance_reads_the_binding() {
+    let checked = module(
+        "const Key: i64 = 0
+const fn pick<...Ps>(items: ...Ps) -> i64 {
+    var answer: i64
+    if Key in arg_keys(Ps) { answer = 7 }
+    return answer
+}
+const fn good() -> i64 => pick(7)
+const fn bad() -> i64 => pick()",
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "name/binding.unassigned");
+    assert_eq!(checked.findings[0].at, "m.hgl:9:26", "{}", checked.report);
+}
