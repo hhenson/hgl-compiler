@@ -1214,6 +1214,7 @@ pub(crate) fn demands(
                         let argument_for =
                             |position: usize| selection.argument_for(parameters, position);
                         store_calls.record(
+                            program,
                             caller,
                             signature,
                             (unit, member),
@@ -1277,7 +1278,7 @@ pub(crate) fn demands(
                             .find(|argument| argument.parameter == Some(slot))
                             .map(|argument| &argument.value)
                     };
-                    store_calls.record(caller, signature, called, target, argument_for);
+                    store_calls.record(program, caller, signature, called, target, argument_for);
                     for argument in arguments {
                         slots_read(&argument.value, &bindings, &slots, |slot| {
                             store_arguments
@@ -1406,7 +1407,7 @@ impl Program {
             callee.type_packs(),
             requirements,
         )?;
-        let entry = store_entry_arguments(signature, arguments);
+        let entry = store_entry_arguments(self, signature, arguments);
         key.push_str(&format!(
             "aliases{:?}",
             entry
@@ -1469,7 +1470,7 @@ impl Program {
             read.nodes.push((None, signature.clone()));
             let target = &read.nodes[root].1;
             read.calls
-                .record(entry_node, signature, root, target, |slot| {
+                .record(self, entry_node, signature, root, target, |slot| {
                     entry
                         .iter()
                         .find(|argument| argument.parameter == Some(slot))
@@ -1508,9 +1509,15 @@ impl Program {
 }
 
 /// Retain only the entry's alias partition, never its string values. Each
-/// unproved input is a separate external port; equal locals/literals share one.
-fn store_entry_arguments(signature: &Signature, arguments: &[Argument]) -> Vec<Argument> {
+/// unproved input is a separate external port. Stable reads and primitive
+/// expressions can name one value before the first edge of a cycle (TIME-8).
+fn store_entry_arguments(
+    program: &Program,
+    signature: &Signature,
+    arguments: &[Argument],
+) -> Vec<Argument> {
     let mut sources: Vec<(usize, &Expr)> = Vec::new();
+    let mut remaining = INPUT_BUDGET;
     arguments
         .iter()
         .filter(|argument| {
@@ -1529,14 +1536,13 @@ fn store_entry_arguments(signature: &Signature, arguments: &[Argument]) -> Vec<A
                 let source = sources
                     .iter()
                     .find_map(|(slot, earlier)| {
-                        let same = match (&earlier.kind, &argument.value.kind) {
-                            (ExprKind::Local(a), ExprKind::Local(b)) => a == b,
-                            (
-                                ExprKind::Literal(Value::Str(a)),
-                                ExprKind::Literal(Value::Str(b)),
-                            ) => a.len() <= INPUT_BUDGET && b.len() <= INPUT_BUDGET && a == b,
-                            _ => false,
-                        };
+                        let same = same_store_entry(
+                            program,
+                            earlier,
+                            &argument.value,
+                            INPUT_DEPTH,
+                            &mut remaining,
+                        );
                         same.then_some(*slot)
                     })
                     .unwrap_or(slot);
@@ -1546,6 +1552,138 @@ fn store_entry_arguments(signature: &Signature, arguments: &[Argument]) -> Vec<A
             argument
         })
         .collect()
+}
+
+/// Compare fixed entry provenance, never evaluate helper code or specialize
+/// on key text. Source locations do not distinguish two reads of one value.
+fn same_store_entry(
+    program: &Program,
+    first: &Expr,
+    second: &Expr,
+    depth: usize,
+    remaining: &mut usize,
+) -> bool {
+    let Some(next) = remaining.checked_sub(1) else {
+        return false;
+    };
+    *remaining = next;
+    if depth == 0 || first.ty != second.ty || first.category != second.category {
+        return false;
+    }
+    let mut same = |a: &Expr, b: &Expr| same_store_entry(program, a, b, depth - 1, remaining);
+    match (&first.kind, &second.kind) {
+        (ExprKind::Local(a), ExprKind::Local(b)) => a == b,
+        (
+            ExprKind::Constant {
+                module: am,
+                declaration: ad,
+            },
+            ExprKind::Constant {
+                module: bm,
+                declaration: bd,
+            },
+        ) => (am, ad) == (bm, bd),
+        (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) => {
+            a.len() <= INPUT_BUDGET && b.len() <= INPUT_BUDGET && a == b
+        }
+        (ExprKind::Literal(a), ExprKind::Literal(b))
+            if !matches!(a, Value::Type(_) | Value::Str(_)) =>
+        {
+            a == b
+        }
+        (ExprKind::Tuple(a), ExprKind::Tuple(b))
+        | (ExprKind::Sequence(a), ExprKind::Sequence(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b))
+        }
+        (
+            ExprKind::Construct {
+                module: am,
+                declaration: ad,
+                arguments: aa,
+                ..
+            },
+            ExprKind::Construct {
+                module: bm,
+                declaration: bd,
+                arguments: ba,
+                ..
+            },
+        ) => {
+            (am, ad) == (bm, bd)
+                && aa.len() == ba.len()
+                && aa
+                    .iter()
+                    .zip(ba)
+                    .all(|(a, b)| a.parameter == b.parameter && same(&a.value, &b.value))
+        }
+        (
+            ExprKind::Field {
+                base: a,
+                member: am,
+            },
+            ExprKind::Field {
+                base: b,
+                member: bm,
+            },
+        ) => am == bm && same(a, b),
+        (ExprKind::Index { base: a, index: ai }, ExprKind::Index { base: b, index: bi }) => {
+            same(a, b) && same(ai, bi)
+        }
+        (ExprKind::Widen(a), ExprKind::Widen(b)) => same(a, b),
+        (
+            ExprKind::Unary {
+                operator: a,
+                operand: av,
+            },
+            ExprKind::Unary {
+                operator: b,
+                operand: bv,
+            },
+        ) => a == b && same(av, bv),
+        (
+            ExprKind::Binary {
+                operator: a,
+                left: al,
+                right: ar,
+            },
+            ExprKind::Binary {
+                operator: b,
+                left: bl,
+                right: br,
+            },
+        ) => a == b && same(al, bl) && same(ar, br),
+        (
+            ExprKind::Call {
+                callee: a,
+                arguments: aa,
+                form: af,
+                ..
+            },
+            ExprKind::Call {
+                callee: b,
+                arguments: ba,
+                form: bf,
+                ..
+            },
+        ) if matches!(af, Form::Unary(_) | Form::Binary(_))
+            && af == bf
+            && a == b
+            && a.declaration().is_some_and(|(module, declaration)| {
+                program.core() == Some(module)
+                    && matches!(
+                        program.modules[module].declarations[declaration].kind,
+                        crate::DeclarationKind::NativeCandidate(Role::Value, _)
+                    )
+            }) =>
+        {
+            aa.len() == ba.len()
+                && aa
+                    .iter()
+                    .zip(ba)
+                    .all(|(a, b)| a.parameter == b.parameter && same(&a.value, &b.value))
+        }
+        _ => false,
+    }
 }
 
 /// TIME-8 follows the calls an instance makes, not all candidates of the
@@ -1879,7 +2017,7 @@ impl StoreInstances<'_> {
             let target = self.instance(&callee, &arguments)?;
             let parameters = &self.nodes[target].1;
             self.calls
-                .record(node, &signature, target, parameters, |slot| {
+                .record(self.program, node, &signature, target, parameters, |slot| {
                     arguments
                         .iter()
                         .find(|a| a.parameter == Some(slot))
@@ -1914,6 +2052,8 @@ struct StoreCalls<N = Declaration> {
 enum StoreSource {
     Parameter(usize),
     Literal(String),
+    /// A stable expression shared by ports of this one incoming call.
+    Fixed(usize),
     Other,
 }
 
@@ -1929,6 +2069,7 @@ impl<N: Copy + Eq + Hash> StoreCalls<N> {
     /// the callee's slots, where the call writes one.
     fn record<'a>(
         &mut self,
+        program: &Program,
         caller: N,
         signature: &Signature,
         callee: N,
@@ -1937,16 +2078,39 @@ impl<N: Copy + Eq + Hash> StoreCalls<N> {
     ) {
         self.calls.insert((caller, callee));
         let mut sources = Vec::new();
+        let mut fixed: Vec<(usize, &Expr)> = Vec::new();
+        let mut remaining = INPUT_BUDGET;
         for (slot, parameter) in target.parameters.iter().enumerate() {
             let source = argument_for(slot).map(|argument| match &argument.kind {
                 ExprKind::Local(local) => StoreSource::Parameter(*local),
                 ExprKind::Literal(Value::Str(text)) => StoreSource::Literal(text.clone()),
-                _ => StoreSource::Other,
+                _ => {
+                    let earlier = fixed.iter().find_map(|(slot, earlier)| {
+                        same_store_entry(program, earlier, argument, INPUT_DEPTH, &mut remaining)
+                            .then_some(*slot)
+                    });
+                    if let Some(earlier) = earlier {
+                        StoreSource::Fixed(earlier)
+                    } else if same_store_entry(
+                        program,
+                        argument,
+                        argument,
+                        INPUT_DEPTH,
+                        &mut remaining,
+                    ) {
+                        fixed.push((slot, argument));
+                        StoreSource::Fixed(slot)
+                    } else {
+                        StoreSource::Other
+                    }
+                }
             });
             sources.push(source.unwrap_or(StoreSource::Other));
             if !parameter.constant {
                 continue;
             }
+            // Equal expressions on an entry edge can alias, but an expression
+            // evaluated anew inside the cycle is still not plain forwarding.
             let forwarded = argument_for(slot).and_then(|argument| match argument.kind {
                 ExprKind::Local(local)
                     if signature
@@ -1992,6 +2156,7 @@ impl<N: Copy + Eq + Hash> StoreCalls<N> {
                         waiting.push((*caller, *left, *right));
                     }
                     (StoreSource::Literal(left), StoreSource::Literal(right)) if left == right => {}
+                    (StoreSource::Fixed(left), StoreSource::Fixed(right)) if left == right => {}
                     _ => return false,
                 }
             }

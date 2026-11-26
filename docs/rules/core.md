@@ -562,6 +562,10 @@ analyser: partial
   selects, with symbolic keys; an unselected candidate closes no cycle.
 - Fixed-key proofs belong to each call route. An unused entry with other
   types or distinct aliases does not delay an independent fixed call.
+- Entry aliases include repeated reads of a named constant, a fixed field,
+  list or tuple position, or a primitive expression computed before the
+  cycle. Distinct projections stay distinct; computing a key again on a
+  recursive edge still leaves its check to the operation.
 
 transpiler: partial
 

@@ -916,6 +916,125 @@ fn fixed_store_routes_admit_their_nonreserved_key() {
     }
 }
 
+/// TIME-8, CAP-6 and UNIT-13: two stable reads before a swapping cycle
+/// still supply one fixed key; a helper need not receive a bare local.
+#[test]
+fn stable_store_entry_expressions_share_their_key() {
+    for (declarations, parameter, argument, key) in [
+        (
+            "const reserved: str = \"run.output\"",
+            "const k: str",
+            "\"unused\"",
+            "reserved",
+        ),
+        ("", "const k: str", "\"run.out\"", "k + \"put\""),
+        (
+            "struct Keys { name: str }",
+            "const k: Keys",
+            "Keys(name: \"run.output\")",
+            "k.name",
+        ),
+        (
+            "",
+            "const k: list<str, 2>",
+            "[\"unused\", \"run.output\"]",
+            "k[1]",
+        ),
+        (
+            "",
+            "const k: tuple<str, str>",
+            "(\"unused\", \"run.output\")",
+            "k[1]",
+        ),
+    ] {
+        let source = format!(
+            r#"module m
+{declarations}
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    put(s, left, n)
+    if n > 0 {{ rotate(s, n - 1, right, left) }}
+}}
+fn node({parameter}) {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 2, {key}, {key}) }}
+}}
+test source {{ eval node({argument}) }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(checked.summary().len(), 1, "key {key}: {}", checked.report);
+        assert!(
+            checked.summary()[0].ends_with("injectable/store.reserved_key TIME-8"),
+            "{}",
+            checked.report
+        );
+        let benign = source
+            .replace("run.output", "user.key")
+            .replace("run.out", "user.");
+        let checked = check(&[("m.hgl", &benign)]);
+        assert!(checked.summary().is_empty(), "{}", checked.report);
+    }
+}
+
+/// TIME-8: different fields, indexes or expressions remain different ports;
+/// swapping them defers the reserved-key check to the reached operation.
+#[test]
+fn distinct_store_entry_expressions_keep_operation_checks() {
+    for (declarations, parameter, argument, left, right) in [
+        (
+            "struct Keys {\nleft: str\nright: str\n}",
+            "const k: Keys",
+            "Keys(left: \"run.output\", right: \"safe\")",
+            "k.left",
+            "k.right",
+        ),
+        (
+            "",
+            "const k: list<str, 2>",
+            "[\"run.output\", \"safe\"]",
+            "k[0]",
+            "k[1]",
+        ),
+        (
+            "",
+            "const k: tuple<str, str>",
+            "(\"run.output\", \"safe\")",
+            "k[0]",
+            "k[1]",
+        ),
+        (
+            "",
+            "const k: str",
+            "\"run.out\"",
+            "k + \"put\"",
+            "k + \"safe\"",
+        ),
+    ] {
+        let source = format!(
+            r#"module m
+{declarations}
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    if n == 0 {{ put(s, left, n) }}
+    else {{ rotate(s, n - 1, right, left) }}
+}}
+fn node({parameter}) {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 1, {left}, {right}) }}
+}}
+test source {{ eval node({argument}) }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert!(
+            checked.summary().is_empty(),
+            "{left} / {right}: {}",
+            checked.report
+        );
+    }
+}
+
 /// TIME-8, CAP-6: a helper computes the key at graph build, not in source.
 #[test]
 fn fixed_store_routes_leave_computed_keys_to_the_build() {

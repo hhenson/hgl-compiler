@@ -6005,7 +6005,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.contains("rejection cases: 7 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 8 passed, 0 failed\n"),
         "{stdout}"
     );
     // TIME-8, CAP-6: explicit Core adds forwarding documentation examples;
@@ -6028,7 +6028,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.contains("rejection cases: 7 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 8 passed, 0 failed\n"),
         "{stdout}"
     );
     let file = write(
@@ -6040,7 +6040,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 45 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 57 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
     let output = hgl_in(
@@ -6051,7 +6051,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 45 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 57 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

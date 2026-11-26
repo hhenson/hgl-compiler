@@ -160,3 +160,21 @@ test isolated_alias_is_fixed_in_source {
     # expect-error(injectable, "store.reserved_key")
     eval isolated_alias("run.output", 1, false)
 }
+
+# TIME-8, CAP-6, UNIT-13: a named constant is one value at both entry ports.
+const entry_reserved: str = "run.output"
+const fn entry_rotate(s: GlobalState, n: i64, const left: str, const right: str) {
+    put(s, left, n)
+    if n > 0 { entry_rotate(s, n - 1, right, left) }
+}
+test entry_named_rejects_in_source {
+    fn entry_named() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_reserved, entry_reserved)
+        }
+    }
+    eval entry_named()
+}
