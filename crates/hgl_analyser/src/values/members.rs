@@ -33,12 +33,27 @@ pub(crate) fn has_dependent_index(body: &Body) -> bool {
     let mut dependent = false;
     super::forwarded_packs::walk_nested_calls(&body.statements, &mut |value| {
         if let ExprKind::Index { base, .. } = &value.kind
-            && matches!(base.ty, Type::Parameter { .. } | Type::PackMember { .. })
+            && matches!(
+                index_base_shape(&base.ty),
+                Type::Parameter { .. } | Type::PackMember { .. }
+            )
         {
             dependent = true;
         }
     });
     dependent
+}
+
+/// Unwraps transparent value wrappers (TYPE-9, ERR-12, ERR-15) to the
+/// underlying payload type that decides whether a bracket read is valid.
+fn index_base_shape(mut ty: &Type) -> &Type {
+    while let Type::Atomic(payload)
+    | Type::Nullable(payload)
+    | Type::Result { value: payload, .. } = ty
+    {
+        ty = payload;
+    }
+    ty
 }
 
 impl<'a> Typer<'a> {
@@ -621,15 +636,7 @@ impl<'a> Typer<'a> {
     /// EXPR-7: brackets read a list, tuple or dictionary. A base whose
     /// payload shape is known must be one of those collections.
     pub(super) fn check_index_base(&mut self, ty: &Type, at: Location) {
-        // Its wrapper can affect how the payload is read (TYPE-9,
-        // ERR-12, ERR-15). The payload decides whether it has an index.
-        let mut shape = ty;
-        while let Type::Atomic(payload)
-        | Type::Nullable(payload)
-        | Type::Result { value: payload, .. } = shape
-        {
-            shape = payload;
-        }
+        let shape = index_base_shape(ty);
         if open(shape)
             || matches!(shape, Type::Parameter { .. } | Type::PackMember { .. })
             || index_collection(shape)
