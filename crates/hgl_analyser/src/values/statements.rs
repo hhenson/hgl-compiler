@@ -530,6 +530,17 @@ impl<'a> Typer<'a> {
             None if self.graph => ValueCategory::Unsettled,
             _ => ValueCategory::Value,
         };
+        if kind == LocalKind::Let
+            && let Some(known) = self
+                .anonymous
+                .as_mut()
+                .and_then(|scope| scope.immediate_conditions.as_mut())
+            && let Some(value) = value
+                .as_ref()
+                .and_then(|value| super::lifting::known_bool(value, known))
+        {
+            known.push((local, value));
+        }
         Stmt::Declare { local, value }
     }
 

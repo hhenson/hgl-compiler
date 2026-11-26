@@ -1038,6 +1038,7 @@ fn callees(checked: &Checked, name: &str) -> Vec<String> {
                 | Callee::DeferredOperator(_)
                 | Callee::DeferredPackCall
                 | Callee::DeferredValue
+                | Callee::UnreadWithConnection
                 | Callee::Unread => "none".to_string(),
             });
         }
@@ -1662,6 +1663,7 @@ fn answers_in(checked: &Checked, body: &Body) -> Vec<String> {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => found.push("none".to_string()),
         }
     });

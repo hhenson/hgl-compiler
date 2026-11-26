@@ -1344,6 +1344,8 @@ pub enum Callee {
     DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
+    /// An opaque direct anonymous call whose checked result needs a live input.
+    UnreadWithConnection,
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
@@ -1400,6 +1402,7 @@ impl Callee {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => None,
         }
     }
@@ -1416,6 +1419,7 @@ impl Callee {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => &[],
         }
     }
@@ -1432,6 +1436,7 @@ impl Callee {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => &[],
         }
     }

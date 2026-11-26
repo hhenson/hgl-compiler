@@ -32,8 +32,9 @@ analyser: partial
 - In a graph, `const` parameters, `switch` labels, `while` conditions, store calls, and a value function's declared configuration need their values during construction. A connection in any of those places rejects with `connection.as_constant` (FN-3, CTRL-15, FN-9, EXPR-14). An endpoint operation takes no input there (TIME-9).
 - A connection given as a written generic value argument rejects with `generic.argument_constant` (GEN-8).
 - A connection used as a fixed list size in a local annotation rejects with
-  `list.size` (TYPE-10), including a live input captured by an immediately
-  invoked anonymous function in the size expression.
+  `list.size` (TYPE-10). An immediately invoked anonymous function preserves
+  the connection category of its result, including when it reaches a live
+  capture or a supplied callback and its result is first bound to a local.
 
 transpiler: done
 

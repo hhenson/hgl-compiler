@@ -399,6 +399,7 @@ fn calls(body: &Body) -> Vec<Called> {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => {}
         }
     });

@@ -1231,6 +1231,7 @@ fn place_callee(
         | Callee::DeferredOperator(_)
         | Callee::DeferredPackCall
         | Callee::DeferredValue
+        | Callee::UnreadWithConnection
         | Callee::Unread => {}
     }
 }

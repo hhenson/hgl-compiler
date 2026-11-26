@@ -668,7 +668,7 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         let mut targets = Vec::new();
         walk_statements(&function.body.statements, &mut |expression| {
             if let Some(target) = called_or_supplied(expression)
-                && !matches!(target, Callee::Unread)
+                && !matches!(target, Callee::Unread | Callee::UnreadWithConnection)
             {
                 targets.push(function_key(program, target));
             }

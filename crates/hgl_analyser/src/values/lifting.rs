@@ -18,8 +18,9 @@ use super::members::{index_result, indexed_payload};
 use super::results::{captured_binding, captured_output};
 use super::{CapturedOutput, Typer};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut, Run, Stmt, Value,
-    ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
+    BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut, Run,
+    Stmt, Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut,
+    walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
 use crate::types::{Argument, Detail, Type};
@@ -73,6 +74,10 @@ impl<'a> Typer<'a> {
             value,
             &self.pack_functions,
             &self.callback_captures,
+            self.anonymous
+                .as_ref()
+                .filter(|_| !self.type_query)
+                .and_then(|body| body.immediate_conditions.as_deref()),
         )
     }
 
@@ -195,6 +200,7 @@ fn check_const_arguments(
         | Callee::DeferredOperator(_)
         | Callee::DeferredPackCall
         | Callee::DeferredValue
+        | Callee::UnreadWithConnection
         | Callee::Unread => {
             return;
         }
@@ -299,7 +305,46 @@ fn gives_a_value(value: &Expr) -> bool {
 /// as it reads ([`Typer::category`]), and [`record`] writes its answer
 /// on each expression for the stages after the analyser.
 pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
-    category_with_functions(program, locals, value, &[], &[])
+    category_with_functions(program, locals, value, &[], &[], None)
+}
+
+/// A literal or an immutable Boolean binding whose value is already known.
+pub(super) fn known_bool(expr: &Expr, known: &[(LocalId, bool)]) -> Option<bool> {
+    match expr.kind {
+        ExprKind::Literal(Value::Bool(value)) => Some(value),
+        ExprKind::Local(local) => known
+            .iter()
+            .find_map(|&(id, value)| (id == local).then_some(value)),
+        _ => None,
+    }
+}
+
+fn skips_right(operator: BinaryOperator, left: &Expr, known: &[(LocalId, bool)]) -> bool {
+    matches!(
+        (operator, known_bool(left, known)),
+        (BinaryOperator::And, Some(false)) | (BinaryOperator::Or, Some(true))
+    )
+}
+
+/// An operand this value computation cannot reach (CTRL-10, EXPR-6).
+pub(super) fn skipped_operand<'a>(value: &'a Expr, known: &[(LocalId, bool)]) -> Option<&'a Expr> {
+    if let ExprKind::If {
+        condition,
+        then,
+        otherwise,
+        ..
+    } = &value.kind
+    {
+        return match known_bool(condition, known) {
+            Some(true) => otherwise.as_deref(),
+            Some(false) => Some(then),
+            None => None,
+        };
+    }
+    value
+        .kind
+        .binary()
+        .and_then(|(operator, left, right)| skips_right(operator, left, known).then_some(right))
 }
 
 fn category_with_functions(
@@ -308,11 +353,25 @@ fn category_with_functions(
     value: &Expr,
     functions: &[(usize, Callee)],
     callback_captures: &[ValueCategory],
+    evaluated: Option<&[(LocalId, bool)]>,
 ) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
     let category = |value: &Expr| {
-        category_with_functions(program, locals, value, functions, callback_captures)
+        category_with_functions(
+            program,
+            locals,
+            value,
+            functions,
+            callback_captures,
+            evaluated,
+        )
     };
+    if let Some(known) = evaluated
+        && let Some((operator, left, _)) = value.kind.binary()
+        && skips_right(operator, left, known)
+    {
+        return category(left);
+    }
     let join = join_categories;
     let all = |values: &mut dyn Iterator<Item = &Expr>| values.map(category).fold(Value, join);
     match &value.kind {
@@ -408,7 +467,9 @@ fn category_with_functions(
                     .iter()
                     .map(|&local| locals[local].category)
                     .fold(given, join),
-                Callee::Parameter { temporal: true, .. } => Connection,
+                Callee::Parameter { temporal: true, .. } | Callee::UnreadWithConnection => {
+                    Connection
+                }
                 // An operation awaiting selection may choose a temporal candidate.
                 Callee::Required { .. }
                 | Callee::DeferredOperator(_)
@@ -483,7 +544,21 @@ fn category_with_functions(
         // from the function gives the `if` no value and takes no
         // part in its type (CTRL-5)", and so none in what it is. An
         // `if` no branch of which gives a value has none itself.
-        ExprKind::If { condition, .. } => {
+        ExprKind::If {
+            condition,
+            then,
+            otherwise,
+            ..
+        } => {
+            if let Some(known) = evaluated
+                && let Some(selected) = known_bool(condition, known)
+            {
+                return if selected {
+                    category(then)
+                } else {
+                    otherwise.as_deref().map_or(Value, category)
+                };
+            }
             let mut branches = value
                 .kind
                 .branch_values()

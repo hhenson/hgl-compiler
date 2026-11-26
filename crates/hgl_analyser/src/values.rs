@@ -848,8 +848,6 @@ struct Typer<'a> {
     unsettled_callback_pair: bool,
     /// A local size needs the concrete graph body to decide its category.
     unsettled_list_size: bool,
-    /// A size query records whether an immediate call reads a live capture.
-    list_extent_reads_live_capture: Option<bool>,
     /// Hypothetical capture categories used only to check an open graph declaration.
     callback_captures: Vec<ValueCategory>,
     /// Nesting depth of `anonymous_pair_category` role probes; lets nested
@@ -1165,7 +1163,6 @@ impl<'a> Typer<'a> {
             pair_phases: None,
             unsettled_callback_pair: false,
             unsettled_list_size: false,
-            list_extent_reads_live_capture: None,
             callback_captures: Vec::new(),
             probing_pair_role: 0,
             probe_saw_temporal: false,
@@ -1385,7 +1382,6 @@ impl<'a> Typer<'a> {
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
             unsettled_callback_pair: self.unsettled_callback_pair,
             unsettled_list_size: self.unsettled_list_size,
-            list_extent_reads_live_capture: self.list_extent_reads_live_capture,
             selected_pack_branches: self
                 .selected_pack_branches
                 .map_or(0, |selected| selected.borrow().len()),
@@ -1409,7 +1405,6 @@ impl<'a> Typer<'a> {
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
         self.unsettled_list_size = mark.unsettled_list_size;
-        self.list_extent_reads_live_capture = mark.list_extent_reads_live_capture;
         if let Some(selected) = self.selected_pack_branches {
             selected.borrow_mut().truncate(mark.selected_pack_branches);
         }
@@ -1467,6 +1462,13 @@ impl<'a> Typer<'a> {
             self.bound_children.retain(|local, _| *local < mark.locals);
             self.bound_packs.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
+            if let Some(known) = self
+                .anonymous
+                .as_mut()
+                .and_then(|scope| scope.immediate_conditions.as_mut())
+            {
+                known.retain(|&(local, _)| local < mark.locals);
+            }
         }
         self.present.truncate(mark.present);
         if keep_flow {
@@ -1589,7 +1591,6 @@ struct Mark {
     deferred_type_fit: bool,
     unsettled_callback_pair: bool,
     unsettled_list_size: bool,
-    list_extent_reads_live_capture: Option<bool>,
     /// Number of selected pack branches before a tentative read (CTRL-16).
     selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.
