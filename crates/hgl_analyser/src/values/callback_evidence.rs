@@ -5,17 +5,21 @@ use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Candidate;
+use super::Typer;
 use super::candidates::{Specific, alternative_specificity};
-use super::dependent_packs::dependent_slot;
+use super::constants::generic_default;
+use super::dependent_packs::{bind, dependent_slot, pack_exclusions, reflected_argument};
 use super::fit::{open, whole};
 use super::inference::{infer, mentions, type_pack, unsaid};
+use super::law_calls::CallbackLawInput;
 use super::requirements::{conjoined_terms, pack_view};
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_with_packs, substitute_within,
     weight,
 };
+use crate::hir::{Expr, TypePackArgument};
 use crate::syntax::{child, has_token, tokens};
-use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, GenericParameter, Type};
 use crate::{Program, ReflectedPack};
 
 /// Selection evidence only. The enclosing call still receives the original argument.
@@ -50,35 +54,36 @@ impl CallbackEvidence {
         &self.results
     }
 
-    /// Result shapes a reading learns from enclosing bindings and equalities (GEN-3).
-    pub(super) fn trial_result_shapes<'a>(
+    /// Result restrictions from the receiver and the bindings learned in a trial (GEN-3).
+    pub(super) fn trial_result<'a>(
         &self,
         program: &Program,
         readings: impl IntoIterator<Item = &'a MemberReading<'a>>,
-    ) -> Result<Vec<Type>, ()> {
+        include_requirements: bool,
+    ) -> Result<ReflectedResultEvidence, ()> {
+        let mut result = ReflectedResultEvidence::default();
         if self.enclosing_bindings.is_empty() {
-            return Ok(Vec::new());
+            return Ok(result);
         }
         let bindings: Vec<_> = readings
             .into_iter()
             .flat_map(|reading| reading.shared_bindings())
             .collect();
-        let mut results = Vec::new();
         for scope in &self.enclosing_bindings {
-            if let Some(result) = scope.result_shape(program, &bindings)? {
-                results.push(result);
-            }
+            scope.add_result_evidence(program, &bindings, &mut result, include_requirements)?;
         }
-        Ok(results)
+        Ok(result)
     }
 
     /// Read the receiver's evidence and, in an operator trial, its candidate's.
     pub(super) fn from_callables<'a, 'b>(
         program: &Program,
-        callables: impl IntoIterator<Item = (Candidate<'a>, &'b [(Location, &'b Argument)])>,
+        callables: impl IntoIterator<
+            Item = (Candidate<'a>, &'b [(Location, &'b Argument)], &'b [usize]),
+        >,
     ) -> Self {
         let mut evidence = Self::default();
-        for ((module, declaration, signature), bindings) in callables {
+        for ((module, declaration, signature), bindings, defaulted) in callables {
             let fixed: Vec<_> = bindings
                 .iter()
                 .copied()
@@ -147,16 +152,16 @@ impl CallbackEvidence {
                 let at = Location::new(declared.at.file, node.span());
                 unit.written.iter().find(|ty| ty.at == at).map(|ty| &ty.ty)
             };
-            let mut record = |result: Type| {
-                if !open(&result) && !evidence.results.contains(&result) {
-                    evidence.results.push(result);
-                }
-            };
             let own: Vec<_> = signature
                 .generics
                 .iter()
                 .map(|generic| generic.at)
                 .collect();
+            let mut record = |result: Type| {
+                if !open(&result) && !evidence.results.contains(&result) {
+                    evidence.results.push(result);
+                }
+            };
             if let Some(written) = &template.result {
                 let before = substitute_within(written, &fixed);
                 let result = substitute_within(written, &solved);
@@ -261,7 +266,15 @@ impl CallbackEvidence {
                 .extend(relations.iter().filter_map(|(relation, bound)| {
                     ArgumentPatterns::read(relation, *bound, source, target, &generics, &type_at)
                 }));
-            if !equalities.is_empty()
+            let laws = condition.descendants().any(|node| {
+                node.kind() == SyntaxKind::ConstraintCall
+                    && crate::laws::query(unit, declared.at.file, &node).is_some()
+            }) || defaulted.iter().any(|&index| {
+                generic_default(&declared.syntax, &signature.generics[index])
+                    .is_some_and(|node| crate::laws::default_parameter(signature, &node).is_some())
+            });
+            if laws
+                || !equalities.is_empty()
                 || template
                     .result
                     .as_ref()
@@ -274,6 +287,8 @@ impl CallbackEvidence {
                     found,
                     equalities,
                     result: template.result.clone(),
+                    defaulted: defaulted.to_vec(),
+                    laws,
                 });
             }
         }
@@ -368,14 +383,135 @@ struct EnclosingBindings {
     found: Vec<Option<Argument>>,
     equalities: Vec<(Type, Type)>,
     result: Option<Type>,
+    defaulted: Vec<usize>,
+    laws: bool,
+}
+
+/// Result shapes and finite restrictions that hold for a reflected reading.
+#[derive(Default)]
+pub(super) struct ReflectedResultEvidence {
+    /// Known result shapes inferred from the argument bindings in this reading.
+    pub(super) shapes: Vec<Type>,
+    /// Receiver requirements that can be checked against a candidate result (GEN-3).
+    pub(super) requirements: Vec<ResultRequirement>,
+}
+
+/// The result type and known bindings of one receiving declaration.
+pub(super) struct ResultRequirement {
+    declaration: (usize, usize),
+    known: Vec<Option<Argument>>,
+    defaulted: Vec<usize>,
+}
+
+impl ResultRequirement {
+    /// Whether the receiver's requirement holds for this callback trial (GEN-3).
+    pub(super) fn admits(
+        &self,
+        typer: &mut Typer<'_>,
+        callback: &Expr,
+        supplied: &[(Option<&str>, &Expr)],
+        law_inputs: &[CallbackLawInput],
+    ) -> Option<bool> {
+        let program = typer.program;
+        let (module, declaration) = self.declaration;
+        let unit = &program.modules[module];
+        let Detail::Callable(signature) = &unit.details[declaration] else {
+            return Some(true);
+        };
+        let Some(input) = dependent_slot(unit, signature).map(|slot| &signature.parameters[slot])
+        else {
+            return Some(true);
+        };
+        let dependent = &unit.dependent_packs[&input.at];
+        let Some((callback_slot, template)) =
+            signature
+                .parameters
+                .iter()
+                .enumerate()
+                .find_map(|(slot, parameter)| {
+                    if parameter.at == dependent.function
+                        && let Type::Function(template) = &parameter.ty
+                    {
+                        Some((slot, template))
+                    } else {
+                        None
+                    }
+                })
+        else {
+            return Some(true);
+        };
+        let Type::Function(actual) = &callback.ty else {
+            return Some(true);
+        };
+        let generics = &signature.generics;
+        let mut found = self.known.clone();
+        if let (Some(expected), Some(actual)) = (&template.result, &actual.result) {
+            infer(expected, actual, generics, &mut found);
+        }
+        let map: Vec<_> = generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+            .collect();
+        let mut packs = Vec::new();
+        if let Ok(bound) = bind(
+            program,
+            template,
+            callback,
+            supplied,
+            &pack_exclusions(dependent, &map),
+        ) {
+            if let Some(index) = type_pack(input, generics) {
+                packs.push(TypePackArgument::keyed(index, bound.captured));
+            }
+            if let Some(pack) = &template.named_pack
+                && let Some(index) = generics.iter().position(|generic| generic.at == pack.at)
+            {
+                packs.push(reflected_argument(
+                    index,
+                    template,
+                    callback,
+                    bound.reflected,
+                ));
+            }
+        }
+        let Ok(siblings) = typer.read_law_siblings(
+            (self.declaration, signature),
+            &mut found,
+            &packs,
+            law_inputs,
+        ) else {
+            return Some(false);
+        };
+        let argument = |typer: &Typer<'_>, slot, law| {
+            if slot == callback_slot {
+                typer.law_value(law, callback)
+            } else if let Some((_, value)) = siblings.iter().find(|(index, _)| *index == slot) {
+                typer.law_value(law, value)
+            } else {
+                law_inputs
+                    .iter()
+                    .find_map(|known| known.answer(typer, self.declaration, slot, law))
+                    .flatten()
+            }
+        };
+        typer.callback_requirement_holds(
+            (self.declaration, signature),
+            (&mut found, &self.defaulted),
+            &packs,
+            &argument,
+        )
+    }
 }
 
 impl EnclosingBindings {
-    fn result_shape(
+    fn add_result_evidence(
         &self,
         program: &Program,
         bindings: &[(Location, &Argument)],
-    ) -> Result<Option<Type>, ()> {
+        evidence: &mut ReflectedResultEvidence,
+        include_requirements: bool,
+    ) -> Result<(), ()> {
         let mut found = self.found.clone();
         let mut learned = false;
         for (generic, slot) in self.generics.iter().zip(&mut found) {
@@ -390,12 +526,21 @@ impl EnclosingBindings {
                 }
             }
         }
-        if !learned {
-            return Ok(None);
-        }
         let unit = &program.modules[self.module];
         let declaration = &unit.declarations[self.declaration];
-        super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
+        if learned {
+            super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
+        }
+        if include_requirements && (self.result.is_some() || self.laws) {
+            evidence.requirements.push(ResultRequirement {
+                declaration: (self.module, self.declaration),
+                known: found.clone(),
+                defaulted: self.defaulted.clone(),
+            });
+        }
+        if !learned {
+            return Ok(());
+        }
         let map: Vec<_> = self
             .generics
             .iter()
@@ -426,11 +571,15 @@ impl EnclosingBindings {
                 (generic.at, value.as_ref().unwrap_or(unknown))
             })
             .collect();
-        Ok(self
+        if let Some(shape) = self
             .result
             .as_ref()
             .map(|ty| substitute_within(ty, &partial))
-            .filter(|ty| !open(ty)))
+            .filter(|ty| !open(ty))
+        {
+            evidence.shapes.push(shape);
+        }
+        Ok(())
     }
 }
 

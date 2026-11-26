@@ -9,7 +9,7 @@ use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::callback_evidence::CallbackEvidence;
+use super::callback_evidence::{CallbackEvidence, ResultRequirement};
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{
@@ -19,10 +19,11 @@ use super::expressions::{takes_its_type, written_null};
 use super::fit::{
     accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
 };
-use super::function_arguments::{CallbackInputs, matches_template};
+use super::function_arguments::{CallbackInputs, matches_template, operator_callback_type};
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
+use super::law_calls::CallbackLawInput;
 use super::lifting::preferred_call_role;
 use super::operators::{
     ReflectedCall, Requested, core_dictionary_fallback, dictionary_fallback_type, unreadable,
@@ -681,7 +682,12 @@ impl<'a> Typer<'a> {
                 // FN-17: a function reference supplies a signature.
                 // Contextual operand or result reads do not make it fit.
                 if let Some(callback) = &wanted.callback
-                    && !callback.matches(&taken, (given, &bound), wanted.place)
+                    && (!callback.matches(&taken, (given, &bound), wanted.place)
+                        || !callback.receiver_admits(
+                            self,
+                            (operator, public),
+                            ((module, declaration, &taken), &generics, &type_packs),
+                        ))
                 {
                     continue;
                 }
@@ -1728,11 +1734,14 @@ impl<'a> Typer<'a> {
             &mut |_| unreachable!("whole argument inference does not choose result reads"),
         )?;
         let generics = &signature.generics;
-        for (generic, value) in generics.iter().zip(&mut found) {
-            if value.is_none() && matches!(generic.kind, GenericKind::Value(_)) {
-                *value = self
-                    .default_constant(candidate, generic)
-                    .map(Argument::Constant);
+        let mut defaulted = Vec::new();
+        for (index, (generic, value)) in generics.iter().zip(&mut found).enumerate() {
+            if value.is_none()
+                && matches!(generic.kind, GenericKind::Value(_))
+                && let Some(default) = self.default_constant(candidate, generic)
+            {
+                *value = Some(Argument::Constant(default));
+                defaulted.push(index);
             }
         }
         let unknown_type = Argument::Type(Type::Unknown);
@@ -1786,8 +1795,13 @@ impl<'a> Typer<'a> {
                         (
                             (operator.module, operator.declaration, public),
                             public_bindings.as_slice(),
+                            reading.defaulted.as_slice(),
                         ),
-                        ((module, declaration, signature), map.as_slice()),
+                        (
+                            (module, declaration, signature),
+                            map.as_slice(),
+                            defaulted.as_slice(),
+                        ),
                     ],
                 );
                 let supplied: Vec<_> = reading
@@ -1810,6 +1824,31 @@ impl<'a> Typer<'a> {
                 if template.result.as_ref() == Some(&Type::Unknown) {
                     template.result.clone_from(&reading.template.result);
                 }
+                let mut law_inputs = Vec::new();
+                if ungrouped(given.node.clone()).kind() == SyntaxKind::FunctionReference {
+                    if let Some(public_slot) = given.key.public_parameter(public) {
+                        law_inputs.extend(self.callback_law_inputs(
+                            (operator.module, operator.declaration, public),
+                            &reading.defaulted,
+                            public_slot,
+                            checking.iter().filter_map(|argument| {
+                                Some((
+                                    argument.key.public_parameter(public)?,
+                                    &argument.node,
+                                    Some(&argument.value),
+                                ))
+                            }),
+                        ));
+                    }
+                    law_inputs.extend(self.callback_law_inputs(
+                        (module, declaration, signature),
+                        &defaulted,
+                        slot.parameter()?,
+                        checking.iter().zip(bound).filter_map(|(argument, slot)| {
+                            Some((slot.parameter()?, &argument.node, Some(&argument.value)))
+                        }),
+                    ));
+                }
                 self.operator_function_argument(
                     &given.node,
                     &template,
@@ -1818,6 +1857,7 @@ impl<'a> Typer<'a> {
                         excluded: &excluded,
                         evidence: Some(&evidence),
                         result_shapes: &result_shapes,
+                        law_inputs: &law_inputs,
                     },
                 )
             } else {
@@ -2973,6 +3013,8 @@ pub(super) struct DependentCallback {
     pub(super) excluded: Vec<String>,
     /// Known bindings of the public operator's generics (GEN-2).
     pub(super) bindings: Vec<(Location, Argument)>,
+    /// Generic value arguments the public call takes from defaults (GEN-8).
+    pub(super) defaulted: Vec<usize>,
     /// Source settings for checking the complete public call after the trial.
     pub(super) call: Option<ReflectedCall>,
 }
@@ -3130,6 +3172,14 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) reflected: Option<&'w [&'w str]>,
     /// Result shapes that the enclosing call independently established (GEN-3).
     pub(super) result_shapes: &'w [&'w Type],
+    /// Enclosing requirements that can be checked with the chosen result (GEN-3).
+    pub(super) result_requirements: &'w [ResultRequirement],
+    /// Prefer a proven receiver in the first complete reflected trial (GEN-3).
+    pub(super) require_receiver_proof: bool,
+    /// The original expressions in the enclosing call's dependent pack (GEN-17).
+    pub(super) supplied: &'w [(Option<&'w str>, &'w Expr)],
+    /// Other known static arguments the receiving declarations query (GEN-18).
+    pub(super) law_inputs: &'w [CallbackLawInput],
 }
 
 /// ERR-6 requires a supplied fallback with the dictionary's exact value
@@ -3243,6 +3293,47 @@ impl CallbackRequest<'_> {
                 (None, None) => true,
                 _ => false,
             }
+    }
+
+    fn receiver_admits(
+        &self,
+        typer: &mut Typer<'_>,
+        (operator, public): (OperatorRef, &Signature),
+        ((module, declaration, taken), generics, packs): (
+            Candidate<'_>,
+            &[Argument],
+            &[hir::TypePackArgument],
+        ),
+    ) -> bool {
+        if self.result_requirements.is_empty() {
+            return true;
+        }
+        // Bind the receiver's packs with the same public callback type
+        // as final selection and the original, unsplit argument types.
+        let declared = &typer.program.modules[module].declarations[declaration];
+        let actual =
+            operator_callback_type(public, taken, declared.kind.role() == Some(Role::Value));
+        let callback = Expr {
+            ty: Type::Function(Box::new(actual)),
+            kind: ExprKind::StaticCallable(Box::new(Callee::Candidate {
+                operator: (operator.module, operator.declaration),
+                operator_generics: Vec::new(),
+                operator_type_packs: Vec::new(),
+                module,
+                declaration,
+                generics: generics.to_vec(),
+                type_packs: packs.to_vec(),
+                requirements: Vec::new(),
+                test_candidates: typer.test_candidates,
+            })),
+            at: declared.at,
+            category: hir::ValueCategory::Value,
+        };
+        self.result_requirements.iter().all(|requirement| {
+            requirement
+                .admits(typer, &callback, self.supplied, self.law_inputs)
+                .unwrap_or(!self.require_receiver_proof)
+        })
     }
 }
 

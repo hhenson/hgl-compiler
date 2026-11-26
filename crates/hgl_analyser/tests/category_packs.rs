@@ -322,6 +322,59 @@ fn ambiguous(items: dict<i64, str>) -> i64 => select(count, items)
 }
 
 #[test]
+fn written_operator_arguments_complete_inputs_without_breaking_ties() {
+    // FN-17 and GEN-5: complete T from the declared alternatives. One
+    // exact candidate wins, but a second leaves the same call ambiguous.
+    let public = r#"module library
+export operator typed<O, T>(value: T) -> O
+impl const fn typed(value: f64) -> i64 => 0
+impl const fn typed(value: i64?) -> i64 => 1
+"#;
+    let caller = r#"module caller
+use library as lib
+use library::{typed}
+impl const fn typed(value: i64) -> i64 => value
+fn members(items: list<i64, 2>) -> list<i64, 2> => map(lib::typed<i64>, value: items)
+fn specific(items: list<i64, 2>) -> list<i64, 2> => map(lib::typed<i64, i64>, items)
+"#;
+    let tied = r#"module tied
+use library::{typed}
+impl const fn typed(value: i64) -> i64 => 2
+"#;
+    for modules in [
+        [
+            ("library.hgl", public),
+            ("caller.hgl", caller),
+            ("tied.hgl", tied),
+        ],
+        [
+            ("tied.hgl", tied),
+            ("caller.hgl", caller),
+            ("library.hgl", public),
+        ],
+    ] {
+        let unique: Vec<_> = modules
+            .iter()
+            .copied()
+            .filter(|(_, source)| *source != tied)
+            .collect();
+        let checked = check(&unique);
+        assert!(!checked.rejected, "{}", checked.report);
+        let checked = check(&modules);
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|finding| (finding.code.as_str(), finding.rule))
+                .collect::<Vec<_>>(),
+            [("type/type.mismatch", "FN-17"); 2],
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+#[test]
 fn negative_and_disjoined_memberships_supply_no_bare_callback_evidence() {
     // GEN-3: a test of argument types can hold without binding a type.
     let source = r#"module m
