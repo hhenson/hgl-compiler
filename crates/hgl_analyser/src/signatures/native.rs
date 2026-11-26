@@ -51,8 +51,9 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                     continue;
                 };
                 let reason = difference(contract, written).or_else(|| {
-                    finite_constraints_differ(module, (public, contract), (part, written))
-                        .then(|| "this declaration admits different types in its constraint".into())
+                    finite_constraints_differ(module, (public, contract), (part, written)).then(
+                        || "this declaration and its implementation admit different types".into(),
+                    )
                 });
                 let Some(reason) = reason else {
                     mismatch = None;
@@ -202,19 +203,28 @@ fn finite_constraints_differ(
     public: (&Declaration, &Signature),
     part: (&Declaration, &Signature),
 ) -> bool {
-    let Some((public_slot, public_types)) = finite_membership(module, public) else {
-        return false;
-    };
-    let Some((part_slot, part_types)) = finite_membership(module, part) else {
-        return false;
-    };
+    let public_requires = child(&public.0.syntax, SyntaxKind::RequiresClause);
+    let part_requires = child(&part.0.syntax, SyntaxKind::RequiresClause);
+    let public_bound = public_requires
+        .as_ref()
+        .and_then(|requires| finite_membership(module, public, requires));
+    let part_bound = part_requires
+        .as_ref()
+        .and_then(|requires| finite_membership(module, part, requires));
     let excludes_a_type = |a: &[&Type], b: &[&Type]| {
         a.iter()
             .any(|ty| b.iter().all(|other| same_type(ty, other) == Some(false)))
     };
-    public_slot != part_slot
-        || excludes_a_type(&public_types, &part_types)
-        || excludes_a_type(&part_types, &public_types)
+    match (public_bound, part_bound) {
+        (Some((public_slot, public_types)), Some((part_slot, part_types))) => {
+            public_slot != part_slot
+                || excludes_a_type(&public_types, &part_types)
+                || excludes_a_type(&part_types, &public_types)
+        }
+        (Some(_), None) => part_requires.is_none(),
+        (None, Some(_)) => public_requires.is_none(),
+        (None, None) => false,
+    }
 }
 
 /// Read the simplest finite constraint: one generic type parameter in a
@@ -223,8 +233,8 @@ fn finite_constraints_differ(
 fn finite_membership<'a>(
     module: &'a Module,
     (declaration, signature): (&Declaration, &Signature),
+    requires: &SyntaxNode,
 ) -> Option<(usize, Vec<&'a Type>)> {
-    let requires = child(&declaration.syntax, SyntaxKind::RequiresClause)?;
     let relation = requires.children().next()?;
     if relation.kind() != SyntaxKind::ConstraintRelation
         || !tokens(&relation).any(|token| token.text() == "in")

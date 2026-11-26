@@ -1231,6 +1231,45 @@ fn native_parts_match_finite_type_constraints() {
     );
 }
 
+/// NATIVE-2: a native declaration and its part must both state the
+/// finite membership when either side restricts the parameter's type.
+#[test]
+fn native_parts_match_whether_a_finite_constraint_is_present() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module m\n",
+                "native const fn missing<T>(value: T) -> i64 requires T in {str, bool}\n",
+                "native const fn extra<T>(value: T) -> i64\n",
+                "operator missing_candidate<T>(value: T) -> i64\n",
+                "native impl const fn missing_candidate<T>(value: T) -> i64 requires T in {str, bool}\n",
+                "operator extra_candidate<T>(value: T) -> i64\n",
+                "native impl const fn extra_candidate<T>(value: T) -> i64\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module m part sdk\n",
+                "native const fn missing<A>(value: A) -> i64 {}\n",
+                "native const fn extra<A>(value: A) -> i64 requires A in {str, bool} {}\n",
+                "native impl const fn missing_candidate<A>(value: A) -> i64 {}\n",
+                "native impl const fn extra_candidate<A>(value: A) -> i64 requires A in {str, bool} {}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "provider.hgl:2:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:3:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:4:22 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:5:22 name/native.missing_declaration NATIVE-2",
+        ]
+    );
+}
+
 /// NATIVE-2 compares known callback types. A symbolic size belongs to
 /// the signature that declares it and leaves that comparison deferred.
 #[test]
