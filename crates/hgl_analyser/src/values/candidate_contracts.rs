@@ -421,19 +421,76 @@ fn constant_needs_binding_check(
     }
 }
 
-fn mismatched_result(expected: &Type, actual: &Type) -> bool {
-    result_types_differ(expected, actual)
-        // GEN-6 leaves wrapper-only differences open. The payload still
-        // establishes a contradiction when it is known to differ.
-        && result_types_differ(result_payload(expected), result_payload(actual))
+/// The public result fixed by these inputs can promise a result while the
+/// implementation promises its successful payload (GEN-6). An independent
+/// output generic supplies no such promise.
+pub(super) fn guarantees_success(
+    public: &Signature,
+    candidate: &Signature,
+    role: Role,
+    requested: &Type,
+) -> bool {
+    let Some(implementation) = &candidate.result else {
+        return false;
+    };
+    let Some(parameters) = parameter_types(public, candidate, role) else {
+        return false;
+    };
+    let bindings: Vec<_> = public
+        .generics
+        .iter()
+        .zip(&parameters.arguments)
+        .map(|(generic, argument)| (generic.at, argument))
+        .collect();
+    let Some(result) = bind_result(public.result.as_ref(), &bindings) else {
+        return false;
+    };
+    let mut expected = result_in_candidate(result, public, candidate, &bindings, &parameters);
+    if let Type::Nullable(inner) = expected {
+        expected = *inner;
+    }
+    let Type::Result { value, error } = &expected else {
+        return false;
+    };
+    **error == Type::Error
+        && !result_types_differ(&expected, requested)
+        && same_type(&expected, implementation) != Some(true)
+        && payload_fits(value, implementation, |left, right| {
+            same_type(left, right) == Some(true)
+        })
 }
 
-fn result_payload(mut ty: &Type) -> &Type {
-    loop {
-        ty = match ty {
-            Type::Nullable(value) => value,
-            Type::Result { value, error } if **error == Type::Error => value,
-            _ => return ty,
-        }
+/// GEN-6: a candidate may guarantee the value of a nullable or fallible
+/// operator result. A fixed plain result admits neither possible failure.
+fn mismatched_result(expected: &Type, actual: &Type) -> bool {
+    // A repeated candidate variable is a known relationship even before its
+    // type is chosen: `X` and a wrapper around that same `X` cannot agree.
+    if let Type::Parameter { .. } = expected
+        && wrapper_payload(actual) == Some(expected)
+    {
+        return true;
+    }
+    let fits = |left: &Type, right: &Type| !result_types_differ(left, right);
+    if payload_fits(expected, actual, fits) {
+        return false;
+    }
+    let result = match expected {
+        Type::Nullable(inner) => inner.as_ref(),
+        expected => expected,
+    };
+    !matches!(result, Type::Result { value, error }
+        if **error == Type::Error && payload_fits(value, actual, fits))
+}
+
+/// TYPE-14: a nullable payload also admits the value it contains.
+fn payload_fits(expected: &Type, actual: &Type, fits: impl Fn(&Type, &Type) -> bool) -> bool {
+    fits(expected, actual) || matches!(expected, Type::Nullable(inner) if fits(inner, actual))
+}
+
+fn wrapper_payload(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Nullable(value) => Some(value),
+        Type::Result { value, error } if **error == Type::Error => Some(value),
+        _ => None,
     }
 }

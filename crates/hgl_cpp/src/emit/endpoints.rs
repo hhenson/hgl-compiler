@@ -29,7 +29,7 @@ use hgl_lower::calls::runtime_arguments;
 use super::Emitter;
 use super::forms::Family;
 use super::names::{identifier, temporary};
-use super::nodes::{Kind, Role};
+use super::nodes::{Kind, OUT, Role};
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
@@ -277,6 +277,12 @@ impl Family for Endpoints {
                         Type::Nullable(payload) if **payload == value.ty => format!("(*{read})"),
                         _ => read,
                     })
+                }
+                // TIME-7: scalar writes update the output view used by the hook.
+                Role::Out if matches!(locals[*local].ty, Type::Scalar(_)) => {
+                    scope.read = true;
+                    scope.acted = true;
+                    Some(format!("::{lib}::checked_whole({OUT})"))
                 }
                 Role::Out => Some(emitter.missing(value.at, "a read of `out`")),
                 Role::Plain | Role::Connection => None,
