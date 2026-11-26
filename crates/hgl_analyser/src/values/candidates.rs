@@ -2088,7 +2088,8 @@ impl<'a> Typer<'a> {
         let member_dependencies = self.stated_member_dependencies(&evidence_types);
         // Ordinary memberships can constrain the call directly or through
         // the stated type or key of one of its reflected members.
-        let memberships: Vec<(Location, Vec<Argument>)> = self
+        let domains = self.finite_domains();
+        let memberships: Vec<(Location, Vec<Argument>)> = domains
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
@@ -2171,7 +2172,7 @@ impl<'a> Typer<'a> {
                     Err(Fault::NotConstant)
                 )
         });
-        let mut ordinary_trials = combinations(&memberships);
+        let mut ordinary_trials = domains.ordinary_trials(&memberships);
         if memberships.is_empty() && uses_member {
             ordinary_trials.push(Vec::new());
         }
@@ -2193,11 +2194,12 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, arg)| (*at, arg))
                 .collect();
-            let Some(member_choices) = self.stated_member_choices(&evidence_types, &bindings)
+            let Some(member_choices) =
+                self.stated_member_choices(&evidence_types, &bindings, &domains)
             else {
                 continue;
             };
-            let mut member_trials = combinations(&member_choices);
+            let mut member_trials = domains.member_trials(&member_choices, &bindings);
             if member_choices.is_empty() {
                 if memberships.is_empty() {
                     failed = Some((Vec::new(), Vec::new(), unsettled(self)));

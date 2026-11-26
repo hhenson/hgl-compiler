@@ -3,6 +3,9 @@
 //! body may call because its requirements name them (GEN-3, GEN-7,
 //! GEN-15, GEN-16). Part of the typing pass ([`super`]).
 
+mod finite;
+
+use finite::FiniteDomains;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -222,42 +225,6 @@ impl<'a> Typer<'a> {
             ));
         }
         bound
-    }
-
-    /// The memberships the `requires` of the declaration being read
-    /// states of its generic parameters, each parameter where it is
-    /// declared with its members: `T in {i64, f64}` of a type parameter,
-    /// `T == i64` as a membership of one, and `M in {.slow, .fast}` of a
-    /// generic value parameter, each member read as a value of `M`'s
-    /// type. Only those that hold wherever the condition does: alone or
-    /// joined to the rest by `&&` (GEN-15). A parameter stated twice is
-    /// in each: its members are those of the first.
-    ///
-    /// GEN-3: "A membership of a type parameter in a set of types,
-    /// `requires T in {i64, f64}`, authorizes in the body (GEN-7) an
-    /// operation that each listed type has a candidate for"; and,
-    /// proposed, one of a generic value parameter a call that gives it
-    /// as an option.
-    pub(super) fn memberships(&self) -> Vec<(Location, Vec<Argument>)> {
-        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
-            return Vec::new();
-        };
-        let mut relations = Vec::new();
-        if let Some(condition) = clause.children().next() {
-            conjoined_relations(&condition, &mut relations);
-        }
-        let own: Vec<Location> = self
-            .signature
-            .generics
-            .iter()
-            .map(|generic| generic.at)
-            .collect();
-        let mut seen = HashSet::new();
-        relations
-            .iter()
-            .filter_map(|relation| self.stated_membership(relation, &own))
-            .filter(|(at, _)| seen.insert(*at))
-            .collect()
     }
 
     /// SOURCE-2 and GEN-7: the known type bound on a yield time's
@@ -739,7 +706,8 @@ impl<'a> Typer<'a> {
                 &|_| false,
             )
         });
-        let memberships: Vec<(Location, Vec<Argument>)> = self
+        let domains = self.finite_domains();
+        let memberships: Vec<(Location, Vec<Argument>)> = domains
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
@@ -748,7 +716,17 @@ impl<'a> Typer<'a> {
                     || packs_pass_on(type_packs, &[*parameter])
             })
             .collect();
-        let mut combinations = super::candidates::combinations(&memberships);
+        if memberships.iter().any(|(_, choices)| choices.is_empty()) {
+            self.diagnostics.emit(untold_with_reason(
+                program,
+                callee,
+                at,
+                condition,
+                "no combination satisfies the stated finite requirements",
+            ));
+            return !reflected;
+        }
+        let mut combinations = domains.ordinary_trials(&memberships);
         if memberships.is_empty() {
             combinations.push(Vec::new());
         }
@@ -772,7 +750,9 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
                 .collect();
-            let Some(member_choices) = self.stated_member_choices(&evidence_types, &given) else {
+            let Some(member_choices) =
+                self.stated_member_choices(&evidence_types, &given, &domains)
+            else {
                 continue;
             };
             // ERR-9: "Failure during argument evaluation precedes later
@@ -800,8 +780,8 @@ impl<'a> Typer<'a> {
                 });
                 return true;
             }
-            let mut member_trials = super::candidates::combinations(&member_choices);
-            if member_trials.is_empty() {
+            let mut member_trials = domains.member_trials(&member_choices, &given);
+            if member_choices.is_empty() {
                 member_trials.push(Vec::new());
             }
             let Some(rest) = remaining.checked_sub(member_trials.len()) else {
@@ -1126,8 +1106,10 @@ impl<'a> Typer<'a> {
         &self,
         types: &[&Type],
         given: &[(Location, &Argument)],
+        domains: &FiniteDomains,
     ) -> Option<Vec<MemberChoices>> {
-        let bounds = self.stated_pack_members();
+        let mut bounds = self.stated_pack_members();
+        domains.add_member_bounds(&mut bounds, given);
         if bounds.is_empty() {
             return Some(Vec::new());
         }

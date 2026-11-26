@@ -14,6 +14,85 @@ use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategor
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// GEN-3 and GEN-7: a generic declaration must support each type admitted
+/// by all of its conjoined memberships and equalities, in either order.
+#[test]
+fn ordinary_finite_requirements_intersect() {
+    for (condition, accepted) in [
+        ("T in {i64, f64} && T in {i64, str}", true),
+        ("T in {i64, str} && T in {i64, f64}", true),
+        ("T in {str, i64} && T == i64", true),
+        ("i64 == T && T in {str, i64}", true),
+        ("T in {str, i64} && T in {str, f64}", false),
+        ("T == i64 && T == f64", false),
+        ("T == f64 && T == i64", false),
+    ] {
+        let checked = module(&format!(
+            "const fn difference<T>(x: T, y: T) -> T requires {condition} => x - y\n"
+        ));
+        if accepted {
+            assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        }
+    }
+}
+
+/// GEN-3, GEN-7 and GEN-17: carry finite bounds across positive equality
+/// chains. A function and an operator can each use the resulting type.
+#[test]
+fn transitive_ordinary_and_reflected_bounds_prove_calls() {
+    let definitions = concat!(
+        "const left: str = \"left\"\nconst right: str = \"right\"\n",
+        "const fn need_float<X>(x: X) -> X requires X == f64 => x\n",
+        "operator pick<X>(x: X) -> X\nimpl const fn pick(x: f64) -> f64 => x\n",
+        "const fn proof<T, U, ...P>(f: const fn(...{P}) -> i64, x: T, u: U, y: P[left]) -> f64\n",
+    );
+    for condition in [
+        "T in {f64, i64} && T == U && U == P[left] && U in {str, f64}",
+        "U in {str, f64} && P[left] == U && U == T && T in {f64, i64}",
+        "T in {f64, i64} && T == P[left] && P[left] == P[right] && P[right] in {str, f64}",
+        "P[right] in {str, f64} && P[right] == P[left] && P[left] == T && T in {f64, i64}",
+    ] {
+        // The wrapper returns a fixed type so its two proof obligations can
+        // use different inputs without adding a conversion between them.
+        let source = format!(
+            "{definitions}    requires {condition} {{\n    let v: T = need_float<T>(x)\n    let w: P[left] = pick(y)\n    return 2.0\n}}\n"
+        );
+        let checked = module(&source);
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+}
+
+/// GEN-7 and GEN-17: the same-type pairs have candidates. Independent
+/// reflected keys also admit mixed pairs, for which no candidate exists.
+#[test]
+fn explicitly_equal_keys_share_one_trial_type() {
+    let definitions = concat!(
+        "const a: str = \"a\"\nconst b: str = \"b\"\n",
+        "operator pair<X, Y>(x: X, y: Y) -> i64\n",
+        "impl const fn pair(x: i64, y: i64) -> i64 => 1\n",
+        "impl const fn pair(x: f64, y: f64) -> i64 => 2\n",
+        "const fn proof<...P>(cb: const fn(...{P}) -> i64, x: P[a], y: P[b]) -> i64\n",
+        "    requires P[a] in {i64, f64} && P[b] in {i64, f64}",
+    );
+    for (condition, accepted) in [
+        (" && P[a] == P[b]", true),
+        (" && P[b] == P[a]", true),
+        (" && (P[a] == P[b] || P[a] == i64)", false),
+        ("", false),
+    ] {
+        let checked = module(&format!("{definitions}{condition} => pair(x, y)\n"));
+        if accepted {
+            assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        }
+    }
+}
+
 /// GEN-3, GEN-7 and GEN-17: a reflected member's stated type can
 /// authorize arithmetic. Every alternative must admit it.
 #[test]

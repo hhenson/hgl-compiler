@@ -677,7 +677,8 @@ fn shared_bindings_agree(readings: &[Option<&MemberReading<'_>>]) -> bool {
     true
 }
 
-fn same_argument(one: &Argument, two: &Argument) -> Option<bool> {
+/// Known equality of types or constant values, independent of their spelling.
+pub(super) fn same_argument(one: &Argument, two: &Argument) -> Option<bool> {
     match (one, two) {
         (Argument::Type(one), Argument::Type(two)) => same_type(one, two),
         (Argument::Constant(one), Argument::Constant(two)) => one.value.same(&two.value),
