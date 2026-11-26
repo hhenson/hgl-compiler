@@ -423,8 +423,9 @@ fn core_is_supplied_when_the_roots_hold_none() {
     let own = hgl(&["check", "--modules", &root, &argument(&core)]);
     let stdout = text(&own.stdout);
     assert!(own.status.success(), "{}", text(&own.stderr));
+    let files = hgl_analyser::CORE_FILES.len() + 1;
     assert!(
-        stdout.contains("checked 15 files in 2 modules: no errors\n"),
+        stdout.contains(&format!("checked {files} files in 2 modules: no errors\n")),
         "{stdout}"
     );
     assert!(stdout.contains("module core\n"), "{stdout}");
