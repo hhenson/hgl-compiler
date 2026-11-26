@@ -1305,7 +1305,7 @@ impl<'a> Typer<'a> {
             self.read_dependent_call(
                 (name, list),
                 (callable, dependent),
-                (slots, &map),
+                (slots, &map, &defaulted),
                 (&mut assigned, &mut values),
             )
         });

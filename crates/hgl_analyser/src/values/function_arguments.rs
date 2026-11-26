@@ -18,6 +18,7 @@ use super::forwarded_packs::spread_operands;
 use super::inference::{
     ExplicitGenerics, infer, mentions, pack_bounds, tuple_pack_bindings, type_pack, unsaid,
 };
+use super::law_calls::CallbackLawInput;
 use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, same_type, substitute_within};
 use crate::hir::{
@@ -734,6 +735,7 @@ impl<'a> Typer<'a> {
                 result_shapes,
                 result_requirements,
                 supplied: inputs.supplied.unwrap_or_default(),
+                law_inputs: inputs.law_inputs,
             }),
         };
         self.with_callback_role(template, |typer, role| {
@@ -1578,6 +1580,8 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) evidence: Option<&'a CallbackEvidence>,
     /// Known parts of the callback result required by other static arguments.
     pub(super) result_shapes: &'a [Type],
+    /// Other static arguments already known to the receiver (GEN-18).
+    pub(super) law_inputs: &'a [CallbackLawInput],
 }
 
 impl CallbackInputs<'_> {
@@ -1942,6 +1946,7 @@ fn reflected_arguments<'a>(
                     result_shapes: &shapes,
                     result_requirements: &[],
                     supplied: &[],
+                    law_inputs: &[],
                 }),
             };
             let possible = typer.with_callback_role(template, |typer, role| {

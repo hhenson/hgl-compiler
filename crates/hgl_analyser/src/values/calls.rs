@@ -1734,24 +1734,18 @@ impl<'a> Typer<'a> {
             &known_packs,
             &mut found,
         );
-        for &index in &defaulted {
-            if let Some(default) =
-                super::constants::generic_default(&callee.syntax, &generics[index])
-                && let Some(value) =
-                    self.law_call((module, declaration), signature, &default, &|parameter| {
-                        arguments
-                            .iter()
-                            .find(|argument| argument.parameter == Some(parameter))
-                            .map(|argument| &argument.value)
-                    })
-            {
-                let value = value.map_or(ConstantValue::Unknown, ConstantValue::Bool);
-                found[index] = Some(Argument::Constant(crate::types::Constant {
-                    text: default.text().to_string(),
-                    value,
-                }));
-            }
-        }
+        self.apply_law_defaults(
+            (module, declaration),
+            signature,
+            &defaulted,
+            &mut found,
+            &|typer, parameter, law| {
+                arguments
+                    .iter()
+                    .find(|argument| argument.parameter == Some(parameter))
+                    .and_then(|argument| typer.law_value(law, &argument.value))
+            },
+        );
         self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 
         // GEN-8: "A call rejects when it leaves a generic parameter

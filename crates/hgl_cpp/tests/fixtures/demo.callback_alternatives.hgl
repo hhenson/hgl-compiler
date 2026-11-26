@@ -220,3 +220,119 @@ test receiver_requirements_use_the_known_pack_and_options {
     assert eval constrained_price(xs: [[23, 42]]) == [23]
     assert eval configured_price(xs: [[23, 42]]) == [23]
 }
+
+operator meld<const N: i64, T>(a: T, b: T) -> T
+    properties<list<i64, 2>> { associative }
+impl const fn meld(a: i64, b: i64) -> i64 => a + b
+impl const fn meld(a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> =>
+    [a[0] + b[0], a[1] + b[1]]
+
+operator inverse_meld<const N: i64, T>(a: T, b: T) -> T
+    properties<i64> { associative }
+impl const fn inverse_meld(a: i64, b: i64) -> i64 => a + b
+impl const fn inverse_meld(a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> =>
+    [a[0] + b[0], a[1] + b[1]]
+
+const fn sibling(a: i64, b: i64) -> i64 => a - b
+
+const fn law_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires associative(f) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn inverse_law_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires !associative(f) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn sibling_law_head<R, ...Ps, ...As>(
+    other: const fn(i64, i64) -> i64, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (associative(other) || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn default_law_head<R, const Permits: bool = associative(f), ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires Permits && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn sibling_default_law_head<R, const Permits: bool = associative(other), ...Ps, ...As>(
+    other: const fn(i64, i64) -> i64, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (Permits || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 => law_head(meld<4>, a, b)
+fn inverse_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    inverse_law_head(inverse_meld<4>, a, b)
+fn sibling_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_law_head(sibling, meld<4>, a, b)
+fn default_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    default_law_head(meld<4>, a, b)
+fn inferred_sibling_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_law_head(fn(left, right) => left - right, meld<4>, a, b)
+fn written_sibling_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_law_head((fn(left: i64, right: i64) => left - right), meld<4>, a, b)
+fn inferred_default_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_default_law_head(fn(left, right) => left - right, meld<4>, a, b)
+fn written_default_law_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    sibling_default_law_head(fn(left: i64, right: i64) => left - right, meld<4>, a, b)
+
+test receiver_requirements_use_laws_for_each_trial {
+    assert eval law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval inverse_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval sibling_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval default_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval inferred_sibling_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval written_sibling_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval inferred_default_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval written_default_law_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+}
+
+operator domain_sibling<T>(a: T, b: T) -> T
+    properties<list<i64, 2>> { associative }
+impl const fn domain_sibling(a: i64, b: i64) -> i64 => a - b
+impl const fn domain_sibling(a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> => a
+
+const fn fitted_sibling_head<R, ...Ps, ...As>(
+    other: const fn(R, R) -> R, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires associative(other) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn fitted_default_head<R, const Permits: bool = associative(other), ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, other: const fn(R, R) -> R, args: ...{As for f},
+) -> i64 requires Permits && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn fitted_sibling_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    fitted_sibling_head(domain_sibling, meld<4>, a, b)
+fn fitted_default_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    fitted_default_head(meld<4>, domain_sibling, a, b)
+
+const fn symbolic_sibling<X>(a: X, b: X) -> X => a
+
+const fn symbolic_head<H, R, ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (associative(other) || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn symbolic_default_head<H, R, const Permits: bool = associative(other), ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (Permits || R == list<i64, 2>)
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn symbolic_meld<G>(a: list<i64, 2>, b: list<i64, 2>, token: G) -> i64 =>
+    symbolic_head(token, symbolic_sibling, meld<4>, a, b)
+const fn symbolic_default_meld<G>(a: list<i64, 2>, b: list<i64, 2>, token: G) -> i64 =>
+    symbolic_default_head(token, symbolic_sibling<G>, meld<4>, a, b)
+fn check_symbolic_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    symbolic_meld(a, b, 17)
+fn check_symbolic_default_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    symbolic_default_meld(a, b, true)
+
+test receiver_law_siblings_take_the_trials_result_type {
+    assert eval fitted_sibling_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval fitted_default_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval check_symbolic_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval check_symbolic_default_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+}

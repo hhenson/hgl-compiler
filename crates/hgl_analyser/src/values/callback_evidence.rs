@@ -7,9 +7,11 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use super::Candidate;
 use super::Typer;
 use super::candidates::{Specific, alternative_specificity};
+use super::constants::generic_default;
 use super::dependent_packs::{bind, dependent_slot, pack_exclusions, reflected_argument};
 use super::fit::{open, whole};
 use super::inference::{infer, mentions, type_pack, unsaid};
+use super::law_calls::CallbackLawInput;
 use super::requirements::{conjoined_terms, pack_view};
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_with_packs, substitute_within,
@@ -76,10 +78,12 @@ impl CallbackEvidence {
     /// Read the receiver's evidence and, in an operator trial, its candidate's.
     pub(super) fn from_callables<'a, 'b>(
         program: &Program,
-        callables: impl IntoIterator<Item = (Candidate<'a>, &'b [(Location, &'b Argument)])>,
+        callables: impl IntoIterator<
+            Item = (Candidate<'a>, &'b [(Location, &'b Argument)], &'b [usize]),
+        >,
     ) -> Self {
         let mut evidence = Self::default();
-        for ((module, declaration, signature), bindings) in callables {
+        for ((module, declaration, signature), bindings, defaulted) in callables {
             let fixed: Vec<_> = bindings
                 .iter()
                 .copied()
@@ -262,7 +266,15 @@ impl CallbackEvidence {
                 .extend(relations.iter().filter_map(|(relation, bound)| {
                     ArgumentPatterns::read(relation, *bound, source, target, &generics, &type_at)
                 }));
-            if !equalities.is_empty()
+            let laws = condition.descendants().any(|node| {
+                node.kind() == SyntaxKind::ConstraintCall
+                    && crate::laws::query(unit, declared.at.file, &node).is_some()
+            }) || defaulted.iter().any(|&index| {
+                generic_default(&declared.syntax, &signature.generics[index])
+                    .is_some_and(|node| crate::laws::default_parameter(signature, &node).is_some())
+            });
+            if laws
+                || !equalities.is_empty()
                 || template
                     .result
                     .as_ref()
@@ -275,6 +287,8 @@ impl CallbackEvidence {
                     found,
                     equalities,
                     result: template.result.clone(),
+                    defaulted: defaulted.to_vec(),
+                    laws,
                 });
             }
         }
@@ -369,6 +383,8 @@ struct EnclosingBindings {
     found: Vec<Option<Argument>>,
     equalities: Vec<(Type, Type)>,
     result: Option<Type>,
+    defaulted: Vec<usize>,
+    laws: bool,
 }
 
 /// Result shapes and finite restrictions that hold for a reflected reading.
@@ -384,6 +400,7 @@ pub(super) struct ReflectedResultEvidence {
 pub(super) struct ResultRequirement {
     declaration: (usize, usize),
     known: Vec<Option<Argument>>,
+    defaulted: Vec<usize>,
 }
 
 impl ResultRequirement {
@@ -393,6 +410,7 @@ impl ResultRequirement {
         typer: &mut Typer<'_>,
         callback: &Expr,
         supplied: &[(Option<&str>, &Expr)],
+        law_inputs: &[CallbackLawInput],
     ) -> bool {
         let program = typer.program;
         let (module, declaration) = self.declaration;
@@ -405,15 +423,21 @@ impl ResultRequirement {
             return true;
         };
         let dependent = &unit.dependent_packs[&input.at];
-        let Some(template) = signature.parameters.iter().find_map(|parameter| {
-            if parameter.at == dependent.function
-                && let Type::Function(template) = &parameter.ty
-            {
-                Some(template)
-            } else {
-                None
-            }
-        }) else {
+        let Some((callback_slot, template)) =
+            signature
+                .parameters
+                .iter()
+                .enumerate()
+                .find_map(|(slot, parameter)| {
+                    if parameter.at == dependent.function
+                        && let Type::Function(template) = &parameter.ty
+                    {
+                        Some((slot, template))
+                    } else {
+                        None
+                    }
+                })
+        else {
             return true;
         };
         let Type::Function(actual) = &callback.ty else {
@@ -451,7 +475,32 @@ impl ResultRequirement {
                 ));
             }
         }
-        typer.callback_requirement_holds(self.declaration, &found, &packs) != Some(false)
+        let Ok(siblings) = typer.read_law_siblings(
+            (self.declaration, signature),
+            &mut found,
+            &packs,
+            law_inputs,
+        ) else {
+            return false;
+        };
+        let argument = |typer: &Typer<'_>, slot, law| {
+            if slot == callback_slot {
+                typer.law_value(law, callback)
+            } else if let Some((_, value)) = siblings.iter().find(|(index, _)| *index == slot) {
+                typer.law_value(law, value)
+            } else {
+                law_inputs
+                    .iter()
+                    .find_map(|known| known.answer(typer, self.declaration, slot, law))
+                    .flatten()
+            }
+        };
+        typer.callback_requirement_holds(
+            (self.declaration, signature),
+            (&mut found, &self.defaulted),
+            &packs,
+            &argument,
+        ) != Some(false)
     }
 }
 
@@ -482,10 +531,11 @@ impl EnclosingBindings {
         if learned {
             super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
         }
-        if include_requirements && self.result.is_some() {
+        if include_requirements && (self.result.is_some() || self.laws) {
             evidence.requirements.push(ResultRequirement {
                 declaration: (self.module, self.declaration),
                 known: found.clone(),
+                defaulted: self.defaulted.clone(),
             });
         }
         if !learned {

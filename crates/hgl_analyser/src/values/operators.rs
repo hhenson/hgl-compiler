@@ -416,7 +416,8 @@ impl<'a> Typer<'a> {
             && std::iter::once((operator.module, operator.declaration, public))
                 .chain(candidates.iter().copied())
                 .any(|candidate| {
-                    !CallbackEvidence::from_callables(program, [(candidate, &[][..])]).is_empty()
+                    !CallbackEvidence::from_callables(program, [(candidate, &[][..], &[][..])])
+                        .is_empty()
                 });
         let signature = (operator, public, dependent_pack, candidate_evidence);
         let written =
@@ -1117,17 +1118,20 @@ impl<'a> Typer<'a> {
         candidates: &[Candidate<'_>],
     ) -> Vec<Given> {
         let declared = &self.program.modules[operator.module].declarations[operator.declaration];
+        let mut defaulted = Vec::new();
         let resolved: Vec<_> = context
             .unwrap_or_default()
             .iter()
             .zip(&public.generics)
-            .map(|(value, generic)| {
+            .enumerate()
+            .map(|(index, (value, generic))| {
                 value
                     .clone()
                     .or_else(|| {
                         dependent?;
-                        self.default_constant(declared, generic)
-                            .map(Argument::Constant)
+                        let default = self.default_constant(declared, generic)?;
+                        defaulted.push(index);
+                        Some(Argument::Constant(default))
                     })
                     .unwrap_or(Argument::Type(Type::Unknown))
             })
@@ -1144,6 +1148,7 @@ impl<'a> Typer<'a> {
                 [(
                     (operator.module, operator.declaration, public),
                     map.as_slice(),
+                    defaulted.as_slice(),
                 )],
             )
         });
@@ -1215,6 +1220,31 @@ impl<'a> Typer<'a> {
                 ))
             })
             .unwrap_or_default();
+        let law_inputs = dependent
+            .and_then(|pack| {
+                public
+                    .parameters
+                    .iter()
+                    .position(|parameter| parameter.at == pack.function)
+            })
+            .filter(|&slot| {
+                written.iter().any(|(key, node, ready)| {
+                    key.public_parameter(public) == Some(slot)
+                        && ready.is_none()
+                        && ungrouped(node.clone()).kind() == SyntaxKind::FunctionReference
+                        && !(candidate_evidence && self.uses_callback_evidence(node))
+                })
+            })
+            .map_or_else(Vec::new, |slot| {
+                self.callback_law_inputs(
+                    (operator.module, operator.declaration, public),
+                    &defaulted,
+                    slot,
+                    written.iter().filter_map(|(key, node, ready)| {
+                        Some((key.public_parameter(public)?, node, ready.as_ref()))
+                    }),
+                )
+            });
         written
             .into_iter()
             .enumerate()
@@ -1258,6 +1288,7 @@ impl<'a> Typer<'a> {
                         excluded: excluded.iter().map(|name| (*name).to_string()).collect(),
                         call: None,
                         bindings: map.iter().map(|(at, value)| (*at, (*value).clone())).collect(),
+                        defaulted: defaulted.clone(),
                     })),
                     _ => None,
                 })
@@ -1310,6 +1341,7 @@ impl<'a> Typer<'a> {
                             excluded: &excluded,
                             evidence: evidence.as_ref(),
                             result_shapes: &result_shapes,
+                            law_inputs: &law_inputs,
                         }
                     } else {
                         CallbackInputs::default()

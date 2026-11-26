@@ -13,7 +13,7 @@ use super::inference::{pack_bounds, type_pack};
 use super::{Candidate, Typer};
 use crate::declared::{substitute_with_packs, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, ReflectedInputs, TypePackArgument};
-use crate::syntax::child;
+use crate::syntax::{child, ungrouped};
 use crate::types::{
     Argument as GenericArgument, Constant, ConstantValue, Detail, FunctionType, GenericParameter,
     Pack, Signature, Type,
@@ -421,7 +421,7 @@ impl Typer<'_> {
         &mut self,
         (name, list): (&SyntaxToken, &SyntaxNode),
         (callable, dependent): (Candidate<'_>, Option<usize>),
-        (slots, map): (&[Slot<'_>], &[(Location, &GenericArgument)]),
+        (slots, map, defaulted): (&[Slot<'_>], &[(Location, &GenericArgument)], &[usize]),
         (assigned, values): (&mut [Assigned], &mut [Option<Expr>]),
     ) -> Vec<TypePackArgument> {
         let program = self.program;
@@ -435,8 +435,8 @@ impl Typer<'_> {
                 let parameter = &signature.parameters[slot];
                 (slot, &declared.dependent_packs[&parameter.at])
             });
-        let evidence =
-            dependent.map(|_| CallbackEvidence::from_callables(program, [(callable, map)]));
+        let evidence = dependent
+            .map(|_| CallbackEvidence::from_callables(program, [(callable, map, defaulted)]));
         let mut packs = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let Type::Function(template) = &parameter.ty else {
@@ -501,6 +501,27 @@ impl Typer<'_> {
                 } else {
                     Vec::new()
                 };
+            let law_inputs = if for_this.is_some()
+                && ungrouped(assigned[position].value.clone()).kind()
+                    == hgl_parser::SyntaxKind::FunctionReference
+            {
+                self.callback_law_inputs(
+                    callable,
+                    defaulted,
+                    index,
+                    assigned
+                        .iter()
+                        .zip(values.iter())
+                        .filter_map(|(entry, value)| {
+                            let known = value
+                                .as_ref()
+                                .or_else(|| entry.forwarded.as_ref().map(|(_, value)| value));
+                            Some((entry.slot?, &entry.value, known))
+                        }),
+                )
+            } else {
+                Vec::new()
+            };
             let mut callback = self.function_argument_with_inputs(
                 &assigned[position].value,
                 &template,
@@ -509,6 +530,7 @@ impl Typer<'_> {
                     excluded: &excluded,
                     evidence: evidence.as_ref().filter(|_| for_this.is_some()),
                     result_shapes: &result_shapes,
+                    law_inputs: &law_inputs,
                 },
             );
             let mut reflected = reflect(&template, &callback);

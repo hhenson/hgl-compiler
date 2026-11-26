@@ -1525,14 +1525,20 @@ impl<'a> Typer<'a> {
     /// Unknown operands remain for the ordinary call check.
     pub(super) fn callback_requirement_holds(
         &mut self,
-        target: (usize, usize),
-        bindings: &[Option<Argument>],
+        (target, signature): ((usize, usize), &Signature),
+        (bindings, defaulted): (&mut [Option<Argument>], &[usize]),
         packs: &[hir::TypePackArgument],
+        argument: &dyn Fn(&Typer<'_>, usize, crate::laws::Law) -> Option<bool>,
     ) -> Option<bool> {
-        let (parameters, _) = required(self.program, target)?;
-        let arguments: Vec<_> = parameters
+        let (_, condition) = required(self.program, target)?;
+        self.apply_law_defaults(target, signature, defaulted, bindings, argument);
+        let laws = crate::laws::verdicts(&condition, &|node| {
+            self.law_answer(target, signature, node, argument)
+        });
+        let arguments: Vec<_> = signature
+            .generics
             .iter()
-            .zip(bindings)
+            .zip(bindings.iter())
             .map(|(parameter, bound)| {
                 bound.clone().unwrap_or_else(|| match parameter.kind {
                     GenericKind::Value(_) => Argument::Constant(unsaid()),
@@ -1541,7 +1547,7 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let mark = self.mark();
-        let verdict = self.requires_told_with_packs(target, &arguments, packs, None);
+        let verdict = self.requires_told_with_laws(target, &arguments, packs, None, &laws);
         self.take_back(mark, false)
             .then_some(verdict)
             .flatten()
