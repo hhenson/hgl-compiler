@@ -569,3 +569,21 @@ test exported_changing_route_rejects_after_start {
 test exported_changing_route_accepts_a_safe_step {
     eval changing_export_node(depth: 0, divisor: 1)
 }
+
+# TIME-8, CAP-6: a reached float route does not fix an unvisited integer cycle.
+operator partial_store<S,T>(store:S, const key:str, value:T) requires S in {GlobalState}
+impl const fn partial_store(store:GlobalState, const key:str, value:i64) {
+    put(store, key, value)
+    partial_relay(store, key + "put", 1.5)
+    partial_store(store, "run.output", 1)
+}
+impl const fn partial_store(store:GlobalState, const key:str, value:f64) { put(store,key,value) }
+const fn partial_relay<T>(store:GlobalState, const key:str, value:T) requires T in {i64,f64} { partial_store(store,key,value) }
+fn partial_store_node() {
+    inject global_state
+    when {}
+    stop { partial_relay(global_state,"safe",1.5) }
+}
+test an_unselected_member_keeps_its_changing_key {
+    eval partial_store_node()
+}

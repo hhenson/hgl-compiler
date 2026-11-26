@@ -1029,3 +1029,36 @@ test source { eval node() }
         );
     }
 }
+
+/// TIME-8, CAP-6: selecting one member does not inspect its coarse-cycle peers.
+#[test]
+fn unvisited_members_of_a_reached_store_cycle_keep_runtime_keys() {
+    let source = r#"module m
+operator w<S,T>(store:S, const key:str, value:T) requires S in {GlobalState}
+impl const fn w(store:GlobalState, const key:str, value:i64) {
+    put(store, key, value)
+    relay(store, key + "put", 1.5)
+    w(store, "run.output", 1)
+}
+impl const fn w(store:GlobalState, const key:str, value:f64) { put(store,key,value) }
+const fn relay<T>(store:GlobalState, const key:str, value:T) requires T in {i64,f64} { w(store,key,value) }
+fn node(const key:str) {
+    inject global_state
+    when {}
+    stop { relay(global_state,key,1.5) }
+}
+test source { eval node(key:"safe") }
+"#;
+    for source in [
+        source.to_owned(),
+        source.replace("relay(global_state,key,1.5)", "relay(global_state,key,1)"),
+    ] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}

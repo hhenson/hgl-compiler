@@ -1373,25 +1373,28 @@ fn resolved_store_changes(
             while let Some((node, body)) = read.pending.pop_front() {
                 read.body(node, &body)?;
             }
-            // An exported helper without an entry has no proven input route.
-            // An empty instance graph cannot disprove its changing cycle.
-            if !read.nodes.iter().any(|(declaration, _)| {
-                declaration.is_some_and(|declaration| component.contains(&declaration))
-            }) {
-                return None;
-            }
+            // Only inspected members have proven input routes. A selected
+            // candidate can leave other members of this coarse cycle unread.
+            let inspected: HashSet<_> = read
+                .nodes
+                .iter()
+                .filter_map(|(declaration, _)| *declaration)
+                .collect();
             let result = read.calls.changed(read.observed, &read.uses, true);
-            Some(
+            Some((
+                inspected,
                 result
                     .into_iter()
                     .filter_map(|(node, slot)| {
                         read.nodes[node].0.map(|declaration| (declaration, slot))
                     })
                     .collect::<ChangingSlots>(),
-            )
+            ))
         })();
-        if let Some(refined) = refined {
-            changed.retain(|(declaration, _)| !component.contains(declaration));
+        if let Some((inspected, refined)) = refined {
+            changed.retain(|(declaration, _)| {
+                !component.contains(declaration) || !inspected.contains(declaration)
+            });
             changed.extend(
                 refined
                     .into_iter()
