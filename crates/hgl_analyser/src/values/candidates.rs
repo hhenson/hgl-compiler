@@ -2129,10 +2129,9 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, arg)| (*at, arg))
                 .collect();
-            let member_choices = if uses_member {
-                self.stated_member_choices(&evidence_types, &bindings)
-            } else {
-                Vec::new()
+            let Some(member_choices) = self.stated_member_choices(&evidence_types, &bindings)
+            else {
+                continue;
             };
             let mut member_trials = combinations(&member_choices);
             if member_choices.is_empty() {
@@ -2238,6 +2237,9 @@ impl<'a> Typer<'a> {
                  GEN-7)",
                 members.join(" and ")
             )));
+        }
+        if tried == 0 {
+            return Settled::Rejected(unsettled(self));
         }
         // What the call gives: the operator's result with what the
         // arguments say of its generic parameters, each given to the

@@ -757,12 +757,25 @@ impl<'a> Typer<'a> {
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
         let mut remaining = crate::INSTANCES;
+        if combinations.len() > remaining {
+            self.diagnostics.emit(untold_with_reason(
+                program,
+                callee,
+                at,
+                condition,
+                "the analyser's limit on combinations of stated requirements was reached",
+            ));
+            return !reflected;
+        }
         for combination in &combinations {
             let given: Vec<(Location, &Argument)> = bound
                 .iter()
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
                 .collect();
+            let Some(member_choices) = self.stated_member_choices(&evidence_types, &given) else {
+                continue;
+            };
             // ERR-9: "Failure during argument evaluation precedes later
             // admission checks": a generic argument worked out from the
             // body's parameters that fails for what the body admits.
@@ -788,7 +801,6 @@ impl<'a> Typer<'a> {
                 });
                 return true;
             }
-            let member_choices = self.stated_member_choices(&evidence_types, &given);
             let mut member_trials = super::candidates::combinations(&member_choices);
             if member_trials.is_empty() {
                 member_trials.push(Vec::new());
@@ -883,6 +895,16 @@ impl<'a> Typer<'a> {
             );
             return !reflected;
         }
+        if !combinations.is_empty() && remaining == crate::INSTANCES {
+            self.diagnostics.emit(untold_with_reason(
+                program,
+                callee,
+                at,
+                condition,
+                "no combination satisfies the stated reflected member bounds",
+            ));
+            return !reflected;
+        }
         true
     }
 
@@ -942,7 +964,7 @@ impl<'a> Typer<'a> {
                     continue;
                 };
                 if member.pack == pack.at
-                    && matches!(member.key, StatedPackKey::One(ConstantValue::Parameter { at, .. }) if at == bound)
+                    && matches!(member.key, StatedPackKey::One(ref key) if matches!(key.value, ConstantValue::Parameter { at, .. } if at == bound))
                 {
                     member.key = StatedPackKey::Every(bound);
                     members.push(member);
@@ -976,7 +998,7 @@ impl<'a> Typer<'a> {
         };
         Some(StatedPackMember {
             pack: *pack,
-            key: StatedPackKey::One(key.value.clone()),
+            key: StatedPackKey::One(key.clone()),
             types: StatedMemberTypes::Equal(given.clone()),
         })
     }
@@ -998,7 +1020,7 @@ impl<'a> Typer<'a> {
                             *pack == member.pack
                                 && match &member.key {
                                     StatedPackKey::One(stated) => {
-                                        stated.same(&key.value) != Some(false)
+                                        stated.value.same(&key.value) != Some(false)
                                     }
                                     StatedPackKey::Every(_) => true,
                                 }
@@ -1016,7 +1038,7 @@ impl<'a> Typer<'a> {
                 let one = &[*at];
                 used.iter().any(|member| {
                     member.types.values().iter().any(|ty| mentions(ty, one))
-                        || matches!(&member.key, StatedPackKey::One(key) if key.names_one_of(one))
+                        || matches!(&member.key, StatedPackKey::One(key) if key.value.names_one_of(one))
                 })
             })
             .collect()
@@ -1024,79 +1046,117 @@ impl<'a> Typer<'a> {
 
     /// The finite choices a body states for the reflected members a
     /// call uses. Keep the key as well as the pack (GEN-3, GEN-7, GEN-17).
+    /// None means the given ordinary bindings contradict a member's bounds.
     pub(super) fn stated_member_choices(
         &self,
         types: &[&Type],
         given: &[(Location, &Argument)],
-    ) -> Vec<((Location, Constant), Vec<Type>)> {
+    ) -> Option<Vec<MemberChoices>> {
         let bounds = self.stated_pack_members();
         if bounds.is_empty() {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
             Argument::Constant(constant) => Some(constant.value.clone()),
             Argument::Type(_) | Argument::NoResult => None,
         };
-        let choices = RefCell::new(Vec::<((Location, Constant), Vec<Type>)>::new());
+        let remember = |keys: &mut Vec<(Location, Constant)>, pack, key: &Constant| {
+            let value = key.value.substituted(&constant_at);
+            if !keys
+                .iter()
+                .any(|(at, known)| *at == pack && known.value.same(&value) == Some(true))
+            {
+                keys.push((
+                    pack,
+                    Constant {
+                        text: key.text.clone(),
+                        value,
+                    },
+                ));
+            }
+        };
+        let keys = RefCell::new(Vec::new());
         for ty in types {
             ty.any_part(
                 &|part| {
-                    let Type::PackMember { pack, key, .. } = part else {
-                        return false;
-                    };
-                    if !self.signature.generics.iter().any(|slot| slot.at == *pack) {
-                        return false;
-                    }
-                    let key = Constant {
-                        text: key.text.clone(),
-                        value: key.value.substituted(&constant_at),
-                    };
-                    let mut choices = choices.borrow_mut();
-                    if choices.iter().any(|((other_pack, other_key), _)| {
-                        *other_pack == *pack && other_key.value.same(&key.value) == Some(true)
-                    }) {
-                        return false;
-                    }
-                    let project = |member: &StatedPackMember, ty: &Type| {
-                        let ty = substitute_within(ty, given);
-                        match member.key {
-                            StatedPackKey::One(_) => ty,
-                            StatedPackKey::Every(bound) => {
-                                substitute_within(&ty, &[(bound, &Argument::Constant(key.clone()))])
-                            }
-                        }
-                    };
-                    let matching: Vec<Vec<Type>> = bounds
-                        .iter()
-                        .filter(|member| {
-                            member.pack == *pack
-                                && match &member.key {
-                                    StatedPackKey::One(stated) => {
-                                        stated.substituted(&constant_at).same(&key.value)
-                                            == Some(true)
-                                    }
-                                    StatedPackKey::Every(_) => true,
-                                }
-                        })
-                        .map(|member| {
-                            member
-                                .types
-                                .values()
-                                .iter()
-                                .map(|ty| project(member, ty))
-                                .collect()
-                        })
-                        .collect();
-                    let types = self.intersect_member_bounds(matching);
-                    if !types.is_empty() {
-                        choices.push(((*pack, key), types));
+                    if let Type::PackMember { pack, key, .. } = part
+                        && self.signature.generics.iter().any(|slot| slot.at == *pack)
+                    {
+                        remember(&mut keys.borrow_mut(), *pack, key);
                     }
                     false
                 },
                 &|_| false,
             );
         }
-        choices.into_inner()
+        let mut keys = keys.into_inner();
+        let used = keys.len();
+        // A named key in the declaration can rule out an ordinary binding
+        // even if the call uses just that parameter. An each alone promises
+        // no key: an empty pack satisfies it as well.
+        let ordinary: Vec<_> = given.iter().map(|(at, _)| *at).collect();
+        for bound in &bounds {
+            let binds_type = bound
+                .types
+                .values()
+                .iter()
+                .any(|ty| mentions(ty, &ordinary));
+            match &bound.key {
+                StatedPackKey::One(key) if binds_type || key.value.names_one_of(&ordinary) => {
+                    remember(&mut keys, bound.pack, key);
+                }
+                StatedPackKey::Every(_) if binds_type => {
+                    for named in &bounds {
+                        if named.pack == bound.pack
+                            && let StatedPackKey::One(key) = &named.key
+                        {
+                            remember(&mut keys, named.pack, key);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut choices = Vec::new();
+        for (index, (pack, key)) in keys.into_iter().enumerate() {
+            let matching = bounds
+                .iter()
+                .filter(|member| {
+                    member.pack == pack
+                        && match &member.key {
+                            StatedPackKey::One(stated) => {
+                                stated.value.substituted(&constant_at).same(&key.value)
+                                    == Some(true)
+                            }
+                            StatedPackKey::Every(_) => true,
+                        }
+                })
+                .map(|member| {
+                    member
+                        .types
+                        .values()
+                        .iter()
+                        .map(|ty| {
+                            let ty = substitute_within(ty, given);
+                            match member.key {
+                                StatedPackKey::One(_) => ty,
+                                StatedPackKey::Every(bound) => substitute_within(
+                                    &ty,
+                                    &[(bound, &Argument::Constant(key.clone()))],
+                                ),
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let types = self.intersect_member_bounds(matching)?;
+            // Unused keys establish reachability only. Multiplying by their
+            // possible types would repeat the same check of this call.
+            if index < used && !types.is_empty() {
+                choices.push(((pack, key), types));
+            }
+        }
+        Some(choices)
     }
 
     /// Intersect all positive bounds stated for one reflected pack member
@@ -1105,8 +1165,9 @@ impl<'a> Typer<'a> {
     /// discard a type that an unresolved normalizing or open form can later
     /// become. Without a concrete bound, only a known-subset open bound is
     /// kept so differing type variables stay conservative in both orders.
-    /// An empty intersection leaves the member unproved.
-    fn intersect_member_bounds(&self, bounds: Vec<Vec<Type>>) -> Vec<Type> {
+    /// An unproved member supplies no choices. Disjoint concrete bounds
+    /// rule out this ordinary binding entirely.
+    fn intersect_member_bounds(&self, bounds: Vec<Vec<Type>>) -> Option<Vec<Type>> {
         let is_concrete = |ty: &Type| {
             whole(ty)
                 && !ty.any_part(
@@ -1125,6 +1186,15 @@ impl<'a> Typer<'a> {
             .partition(|set| set.iter().all(is_concrete));
         let (base, closed_rest, open_rest) = if !closed.is_empty() {
             let first = closed.remove(0);
+            // Only a definite mismatch excludes a trial. Equality can also
+            // return unknown, which supplies no proof either way.
+            if first.iter().all(|ty| {
+                closed
+                    .iter()
+                    .any(|set| set.iter().all(|other| same_type(ty, other) == Some(false)))
+            }) {
+                return None;
+            }
             (first, closed, open)
         } else if !open.is_empty() {
             // Without a concrete bound, keep an open bound only when every
@@ -1138,11 +1208,11 @@ impl<'a> Typer<'a> {
                     })
                 })
             }) else {
-                return Vec::new();
+                return Some(Vec::new());
             };
             (chosen.clone(), Vec::new(), Vec::new())
         } else {
-            return Vec::new();
+            return Some(Vec::new());
         };
         let mut intersected = Vec::new();
         for ty in base {
@@ -1161,7 +1231,7 @@ impl<'a> Typer<'a> {
                 intersected.push(ty);
             }
         }
-        intersected
+        Some(intersected)
     }
 
     /// True when some valid instantiation of the enclosing generics may make
@@ -1428,7 +1498,7 @@ impl<'a> Typer<'a> {
             .collect::<Option<_>>()?;
         (!types.is_empty()).then_some(StatedPackMember {
             pack: *pack,
-            key: StatedPackKey::One(key.value.clone()),
+            key: StatedPackKey::One(key.clone()),
             types: StatedMemberTypes::Alternatives(types),
         })
     }
@@ -2546,6 +2616,9 @@ fn required_calls(node: &SyntaxNode, calls: &mut Vec<SyntaxNode>) {
     }
 }
 
+/// A pack and key paired with the member types admitted for this trial.
+type MemberChoices = ((Location, Constant), Vec<Type>);
+
 /// A reflected member type stated by a positive requirement (GEN-17).
 struct StatedPackMember {
     pack: Location,
@@ -2569,7 +2642,7 @@ impl StatedMemberTypes {
 
 /// One declared key, or the key parameter of a universal requirement.
 enum StatedPackKey {
-    One(ConstantValue),
+    One(Constant),
     Every(Location),
 }
 

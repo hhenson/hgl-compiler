@@ -227,6 +227,17 @@ const fn narrowed_disjoint_list_delta_second<T, ...Ps>(f: const fn(...{Ps}) -> i
 const fn nested_nullable_delta<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {list<T>, str} && Ps[item_key] in {delta<delta<list<i64>>?>, str} => exact_str<Ps[item_key]>(item)
 
+# GEN-3, GEN-7, GEN-17: only f64 satisfies both memberships and the equality.
+const fn overlap_member<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
+    requires T in {i64, f64} && Ps[item_key] == T && Ps[item_key] in {str, f64}
+    => exact_number<Ps[item_key]>(item) - item
+
+const fn float_only<T>(value: T) -> T requires T == f64 => value
+
+const fn overlap_parameter<T, ...Ps>(f: const fn(...{Ps}) -> i64, value: T) -> T
+    requires Ps[item_key] in {str, f64} && T in {f64, i64} && T == Ps[item_key]
+    => float_only<T>(value)
+
 const fn narrowed_disjoint_atomic_opt_first<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {atomic<T?>, str} && Ps[item_key] in {i64, str} => exact_str<Ps[item_key]>(item)
 
@@ -251,6 +262,8 @@ test each_proves_the_member_type {
     assert narrowed_disjoint_list_delta_first(real_item, 2, 1.5) == 1.5
     assert narrowed_disjoint_list_delta_second(real_item, 2, 1.5) == 1.5
     assert nested_nullable_delta(words, 2, "nested") == "nested"
+    assert overlap_member(real_item, 1.5, 3.5) == 0.0
+    assert overlap_parameter(real_item, 3.5) == 3.5
     assert narrowed_disjoint_atomic_opt_first(words, 2, "ok") == "ok"
     assert narrowed_disjoint_atomic_opt_second(words, 2, "ok") == "ok"
 }
