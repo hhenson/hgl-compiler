@@ -65,6 +65,9 @@ struct Scaled<const F: f64> { value: i64 }
 enum Mode { fast, slow }
 struct Modeled<const M: Mode> { value: i64 }
 struct TaggedKind<const K: Type> { value: i64 }
+struct Descriptor { value: i64 }
+
+const fn fixed_descriptors() -> list<Descriptor, 2> => [Descriptor(value: 0), Descriptor(value: 1)]
 
 fn same_flag_true(value: Flagged<true>) -> Flagged<true> => value
 fn same_flag_false(value: Flagged<false>) -> Flagged<false> => value
@@ -75,6 +78,8 @@ fn same_mode_fast(value: Modeled<Mode.fast>) -> Modeled<Mode.fast> => value
 fn same_mode_slow(value: Modeled<Mode.slow>) -> Modeled<Mode.slow> => value
 fn same_kind_int(value: TaggedKind<type(1)>) -> TaggedKind<type(1)> => value
 fn same_kind_str(value: TaggedKind<type("a")>) -> TaggedKind<type("a")> => value
+fn same_kind_descriptor(value: TaggedKind<type(Descriptor(value: 0))>) -> TaggedKind<type(Descriptor(value: 0))> => value
+fn same_kind_descriptor_list(value: TaggedKind<type(fixed_descriptors())>) -> TaggedKind<type(fixed_descriptors())> => value
 
 test value_argument_kinds_stay_distinct {
     assert eval same_flag_true(value: [Flagged<true>(value: 1)]) == [Flagged<true>(value: 1)]
@@ -86,6 +91,10 @@ test value_argument_kinds_stay_distinct {
     assert eval same_mode_slow(value: [Modeled<Mode.slow>(value: 7)]) == [Modeled<Mode.slow>(value: 7)]
     assert eval same_kind_int(value: [TaggedKind<type(1)>(value: 8)]) == [TaggedKind<type(1)>(value: 8)]
     assert eval same_kind_str(value: [TaggedKind<type("a")>(value: 9)]) == [TaggedKind<type("a")>(value: 9)]
+    assert eval same_kind_descriptor(value: [TaggedKind<type(Descriptor(value: 0))>(value: 10)]) ==
+        [TaggedKind<type(Descriptor(value: 0))>(value: 10)]
+    assert eval same_kind_descriptor_list(value: [TaggedKind<type(fixed_descriptors())>(value: 11)]) ==
+        [TaggedKind<type(fixed_descriptors())>(value: 11)]
 }
 
 struct Mixed<T, const N: i64> { value: T }

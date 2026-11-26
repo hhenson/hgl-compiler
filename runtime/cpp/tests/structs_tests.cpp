@@ -600,6 +600,14 @@ TEST_CASE("nominal_struct_name distinguishes generic value arguments and builds 
     using KindStr = hgraph::NominalBundle<
         "test", hglrt::nominal_struct_name<"Tagged", hglrt::value_arg<hglrt::type_tag{"str"}>>, false,
         hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using KindNamedA = hgraph::NominalBundle<
+        "test",
+        hglrt::nominal_struct_name<"Tagged", hglrt::value_arg<hglrt::type_tag{"declaration(1,0)<>", "Descriptor"}>>,
+        false, hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using KindNamedB = hgraph::NominalBundle<
+        "test",
+        hglrt::nominal_struct_name<"Tagged", hglrt::value_arg<hglrt::type_tag{"declaration(2,0)<>", "Descriptor"}>>,
+        false, hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
     using MixedInt1 = hgraph::NominalBundle<
         "test", hglrt::nominal_struct_name<"Mixed", hglrt::type_arg_slot, hglrt::value_arg<i64{1}>>, false,
         hgraph::BundleParents<>, hgraph::BundleArguments<i64>, hgraph::Field<"value", i64>>;
@@ -626,6 +634,8 @@ TEST_CASE("nominal_struct_name distinguishes generic value arguments and builds 
           hgraph::value_schema_descriptor<OtherModeFast>::value_meta());
     CHECK(hgraph::value_schema_descriptor<KindInt>::value_meta() !=
           hgraph::value_schema_descriptor<KindStr>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<KindNamedA>::value_meta() !=
+          hgraph::value_schema_descriptor<KindNamedB>::value_meta());
     CHECK(hgraph::value_schema_descriptor<MixedInt1>::value_meta() !=
           hgraph::value_schema_descriptor<MixedStr1>::value_meta());
     CHECK(hgraph::value_schema_descriptor<MixedInt1>::value_meta() !=
@@ -635,6 +645,11 @@ TEST_CASE("nominal_struct_name distinguishes generic value arguments and builds 
     CHECK(hglrt::applied_struct_name<hglrt::value_arg<true>>("test::Flagged") == "test::Flagged<true>");
     CHECK(hglrt::applied_struct_name<hglrt::value_arg<hglrt::type_tag{"i64"}>>("test::Tagged") ==
           "test::Tagged<i64>");
+    CHECK(hglrt::applied_struct_name<hglrt::value_arg<hglrt::type_tag{"declaration(1,0)<>", "Descriptor"}>>(
+              "test::Tagged") == "test::Tagged<Descriptor>");
+    CHECK(hglrt::applied_struct_name<
+              hglrt::value_arg<hglrt::type_tag{"list<declaration(1,0)<>,2>", "list<Descriptor, 2>"}>>(
+              "test::Tagged") == "test::Tagged<list<Descriptor, 2>>");
 }
 
 // The generated code sets the HGL file and line at each publication.

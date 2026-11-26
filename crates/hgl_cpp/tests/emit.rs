@@ -3694,8 +3694,10 @@ test tag {
         .expect("module implementation")
         .text;
     assert!(body.contains("::hglrt::type_tag{\"i64\"}"), "{body}");
-    // Cross-module same-named structs emit distinct declaration identities.
+    // Cross-module same-named structs emit distinct declaration identities
+    // alongside their canonical spelling for display (TYPE-18, FMT-5).
     assert!(body.contains("::hglrt::type_tag{\"declaration("), "{body}");
+    assert!(body.contains(", \"Quote\"}"), "{body}");
 }
 
 /// TYPE-18, Proposed: source connection checking awaits its diagnostic,

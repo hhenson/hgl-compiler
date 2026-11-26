@@ -695,8 +695,8 @@ namespace detail {
 template <class T>
 struct is_type_tag : std::false_type {};
 
-template <std::size_t N>
-struct is_type_tag<type_tag<N>> : std::true_type {};
+template <std::size_t N, std::size_t M>
+struct is_type_tag<type_tag<N, M>> : std::true_type {};
 
 template <std::int64_t V>
 consteval std::size_t signed_decimal_length() noexcept {
@@ -850,7 +850,7 @@ template <auto V>
 std::string display_generic_arg_tag(value_arg<V>) {
     using T = std::remove_cvref_t<decltype(V)>;
     if constexpr (is_type_tag<T>::value) {
-        return std::string{V.identity, sizeof(V.identity) - 1};
+        return std::string{V.spelling, sizeof(V.spelling) - 1};
     } else {
         return text_of(V);
     }

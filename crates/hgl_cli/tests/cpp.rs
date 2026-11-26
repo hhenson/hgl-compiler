@@ -4167,6 +4167,59 @@ fn concrete_generic_struct_traces_run_on_the_sdk() {
     );
 }
 
+/// A failing trace comparison of a concrete generic struct parameterized by a
+/// named or composite `Type` value displays `Type::canonical_spelling` rather
+/// than the compiler-local declaration identity (TYPE-18, FMT-5, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_type_value_argument_trace_failure_uses_canonical_spelling() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-type-value-display");
+    let file = write(
+        &root,
+        "src/demo.type-arg-display.hgl",
+        concat!(
+            "module demo.type_arg_display\n",
+            "struct Descriptor { value: i64 }\n",
+            "struct Tagged<const K: Type> { value: i64 }\n",
+            "const fn pair() -> list<Descriptor, 2> => [Descriptor(value: 0), Descriptor(value: 1)]\n",
+            "fn same_named(value: Tagged<type(Descriptor(value: 0))>) -> Tagged<type(Descriptor(value: 0))> => value\n",
+            "fn same_composite(value: Tagged<type(pair())>) -> Tagged<type(pair())> => value\n",
+            "test named_type_mismatch {\n",
+            "    assert eval same_named(value: [Tagged<type(Descriptor(value: 0))>(value: 1)]) ==\n",
+            "        [Tagged<type(Descriptor(value: 0))>(value: 2)]\n",
+            "}\n",
+            "test composite_type_mismatch {\n",
+            "    assert eval same_composite(value: [Tagged<type(pair())>(value: 3)]) ==\n",
+            "        [Tagged<type(pair())>(value: 4)]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("demo.type_arg_display::Tagged<Descriptor>(value: 1)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("demo.type_arg_display::Tagged<list<Descriptor, 2>>(value: 3)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("declaration("), "{stdout}");
+    assert!(
+        stdout.ends_with("executable cases: 0 passed, 2 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
 /// FN-3, TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
 /// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.

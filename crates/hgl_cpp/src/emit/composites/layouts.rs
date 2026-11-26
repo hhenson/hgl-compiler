@@ -366,16 +366,26 @@ fn constant_argument(
     }
 }
 
-/// TYPE-18: concrete applications use the analyser's canonical identity. A
+/// TYPE-18, FMT-5: concrete applications carry the analyser's canonical
+/// identity for nominal matching and its canonical spelling for display. A
 /// generic layout forwards that same tag as an extra C++ template argument.
 fn type_tag(value: &ConstantValue, queries: Option<&[ConstantValue]>) -> Option<String> {
     if let ConstantValue::Type(ty) = value
         && let Some(identity) = ty.identity()
     {
+        let spelling = ty.canonical_spelling();
+        if spelling == identity {
+            return Some(format!(
+                "::{}::type_tag{{{}}}",
+                runtime::NAMESPACE,
+                names::string(&identity)
+            ));
+        }
         return Some(format!(
-            "::{}::type_tag{{{}}}",
+            "::{}::type_tag{{{}, {}}}",
             runtime::NAMESPACE,
-            names::string(&identity)
+            names::string(&identity),
+            names::string(&spelling)
         ));
     }
     let index = queries?
