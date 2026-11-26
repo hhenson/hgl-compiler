@@ -2907,14 +2907,36 @@ pub(super) fn instances_hold(
                 made_in(program, body, &mut calls);
                 calls.iter().map(source_call_key).collect::<HashSet<_>>()
             });
-            for default in module
+            let declared = own((index, position));
+            for (slot, default) in module
                 .defaults
                 .get(position)
                 .into_iter()
                 .flatten()
-                .flatten()
+                .enumerate()
             {
-                if module.declarations[position].declares_default(default) {
+                let Some(default) = default else { continue };
+                if !module.declarations[position].declares_default(default) {
+                    continue;
+                }
+                let checks_on_omission = matches!(
+                    module.details.get(position),
+                    Some(Detail::Callable(signature)) if signature.parameters.get(slot).is_some_and(
+                        |parameter| super::operator_defaults::follows_omitted_default(parameter, default)
+                    )
+                );
+                if checks_on_omission {
+                    // UNIT-8: name resolution and dependencies have already
+                    // checked the written default. A generic-dependent
+                    // helper is made only where this default is used.
+                    let mut default_calls = Vec::new();
+                    made_by(program, &default.value, &mut default_calls);
+                    made.extend(
+                        default_calls
+                            .into_iter()
+                            .filter(|call| !default_passes_arguments(program, call, &declared)),
+                    );
+                } else {
                     made_by(program, &default.value, &mut made);
                 }
             }
@@ -2931,7 +2953,6 @@ pub(super) fn instances_hold(
                     applied_in(&written.ty, written.at, &mut made);
                 }
             }
-            let declared = own((index, position));
             if !declared.is_empty()
                 && super::operator_defaults::selects_configuration(program, module, position)
             {
@@ -3274,7 +3295,7 @@ pub(super) fn instances_hold(
                     (&made.generics, &made.answers),
                     inputs,
                     &mut instance_calls,
-                    diagnostics,
+                    (diagnostics, &|| chain.paths(program, &root_calls)),
                     &mut body_reports,
                 )
             } else if recheck_graph
@@ -3410,6 +3431,7 @@ pub(super) fn instances_hold(
                     answers: call.answers,
                     test_candidates: call.test_candidates,
                     at: call.at,
+                    via: call.via,
                 })
                 .collect();
             for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
@@ -3494,6 +3516,7 @@ pub(super) fn instances_hold(
                     answers,
                     test_candidates: call.test_candidates.or(made.test_candidates),
                     at: call.at,
+                    via: None,
                 });
             }
             // GEN-5: a call whose candidate a generic parameter of the
@@ -3629,6 +3652,7 @@ pub(super) fn instances_hold(
                                 answers,
                                 test_candidates: typer.test_candidates,
                                 at: call.at,
+                                via: None,
                             });
                         }
                         // GEN-5: "No match rejects; tied most-specific
@@ -3648,6 +3672,7 @@ pub(super) fn instances_hold(
                 answers,
                 test_candidates,
                 at,
+                via,
             } in calls
             {
                 let Some(key) = bounded_instance_key(callee, &generics, &type_packs, &answers)
@@ -3707,7 +3732,7 @@ pub(super) fn instances_hold(
                     && !child_calls.is_empty()
                     && seen.insert(key)
                 {
-                    let caller = *link.get_or_insert_with(|| {
+                    let mut caller = *link.get_or_insert_with(|| {
                         let index = parents.len();
                         parents.push((
                             MakingCall::new(
@@ -3721,6 +3746,16 @@ pub(super) fn instances_hold(
                         ));
                         index
                     });
+                    if let Some(path) = via {
+                        // The new instance is the first call on this path.
+                        // Keep any omitted defaults between it and its body.
+                        let defaults: Vec<_> = path.calls().skip(1).collect();
+                        for default in defaults.into_iter().rev() {
+                            let index = parents.len();
+                            parents.push((default.clone(), Some(caller)));
+                            caller = index;
+                        }
+                    }
                     waiting.push_back((
                         Made {
                             callee,
@@ -3888,6 +3923,21 @@ pub(super) fn emit_instance_report(
     paths: &[Vec<MakingCall>],
     diagnostics: &mut Diagnostics,
 ) {
+    emit_labeled_instance_report(
+        report,
+        paths,
+        diagnostics,
+        "the instance's body rejects here",
+    );
+}
+
+/// Report an instance error with a label that identifies its failing source.
+pub(super) fn emit_labeled_instance_report(
+    report: Diagnostic,
+    paths: &[Vec<MakingCall>],
+    diagnostics: &mut Diagnostics,
+    source: &str,
+) {
     let mut groups = HashMap::<Location, Vec<&[MakingCall]>>::new();
     for path in paths {
         if let Some(outer) = path.last() {
@@ -3897,9 +3947,7 @@ pub(super) fn emit_instance_report(
     let mut groups: Vec<_> = groups.into_iter().collect();
     groups.sort_by_key(|(at, _)| (at.file, at.span.start, at.span.end));
     for (at, paths) in groups {
-        let mut here = report
-            .clone()
-            .with_related(report.primary, "the instance's body rejects here");
+        let mut here = report.clone().with_related(report.primary, source);
         here.primary = at;
         for call in paths.into_iter().flatten() {
             let message = format!("this call makes the instance `{}`", call.instance);
@@ -4179,6 +4227,7 @@ struct Resolved {
     answers: Vec<hir::Answer>,
     test_candidates: Option<crate::TestCandidateScope>,
     at: Location,
+    via: Option<Rc<MakingPath>>,
 }
 
 /// The constants in `argument`, a generic argument a call in a generic
@@ -4697,10 +4746,75 @@ fn made_by(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     });
 }
 
+fn default_passes_arguments(program: &Program, call: &Made, declared: &[Location]) -> bool {
+    call.required.is_none()
+        && matches!(
+            program.modules[call.callee.0].details.get(call.callee.1),
+            Some(Detail::Callable(_))
+        )
+        && forwards_default_types(&call.generics, &call.type_packs, |at| {
+            declared.contains(&at)
+        })
+}
+
+/// A type-only forwarding step can be recovered from the specialized
+/// omitted default. Computed const arguments and packs still use the
+/// declaration's instance walk to evaluate their own obligations.
+pub(super) fn forwards_default_types(
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    owns: impl Fn(Location) -> bool,
+) -> bool {
+    type_packs.is_empty()
+        && generics.iter().all(|argument| match argument {
+            Argument::Type(ty) => !ty.any_part(
+                &|part| matches!(part, Type::Unknown | Type::PackMember { .. }),
+                &|constant| !resolved_default_constant(&constant.value),
+            ),
+            other => resolved_default_argument(other),
+        })
+        && generics.iter().any(|argument| match argument {
+            Argument::Type(ty) => ty.any_part(
+                &|part| matches!(part, Type::Parameter { at, .. } if owns(*at)),
+                &|_| false,
+            ),
+            _ => false,
+        })
+}
+
+/// Only calls specialization makes, rather than calls already known
+/// when the written default was checked, get an omitted-default path.
+pub(super) fn dependent_default_call_sites(
+    program: &Program,
+    owner: (usize, usize),
+    expression: &Expr,
+) -> Vec<Location> {
+    let Detail::Callable(signature) = &program.modules[owner.0].details[owner.1] else {
+        return Vec::new();
+    };
+    let declared: Vec<_> = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .collect();
+    let mut calls = Vec::new();
+    made_by(program, expression, &mut calls);
+    calls
+        .into_iter()
+        .filter(|call| default_passes_arguments(program, call, &declared))
+        .map(|call| call.at)
+        .collect()
+}
+
 /// The calls an omitted, specialized default makes with resolved arguments
 /// and evidence. Follow these as ordinary instances, including helper bodies
 /// that can themselves omit an inherited default (GEN-16, UNIT-8).
-pub(super) fn concrete_default_calls(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
+pub(super) fn concrete_default_calls(
+    program: &Program,
+    expression: &Expr,
+    (path, dependent_calls): (&Rc<MakingPath>, &[Location]),
+    made: &mut Vec<Made>,
+) {
     fn concrete(answer: &hir::Answer) -> bool {
         match answer {
             hir::Answer::Candidate {
@@ -4715,10 +4829,26 @@ pub(super) fn concrete_default_calls(program: &Program, expression: &Expr, made:
     }
     let mut calls = Vec::new();
     made_by(program, expression, &mut calls);
-    made.extend(calls.into_iter().filter(|call| {
-        call.required.is_none()
-            && call.generics.iter().all(resolved_default_argument)
-            && call.answers.iter().all(concrete)
+    made.extend(calls.into_iter().filter_map(|mut call| {
+        if call.required.is_some()
+            || !call.generics.iter().all(resolved_default_argument)
+            || !call.answers.iter().all(concrete)
+        {
+            return None;
+        }
+        if dependent_calls.contains(&call.at) {
+            call.via = Some(MakingPath::new(
+                MakingCall::new(
+                    program,
+                    call.callee,
+                    &call.generics,
+                    &call.type_packs,
+                    call.at,
+                ),
+                Some(path.clone()),
+            ));
+        }
+        Some(call)
     }));
 }
 
@@ -5095,29 +5225,32 @@ pub(super) struct Condition<'c> {
     pub(super) unvalued: &'c std::cell::Cell<bool>,
 }
 
+fn resolved_default_constant(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::Member(member) => member.of.is_some(),
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => {
+            values.iter().all(resolved_default_constant)
+        }
+        ConstantValue::Parameter { .. }
+        | ConstantValue::Named { .. }
+        | ConstantValue::Constructed { .. }
+        | ConstantValue::Unary(..)
+        | ConstantValue::Binary(..)
+        | ConstantValue::Unevaluated
+        | ConstantValue::Unknown => false,
+        _ => true,
+    }
+}
+
 /// A concrete application names no type or value parameter and uses
 /// only known constant values, including those nested inside its types.
 pub(super) fn resolved_default_argument(argument: &Argument) -> bool {
-    fn known(value: &ConstantValue) -> bool {
-        match value {
-            ConstantValue::Member(member) => member.of.is_some(),
-            ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().all(known),
-            ConstantValue::Parameter { .. }
-            | ConstantValue::Named { .. }
-            | ConstantValue::Constructed { .. }
-            | ConstantValue::Unary(..)
-            | ConstantValue::Binary(..)
-            | ConstantValue::Unevaluated
-            | ConstantValue::Unknown => false,
-            _ => true,
-        }
-    }
     match argument {
         Argument::Type(ty) => !ty.any_part(
             &|part| matches!(part, Type::Parameter { .. } | Type::Unknown),
-            &|constant| !known(&constant.value),
+            &|constant| !resolved_default_constant(&constant.value),
         ),
-        Argument::Constant(constant) => known(&constant.value),
+        Argument::Constant(constant) => resolved_default_constant(&constant.value),
         Argument::NoResult => true,
     }
 }
