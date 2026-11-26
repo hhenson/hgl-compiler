@@ -1194,15 +1194,16 @@ pub(crate) fn demands(
             }
         }
     }
-    let observed_keys = store_reads.values().flatten().copied().collect();
-    let conservative = store_calls.changed(observed_keys, &uses, false);
+    let observed_keys: HashSet<Slot> = store_reads.values().flatten().copied().collect();
+    let conservative = store_calls.changed(observed_keys.clone(), &uses, false);
     // Most programs have no changing store cycle. Only refine a possible
     // cycle, and keep its existing runtime classification if reading its
     // type instances is incomplete or reaches the ordinary instance bound.
     let changing = if conservative.is_empty() {
         conservative
     } else {
-        resolved_store_changes(program).unwrap_or(conservative)
+        resolved_store_changes(program, &store_calls, &conservative, &observed_keys, &uses)
+            .unwrap_or(conservative)
     };
     let changes_in_cycle = |slot: &Slot| changing.contains(slot);
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
@@ -1249,7 +1250,13 @@ fn names_generic_value(value: &Expr) -> bool {
 /// TIME-8 follows the calls an instance makes, not all candidates of the
 /// operator it names. Keys stay symbolic here: this graph specializes types
 /// and forwarding shapes, never the values a recursive key can reach.
-fn resolved_store_changes(program: &Program) -> Option<ChangingSlots> {
+fn resolved_store_changes(
+    program: &Program,
+    legacy: &StoreCalls,
+    conservative: &ChangingSlots,
+    observed: &HashSet<Slot>,
+    uses: &StoreUses<Declaration>,
+) -> Option<ChangingSlots> {
     let store = program.capability_type("global_state")?;
     let borrows_store = |signature: &Signature| {
         signature
@@ -1257,87 +1264,142 @@ fn resolved_store_changes(program: &Program) -> Option<ChangingSlots> {
             .iter()
             .any(|parameter| parameter.ty == store)
     };
-    let mut relevant = HashSet::new();
+    // Reverse declaration edges find only entries that can reach this cycle.
+    // An unread, unrelated graph (for example a Core map example) must not
+    // discard a proof about the store key of another component.
+    let mut incoming: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
+    for &(caller, called) in &legacy.calls {
+        incoming.entry(called).or_default().push(caller);
+    }
     for (module, unit) in program.modules.iter().enumerate() {
-        for (declaration, detail) in unit.details.iter().enumerate() {
-            let Detail::Callable(signature) = detail else {
-                continue;
-            };
-            let injects = unit
-                .bodies
-                .get(declaration)
-                .and_then(Option::as_ref)
-                .is_some_and(|body| {
-                    body.locals
-                        .iter()
-                        .any(|local| local.kind == crate::LocalKind::Inject && local.ty == store)
+        for (declaration, declared) in unit.declarations.iter().enumerate() {
+            if let Some((_, Some(operator))) = declared.kind.candidate() {
+                incoming
+                    .entry((module, declaration))
+                    .or_default()
+                    .push((operator.module, operator.declaration));
+            }
+            if let Some(body) = unit.bodies.get(declaration).and_then(Option::as_ref) {
+                crate::values::walk_body_calls(body, &mut |call| {
+                    if let ExprKind::Call { callee, .. } = &call.kind
+                        && let Some(called) = callee.declaration()
+                    {
+                        incoming
+                            .entry(called)
+                            .or_default()
+                            .push((module, declaration));
+                    }
                 });
-            if borrows_store(signature)
-                || injects
-                || unit.phases.get(declaration) == Some(&Some(Phase::Graph))
-            {
-                relevant.insert((module, declaration));
+            }
+            for selecting in &unit.selecting[declaration] {
+                incoming
+                    .entry((selecting.operator.module, selecting.operator.declaration))
+                    .or_default()
+                    .push((module, declaration));
             }
         }
     }
-    let mut read = StoreInstances {
-        program,
-        relevant,
-        nodes: Vec::new(),
-        instances: HashMap::new(),
-        counts: HashMap::new(),
-        pending: VecDeque::new(),
-        calls: StoreCalls::default(),
-        uses: HashMap::new(),
-        observed: HashSet::new(),
-    };
-    // An injected store is an entry to these borrowed-store routes. A helper
-    // receives the aliases its actual callers give it, rather than arbitrary
-    // independent values for every one of its const parameters.
     let empty = Signature {
         generics: Vec::new(),
         parameters: Vec::new(),
         result: None,
         reference: false,
     };
-    for (module, unit) in program.modules.iter().enumerate() {
-        for (declaration, body) in unit.bodies.iter().enumerate() {
-            let (Some(body), Some(Detail::Callable(signature))) =
-                (body, unit.details.get(declaration))
-            else {
-                continue;
-            };
-            if signature.generics.is_empty() && !borrows_store(signature) {
-                read.root(Some((module, declaration)), signature, body)?;
+    let mut changed = conservative.clone();
+    for component in legacy.components() {
+        if !conservative
+            .iter()
+            .any(|(declaration, _)| component.contains(declaration))
+        {
+            continue;
+        }
+        let mut relevant = component.clone();
+        follow_slots(&mut relevant, &incoming);
+        // An observer outside the cycle also observes the slot that supplies
+        // it. Do not propagate observations around the cycle: an exchanged
+        // second key of a reader must remain distinguishable from its first.
+        let dependencies: HashMap<Slot, Vec<Slot>> = uses
+            .iter()
+            .map(|(&slot, callers)| {
+                let callers = callers
+                    .iter()
+                    .map(|&(caller, _)| caller)
+                    .filter(|caller| {
+                        !(component.contains(&slot.0) && component.contains(&caller.0))
+                    })
+                    .collect();
+                (slot, callers)
+            })
+            .collect();
+        let mut store_slots = observed.clone();
+        follow_slots(&mut store_slots, &dependencies);
+        let mut read = StoreInstances {
+            program,
+            relevant,
+            store_slots: &store_slots,
+            nodes: Vec::new(),
+            instances: HashMap::new(),
+            counts: HashMap::new(),
+            pending: VecDeque::new(),
+            calls: StoreCalls::default(),
+            uses: HashMap::new(),
+            observed: HashSet::new(),
+        };
+        let refined = (|| {
+            // Borrowed-store helpers get their input aliases from actual
+            // callers. Nodes, tests and applications provide entry routes.
+            for (module, unit) in program.modules.iter().enumerate() {
+                for (declaration, body) in unit.bodies.iter().enumerate() {
+                    let (Some(body), Some(Detail::Callable(signature))) =
+                        (body, unit.details.get(declaration))
+                    else {
+                        continue;
+                    };
+                    if signature.generics.is_empty() && !borrows_store(signature) {
+                        read.root(Some((module, declaration)), signature, body)?;
+                    }
+                }
+                for body in unit.test_bodies.iter().flatten().chain(&unit.store_body) {
+                    read.root(None, &empty, body)?;
+                }
+                if let Some(run) = &unit.run_body {
+                    let body = crate::hir::Body {
+                        locals: run.locals.clone(),
+                        statements: vec![Stmt::Expr(run.call.clone())],
+                    };
+                    read.root(None, &empty, &body)?;
+                }
             }
-        }
-        for body in unit.test_bodies.iter().flatten().chain(&unit.store_body) {
-            read.root(None, &empty, body)?;
-        }
-        if let Some(run) = &unit.run_body {
-            let body = crate::hir::Body {
-                locals: run.locals.clone(),
-                statements: vec![Stmt::Expr(run.call.clone())],
-            };
-            read.root(None, &empty, &body)?;
+            while let Some((node, body)) = read.pending.pop_front() {
+                read.body(node, &body)?;
+            }
+            let result = read.calls.changed(read.observed, &read.uses, true);
+            Some(
+                result
+                    .into_iter()
+                    .filter_map(|(node, slot)| {
+                        read.nodes[node].0.map(|declaration| (declaration, slot))
+                    })
+                    .collect::<ChangingSlots>(),
+            )
+        })();
+        if let Some(refined) = refined {
+            changed.retain(|(declaration, _)| !component.contains(declaration));
+            changed.extend(
+                refined
+                    .into_iter()
+                    .filter(|(declaration, _)| component.contains(declaration)),
+            );
         }
     }
-    while let Some((node, body)) = read.pending.pop_front() {
-        read.body(node, &body)?;
-    }
-    let changed = read.calls.changed(read.observed, &read.uses, true);
-    Some(
-        changed
-            .into_iter()
-            .filter_map(|(node, slot)| read.nodes[node].0.map(|declaration| (declaration, slot)))
-            .collect(),
-    )
+    Some(changed)
 }
 
 /// A bounded type-instance graph, separate from the key's const inputs.
 struct StoreInstances<'a> {
     program: &'a Program,
     relevant: HashSet<Declaration>,
+    store_slots: &'a HashSet<Slot>,
     nodes: Vec<(Option<Declaration>, Signature)>,
     instances: HashMap<(String, Option<crate::TestCandidateScope>), usize>,
     counts: HashMap<Declaration, usize>,
@@ -1454,6 +1516,16 @@ impl StoreInstances<'_> {
 
     fn body(&mut self, node: usize, body: &crate::hir::Body) -> Option<()> {
         let (declaration, signature) = self.nodes[node].clone();
+        if let Some(declaration) = declaration {
+            self.observed.extend(
+                signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .filter(|(slot, _)| self.store_slots.contains(&(declaration, *slot)))
+                    .map(|(slot, _)| (node, slot)),
+            );
+        }
         let bindings = declaration
             .map(|(module, _)| local_bindings(&self.program.modules[module]))
             .unwrap_or_default();
@@ -1616,17 +1688,8 @@ impl<N: Copy + Eq + Hash> StoreCalls<N> {
         true
     }
 
-    /// The slots of each cycle whose key can differ between its calls
-    /// (TIME-8): one the cycle's calls compute or give anew, one that
-    /// receives another parameter on the way round, and what such a slot
-    /// is handed on to in the cycle. `observed` holds the slots a store
-    /// operation's key reads.
-    fn changed(
-        self,
-        mut observed: HashSet<(N, usize)>,
-        uses: &StoreUses<N>,
-        aliases: bool,
-    ) -> HashSet<(N, usize)> {
+    /// Recursive components of this call graph (TIME-8).
+    fn components(&self) -> Vec<HashSet<N>> {
         let mut graph = DiGraph::<N, ()>::new();
         let mut nodes = HashMap::new();
         for &(caller, callee) in &self.calls {
@@ -1638,12 +1701,32 @@ impl<N: Copy + Eq + Hash> StoreCalls<N> {
                 .or_insert_with(|| graph.add_node(callee));
             graph.add_edge(caller, callee, ());
         }
-        let mut cycles = HashMap::new();
-        for (number, declarations) in kosaraju_scc(&graph).into_iter().enumerate() {
-            if declarations.len() > 1 || graph.contains_edge(declarations[0], declarations[0]) {
-                cycles.extend(declarations.into_iter().map(|node| (graph[node], number)));
-            }
-        }
+        kosaraju_scc(&graph)
+            .into_iter()
+            .filter(|component| {
+                component.len() > 1 || graph.contains_edge(component[0], component[0])
+            })
+            .map(|component| component.into_iter().map(|node| graph[node]).collect())
+            .collect()
+    }
+
+    /// The slots of each cycle whose key can differ between its calls
+    /// (TIME-8): one the cycle's calls compute or give anew, one that
+    /// receives another parameter on the way round, and what such a slot
+    /// is handed on to in the cycle. `observed` holds the slots a store
+    /// operation's key reads.
+    fn changed(
+        &self,
+        mut observed: HashSet<(N, usize)>,
+        uses: &StoreUses<N>,
+        aliases: bool,
+    ) -> HashSet<(N, usize)> {
+        let cycles: HashMap<N, usize> = self
+            .components()
+            .into_iter()
+            .enumerate()
+            .flat_map(|(number, component)| component.into_iter().map(move |node| (node, number)))
+            .collect();
         let same_cycle = |caller: N, callee: N| {
             cycles
                 .get(&caller)
@@ -1712,8 +1795,8 @@ fn follow_slots<S: Copy + Eq + Hash>(slots: &mut HashSet<S>, edges: &HashMap<S, 
 /// Trace the inputs of a key back round a cycle, through the slots that
 /// hand it on unchanged (TIME-8: "where it is another `const` parameter,
 /// as two exchanged on the way round are"). The key is exchanged where
-/// the trace reaches two slots of one function, that of the key or any
-/// other on the way round, and where it reaches a slot of a function that
+/// the trace reaches two non-aliased slots of one function, that of the
+/// key or any other on the way round, and where it reaches a slot of a function that
 /// reads keys which is none of its keys.
 fn cycle_passes_another_key<N: Copy + Eq + Hash>(
     read: (N, usize),

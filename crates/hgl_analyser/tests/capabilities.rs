@@ -942,3 +942,61 @@ fn fixed_store_routes_leave_computed_keys_to_the_build() {
         );
     }
 }
+
+/// TIME-8, CAP-6: an unrelated forwarding graph must not erase a fixed-key
+/// proof. Core's explicitly supplied documentation contains this map form.
+#[test]
+fn unrelated_forwarding_graph_does_not_hide_fixed_store_routes() {
+    let unrelated = r#"
+fn line_total(price: i64, quantity: i64) -> i64 => price * quantity
+fn totals(prices: list<i64, 2>, quantities: list<i64, 2>) -> list<i64, 2> =>
+    map{join: .outer}(line_total, prices, quantities)
+test unrelated_map {
+    assert eval totals(prices: [[2, 3]], quantities: [[5, 7]]) == [[10, 21]]
+}
+"#;
+    for (source, line) in [(SAME_KEY_ROUTES, 15), (SELECTED_KEY_ROUTE, 12)] {
+        let source = format!("{source}{unrelated}");
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            [format!(
+                "m.hgl:{line}:5 injectable/store.reserved_key TIME-8"
+            )],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8: observers in both functions do not make two exchanged keys one.
+/// The effective key at depth one is safe, so source must leave the cycle to
+/// its runtime operation rather than reject the first key.
+#[test]
+fn two_readers_exchanging_keys_remain_dynamic() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn first(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { second(store, depth - 1, next, key) }
+}
+const fn second(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { first(store, depth - 1, next, key) }
+}
+fn node(const key: str, const next: str) {
+    inject global_state
+    when {}
+    stop { first(global_state, 1, key, next) }
+}
+test t { eval node(key: "run.output", next: "user.next") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}

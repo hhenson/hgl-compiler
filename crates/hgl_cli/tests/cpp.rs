@@ -5925,12 +5925,46 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
         stdout.contains("rejection cases: 4 passed, 0 failed\n"),
         "{stdout}"
     );
+    // TIME-8, CAP-6: explicit Core adds forwarding documentation examples;
+    // an unrelated unread route must not erase either fixed-key rejection.
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
+    let core = core.to_str().unwrap();
+    let output = hgl_in(
+        &[
+            "test",
+            core,
+            &routes,
+            "--target",
+            "cpp",
+            "--test-path",
+            &routes,
+        ],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 4 passed, 0 failed\n"),
+        "{stdout}"
+    );
     let file = write(
         &root,
         "demo.store.reserved.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.store.reserved.hgl"),
     );
     let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 36 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    let output = hgl_in(
+        &["test", core, &file, "--target", "cpp", "--test-path", &file],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
