@@ -126,10 +126,16 @@ fn read_success(outcome: result<i64, error>) -> i64 {
 }
 fn guaranteed_graph(input: i64) -> i64 => read_success(published_result(input))
 
+operator first_value<T>(items: list<T>) -> result<i64, error>
+impl const fn first_value<U>(items: list<U>) -> U requires U == i64 => items[0]
+
 test guaranteed_success {
     let from_place: result<str, error> = guaranteed("value")
     assert is_ok(from_place)
     if is_ok(from_place) { assert from_place.value == "value" }
+    let first: result<i64, error> = first_value([13, 17])
+    assert is_ok(first)
+    if is_ok(first) { assert first.value == 13 }
     let forwarded = complete(19)
     assert is_ok(forwarded)
     if is_ok(forwarded) { assert forwarded.value == 19 }

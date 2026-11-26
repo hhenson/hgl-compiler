@@ -435,6 +435,45 @@ impl<'a> Typer<'a> {
         widening: bool,
         forms: ArgumentForms,
     ) -> Admissions<'a> {
+        let mut admitted =
+            self.admitted_result_form(operator, candidates, given, wanted, (widening, forms), None);
+        // GEN-5, GEN-6: a complete fallible place may also receive a candidate
+        // that guarantees its success. Infer each reading independently: the
+        // same generic implementation may give a whole result in one instance
+        // and a plain value in another. FN-17 still requires an exact template.
+        if wanted.callback.is_none()
+            && let Some(result @ Type::Result { value, error }) = not_null(wanted.place)
+            && **error == Type::Error
+        {
+            let payload = Wanted {
+                place: Some(value),
+                among: wanted.among.clone(),
+                written: false,
+                callback: None,
+            };
+            admitted.include(self.admitted_result_form(
+                operator,
+                candidates,
+                given,
+                &payload,
+                (widening, forms),
+                Some(result),
+            ));
+        }
+        admitted
+    }
+
+    /// Try one requested output form. For a guaranteed success, check the
+    /// public contract with the candidate's inferred input and result types.
+    fn admitted_result_form(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[(usize, usize, &'a Signature)],
+        given: &[Given],
+        wanted: &Wanted,
+        (widening, forms): (bool, ArgumentForms),
+        success: Option<&Type>,
+    ) -> Admissions<'a> {
         let program = self.program;
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -457,28 +496,6 @@ impl<'a> Typer<'a> {
             ) else {
                 continue;
             };
-            // GEN-6: a complete fallible place takes a candidate's guaranteed
-            // value as a success. Match that candidate against the requested
-            // payload, preserving independent output generics and FN-17 templates.
-            let success = not_null(wanted.place).and_then(|result| {
-                let Type::Result { value, error } = result else {
-                    return None;
-                };
-                let (role, _) = candidate.kind.candidate()?;
-                (**error == Type::Error
-                    && wanted.callback.is_none()
-                    && super::candidate_contracts::guarantees_success(
-                        public, signature, role, result,
-                    ))
-                .then_some((result, value.as_ref()))
-            });
-            let for_payload = success.map(|(_, value)| Wanted {
-                place: Some(value),
-                among: wanted.among.clone(),
-                written: false,
-                callback: None,
-            });
-            let wanted = for_payload.as_ref().unwrap_or(wanted);
             // ERR-14 and ERR-15: a checked child's ordinary type is the
             // child's value. A candidate that declares a result slot can
             // take the failure whole. A bare generic does not infer that
@@ -707,6 +724,13 @@ impl<'a> Typer<'a> {
                         resolved.result = Some(project(result));
                     }
                 }
+                if let Some(result) = success
+                    && !candidate.kind.candidate().is_some_and(|(role, _)| {
+                        super::candidate_contracts::guarantees_success(public, &taken, role, result)
+                    })
+                {
+                    continue;
+                }
                 // FN-17: a function reference supplies a signature.
                 // Contextual operand or result reads do not make it fit.
                 if let Some(callback) = &wanted.callback
@@ -802,7 +826,7 @@ impl<'a> Typer<'a> {
                     module,
                     declaration,
                     declared: signature,
-                    success: success.map(|(result, _)| result.clone()),
+                    success: success.cloned(),
                     taken,
                     generics,
                     type_packs,
