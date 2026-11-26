@@ -659,7 +659,8 @@ transpiler: partial
 - Replays scalar publications, whole or delta collection entries, and window arrivals as
   their forms require.
 - Replays a supported nested dictionary.
-- Replays supported concrete struct applications with generic type arguments.
+- Replays supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-11.
 
 ## CEVAL-4
@@ -668,7 +669,8 @@ transpiler: partial
 
 - Records independent timestamp and delta pairs, including an empty recording. A cycle
   that only ages a window adds no entry.
-- Records supported concrete struct applications with generic type arguments.
+- Records supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-16.
 
 ## CEVAL-5
@@ -1001,17 +1003,17 @@ analyser: partial
 - Core declares a native value candidate for `convert<str>(Type)`.
 
 - A user type uses its selected `convert<str>` and rejects if there is no candidate.
-- Core HGL candidates admit growing/fixed list, set and dictionary text and their delta text when each written member has its FMT-5 text. Missing member conversions reject at the call.
+- Core HGL candidates admit growing/fixed list, set, dictionary and tuple text, and list, set and dictionary delta text, when each written member has its FMT-5 text. A member without an infallible text conversion rejects at the call, including inside a nested tuple. Formatting and named requirements retain a selected tuple conversion's type pack.
 - A nullable field checks the text conversion of its payload type. The target writes that text when present and `null` when absent.
-- Left: tuple and struct text candidates (#751).
+- Left: struct text candidates (#751).
 
 transpiler: partial
 
 - A Type value converts to its canonical diagnostic spelling, including fixed collection sizes, generic arguments and nullable suffixes (TYPE-18).
 - Enum arguments display their declared enum name, independently of their qualified identity key. Left: generic-type diagnostics retain source-form duration/float arguments while Type values normalize them (#909).
-- Value defaults are written in Core's scalar forms. Ordinary Core HGL candidates assemble growing lists, fixed lists, sets and dictionaries in traversal order, select each member's conversion, quote and escape strings and render absent members as `null`.
+- Value defaults are written in Core's scalar forms. Ordinary Core HGL candidates assemble growing lists, fixed lists, sets, dictionaries and tuples in traversal order, select each member's conversion, quote and escape strings and render absent members as `null`. Tuple text preserves the singleton comma (EXPR-8).
 - Collection delta text is assembled by Core HGL bodies using the concrete Type-query constructor prefix (TYPE-16/18), omitting empty/null properties and preserving non-null sizes, iteration order, quoted strings and selected nested/member conversions. Ordinary HGL calls and loops lower these bodies.
-- Left: tuple and struct text candidates (#751).
+- Left: struct text candidates (#751).
 
 ## FMT-6
 
