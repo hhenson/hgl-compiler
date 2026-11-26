@@ -534,12 +534,13 @@ impl<'a> Typer<'a> {
             && let Some(known) = self
                 .anonymous
                 .as_mut()
-                .and_then(|scope| scope.immediate_conditions.as_mut())
-            && let Some(value) = value
-                .as_ref()
-                .and_then(|value| super::lifting::known_selector(value, known))
+                .and_then(|scope| scope.immediate_values.as_mut())
+            && let Some(value) = value.as_ref().and_then(|value| {
+                super::lifting::ImmediateValues::new(self.program, &self.instance, known)
+                    .read(value)
+            })
         {
-            known.push((local, value));
+            known.push((local, std::rc::Rc::new(value)));
         }
         Stmt::Declare { local, value }
     }

@@ -3,6 +3,7 @@
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
@@ -25,6 +26,54 @@ use crate::hir::{
 use crate::program::{DeclarationKind, Program, Role};
 use crate::types::{Argument, Detail, Type};
 use crate::{codes, error};
+
+/// The immutable values available when classifying a direct anonymous call.
+#[derive(Clone, Copy)]
+pub(super) struct ImmediateValues<'a> {
+    program: &'a Program,
+    generics: &'a [(Location, Argument)],
+    locals: &'a [(LocalId, Rc<Expr>)],
+}
+
+impl<'a> ImmediateValues<'a> {
+    /// Both the written generic arguments and local bindings are lexical.
+    pub(super) fn new(
+        program: &'a Program,
+        generics: &'a [(Location, Argument)],
+        locals: &'a [(LocalId, Rc<Expr>)],
+    ) -> Self {
+        Self {
+            program,
+            generics,
+            locals,
+        }
+    }
+
+    /// A checked ordinary expression reduced by the bounded const reader.
+    pub(super) fn read(self, expression: &Expr) -> Option<Expr> {
+        crate::const_inputs::immediate_value(self.program, expression, self.generics, self.locals)
+            .ok()
+    }
+
+    /// A known selector already in the representation of a `switch` label.
+    pub(super) fn selector(self, expression: &Expr) -> Option<LabelValue> {
+        match self.read(expression)?.kind {
+            ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(value)),
+            ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(value)),
+            ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value)),
+            ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(member)),
+            _ => None,
+        }
+    }
+
+    /// A known Boolean condition of an immediate call.
+    pub(super) fn condition(self, expression: &Expr) -> Option<bool> {
+        match self.selector(expression)? {
+            LabelValue::Bool(value) => Some(value),
+            _ => None,
+        }
+    }
+}
 
 impl<'a> Typer<'a> {
     /// The category of a graph's `var` against that of a value assigned
@@ -87,7 +136,8 @@ impl<'a> Typer<'a> {
             self.anonymous
                 .as_ref()
                 .filter(|_| !self.type_query)
-                .and_then(|body| body.immediate_conditions.as_deref()),
+                .and_then(|body| body.immediate_values.as_deref())
+                .map(|locals| ImmediateValues::new(self.program, &self.instance, locals)),
             live_locals,
         )
     }
@@ -319,31 +369,9 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
     category_with_functions(program, locals, value, &[], &[], None, None)
 }
 
-/// A literal selector or an immutable binding already known in a direct call.
-pub(super) fn known_selector(expr: &Expr, known: &[(LocalId, LabelValue)]) -> Option<LabelValue> {
-    match &expr.kind {
-        ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
-        ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
-        ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
-        ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
-        ExprKind::Local(local) => known
-            .iter()
-            .find_map(|(id, value)| (id == local).then(|| value.clone())),
-        _ => None,
-    }
-}
-
-/// A known condition of an immediate call's `if`, `while`, `&&` or `||`.
-pub(super) fn known_bool(expr: &Expr, known: &[(LocalId, LabelValue)]) -> Option<bool> {
-    match known_selector(expr, known)? {
-        LabelValue::Bool(value) => Some(value),
-        _ => None,
-    }
-}
-
-fn skips_right(operator: BinaryOperator, left: &Expr, known: &[(LocalId, LabelValue)]) -> bool {
+fn skips_right(operator: BinaryOperator, left: &Expr, known: ImmediateValues<'_>) -> bool {
     matches!(
-        (operator, known_bool(left, known)),
+        (operator, known.condition(left)),
         (BinaryOperator::And, Some(false)) | (BinaryOperator::Or, Some(true))
     )
 }
@@ -354,7 +382,7 @@ fn category_with_functions(
     value: &Expr,
     functions: &[(usize, Callee)],
     callback_captures: &[ValueCategory],
-    evaluated: Option<&[(LocalId, LabelValue)]>,
+    evaluated: Option<ImmediateValues<'_>>,
     live_locals: Option<&HashSet<LocalId>>,
 ) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
@@ -559,7 +587,7 @@ fn category_with_functions(
             ..
         } => {
             if let Some(known) = evaluated
-                && let Some(selected) = known_bool(condition, known)
+                && let Some(selected) = known.condition(condition)
             {
                 return if selected {
                     category(then)

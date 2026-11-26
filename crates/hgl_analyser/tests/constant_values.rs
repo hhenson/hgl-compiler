@@ -1027,6 +1027,8 @@ fn a_local_list_size_checks_the_reached_return_of_an_immediate_call() {
         "if input > 0 { return 3 }\nreturn 4",
         "while input > 0 { return 3 }\nreturn 4",
         "switch fixed { case 0: return 3\ndefault: return input }",
+        "for i in 0..<input { return 3 }\nreturn 4",
+        "for i in input..<4 { return 3 }\nreturn 4",
     ] {
         expect(&inline(body), &["3 list.size"]);
     }
@@ -1038,6 +1040,8 @@ fn a_local_list_size_checks_the_reached_return_of_an_immediate_call() {
         "while false { return input }\nreturn 4",
         "while true { return 3 }\nreturn input",
         "for i in 0..<0 { return input }\nreturn 4",
+        "for i in 0..<fixed { return 3 }\nreturn 4",
+        "for i in 0..<k { return 3 }\nreturn input",
     ] {
         expect(&inline(body), &[]);
     }
@@ -1053,6 +1057,19 @@ fn a_local_list_size_checks_the_reached_return_of_an_immediate_call() {
             "}\n",
         ),
         &["7 list.size"],
+    );
+    expect(
+        concat!(
+            "fn measured(input: i64) -> i64 {\n",
+            "    let width = (fn() -> i64 {\n",
+            "        for i in 0..<input { return 3 }\n",
+            "        return 4\n",
+            "    })()\n",
+            "    var held: list<i64, width>\n",
+            "    return input\n",
+            "}\n",
+        ),
+        &["4 connection.as_constant", "7 list.size"],
     );
 }
 
@@ -1085,6 +1102,37 @@ fn a_local_list_size_checks_reached_writes_to_the_returned_binding() {
     ] {
         expect(&inline(body), &[]);
     }
+}
+
+/// CTRL-15 and UNIT-13: a module constant or checked arithmetic selects
+/// one switch case just as its literal does, including through a local.
+#[test]
+fn a_local_list_size_uses_the_resolved_value_of_a_switch_selector() {
+    let program = |selector: &str, label: &str, argument: &str| {
+        format!(
+            "const INDEX: i64 = 7\n\
+             const SIDE: str = \"west\"\n\
+             fn measured(input: i64) -> i64 {{\n\
+                 let count = (fn(k: i64) -> i64 {{\n\
+                     switch {selector} {{ case {label}: return 3\n\
+                                         default: return input }}\n\
+                 }})({argument})\n\
+                 var held: list<i64, count>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for (selector, label, argument) in [
+        ("INDEX", "7", "0"),
+        ("INDEX - 1", "6", "0"),
+        ("1 + 2", "3", "0"),
+        ("k + INDEX", "9", "1 + 1"),
+        ("SIDE", "\"west\"", "0"),
+        ("SIDE + \"erly\"", "\"westerly\"", "0"),
+    ] {
+        expect(&program(selector, label, argument), &[]);
+    }
+    expect(&program("INDEX - 1", "7", "0"), &["9 list.size"]);
 }
 
 /// TYPE-10 and FN-17: a static callback can still capture a connection.

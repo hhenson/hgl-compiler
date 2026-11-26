@@ -35,7 +35,7 @@ analyser: partial
   `list.size` (TYPE-10). An immediately invoked anonymous function preserves
   the connection category of its result, including through a local binding.
   The result depends on reached captures, supplied callbacks, selectors and
-  writes that determine the returned value (CTRL-13 to CTRL-15).
+  writes that determine the returned value (CTRL-13 to CTRL-15, EXPR-16).
 
 transpiler: done
 

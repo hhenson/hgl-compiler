@@ -1465,7 +1465,7 @@ impl<'a> Typer<'a> {
             if let Some(known) = self
                 .anonymous
                 .as_mut()
-                .and_then(|scope| scope.immediate_conditions.as_mut())
+                .and_then(|scope| scope.immediate_values.as_mut())
             {
                 known.retain(|(local, _)| *local < mark.locals);
             }

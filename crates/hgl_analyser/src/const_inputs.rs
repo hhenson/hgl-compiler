@@ -13,8 +13,8 @@ use petgraph::graph::DiGraph;
 
 use crate::formatting;
 use crate::hir::{
-    Answer, Argument, BinaryOperator, Callee, Expr, ExprKind, Form, PackInput, Stmt, Value,
-    ValueCategory,
+    Answer, Argument, BinaryOperator, Callee, Expr, ExprKind, Form, LocalId, PackInput, Stmt,
+    Value, ValueCategory,
 };
 use crate::{
     Argument as GenericArgument, Binding, ConstantValue, Detail, Phase, Program, Role, Scalar,
@@ -524,6 +524,7 @@ impl Program {
 
 struct Reader<'a> {
     program: &'a Program,
+    locals: &'a [(LocalId, Rc<Expr>)],
     steps_left: usize,
     text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
@@ -543,10 +544,29 @@ pub(crate) fn projection_value(
     Reader::new(program).read(expression, INPUT_DEPTH, &generics)
 }
 
+/// Normalize a known value in an immediate anonymous call's lexical scope.
+/// Preserve the usual builtin operation and reader budget checks.
+pub(crate) fn immediate_value(
+    program: &Program,
+    expression: &Expr,
+    generics: &[(Location, GenericArgument)],
+    locals: &[(LocalId, Rc<Expr>)],
+) -> Result<Expr, ConstInputFault> {
+    let generics: Vec<_> = generics
+        .iter()
+        .map(|(at, argument)| (*at, argument))
+        .collect();
+    let mut reader = Reader::new(program);
+    reader.locals = locals;
+    reader.read_string_helpers = false;
+    reader.read(expression, INPUT_DEPTH, &generics)
+}
+
 impl<'a> Reader<'a> {
     fn new(program: &'a Program) -> Self {
         Self {
             program,
+            locals: &[],
             steps_left: INPUT_BUDGET,
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
@@ -568,7 +588,11 @@ impl<'a> Reader<'a> {
             return Err(ConstInputFault::Unread);
         }
         self.reading.push(dependency);
+        // A followed declaration has its own lexical local IDs (UNIT-7,
+        // UNIT-13). The immediate call's bindings do not belong to it.
+        let locals = std::mem::take(&mut self.locals);
         let read = self.read(value, depth, generics);
+        self.locals = locals;
         self.reading.pop();
         read
     }
@@ -599,6 +623,11 @@ impl<'a> Reader<'a> {
                 declaration: *declaration,
                 member: *member,
             },
+            ExprKind::Local(local) => {
+                let locals = self.locals;
+                let (_, value) = locals.iter().find(|(id, _)| id == local).ok_or(Unread)?;
+                return self.read(value, next, generics);
+            }
             ExprKind::GenericValue { at, .. } => {
                 let (_, GenericArgument::Constant(given)) = generics
                     .iter()

@@ -3,10 +3,7 @@
 
 use std::collections::HashSet;
 
-use super::super::{
-    Typer,
-    lifting::{known_bool, known_selector},
-};
+use super::super::{Typer, lifting::ImmediateValues};
 use crate::hir::ValueCategory::Connection;
 use crate::hir::{BinaryOperator, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt};
 use crate::types::ConstantValue;
@@ -20,15 +17,11 @@ enum Return {
 /// Which reached writes can make a later read depend on a connection.
 struct Flow<'a, 'p> {
     typer: &'a Typer<'p>,
-    known: &'a [(LocalId, LabelValue)],
+    known: ImmediateValues<'a>,
     live: HashSet<LocalId>,
 }
 
-pub(super) fn result_is_live(
-    typer: &Typer<'_>,
-    body: &[Stmt],
-    known: &[(LocalId, LabelValue)],
-) -> bool {
+pub(super) fn result_is_live(typer: &Typer<'_>, body: &[Stmt], known: ImmediateValues<'_>) -> bool {
     let mut flow = Flow {
         typer,
         known,
@@ -96,7 +89,7 @@ impl Flow<'_, '_> {
                     ..
                 } => {
                     self.expression(condition, controlled)?;
-                    let known = known_bool(condition, self.known);
+                    let known = self.known.condition(condition);
                     if known != Some(false) {
                         self.loop_passes(body, None, known.is_none(), |flow| {
                             controlled || flow.reads_live(condition)
@@ -106,7 +99,12 @@ impl Flow<'_, '_> {
                 Stmt::For { sequence, body, .. } => {
                     self.expression(sequence, controlled)?;
                     // A fixed-size connection supplies live items, but its
-                    // extent does not choose which passes run (CTRL-15).
+                    // extent does not choose which passes run (CTRL-15). A
+                    // range's bounds do choose them and must be known during
+                    // composition (EXPR-16).
+                    let controlled = controlled
+                        || matches!(&sequence.kind, ExprKind::Range { lower, upper }
+                            if self.reads_live(lower) || self.reads_live(upper));
                     let passes = self.passes(sequence);
                     self.loop_passes(body, passes, passes.is_none(), |_| controlled)?;
                 }
@@ -134,7 +132,7 @@ impl Flow<'_, '_> {
                 } => {
                     self.expression(condition, controlled)?;
                     let otherwise = otherwise.as_deref();
-                    match known_bool(condition, self.known) {
+                    match self.known.condition(condition) {
                         Some(true) => self.expression(then, controlled)?,
                         Some(false) => self.maybe_expression(otherwise, controlled)?,
                         None => {
@@ -152,7 +150,7 @@ impl Flow<'_, '_> {
                         return Ok(true);
                     };
                     self.expression(left, controlled)?;
-                    match known_bool(left, self.known) {
+                    match self.known.condition(left) {
                         Some(value) if value == (operator == BinaryOperator::And) => {
                             self.expression(right, controlled)?;
                         }
@@ -182,7 +180,7 @@ impl Flow<'_, '_> {
         controlled: bool,
     ) -> Result<(), Return> {
         self.expression(selector, controlled)?;
-        if let Some(value) = known_selector(selector, self.known)
+        if let Some(value) = self.known.selector(selector)
             && cases.iter().all(|case| case.value.is_some())
         {
             let body = cases
@@ -206,10 +204,10 @@ impl Flow<'_, '_> {
     fn passes(&self, sequence: &Expr) -> Option<u64> {
         match &sequence.kind {
             ExprKind::Range { lower, upper } => {
-                let LabelValue::Int(lower) = known_selector(lower, self.known)? else {
+                let LabelValue::Int(lower) = self.known.selector(lower)? else {
                     return None;
                 };
-                let LabelValue::Int(upper) = known_selector(upper, self.known)? else {
+                let LabelValue::Int(upper) = self.known.selector(upper)? else {
                     return None;
                 };
                 Some(if upper > lower {

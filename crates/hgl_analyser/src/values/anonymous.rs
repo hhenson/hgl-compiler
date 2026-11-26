@@ -3,15 +3,17 @@
 //! (FN-14). Part of the typing pass ([`super`]).
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
+use super::lifting::ImmediateValues;
 use crate::declared::substitute_within;
 use crate::hir::{
-    Argument, Body, Callee, ExprKind, Form, LabelValue, LocalId, Node, NodeMut, PackKey, Stmt,
+    Argument, Body, Callee, Expr, ExprKind, Form, LocalId, Node, NodeMut, PackKey, Stmt,
     ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::LocalKind;
@@ -22,14 +24,14 @@ use crate::types::Type;
 mod flow;
 
 /// What belongs to the anonymous function currently being checked.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub(super) struct Anonymous {
     /// The result the body must give, if any.
     pub(super) result: Option<Type>,
     /// FN-17: infer whether a complete, unwritten result exists.
     pub(super) infer_result: bool,
-    /// Literal selectors bound to an input or immutable local of a direct call.
-    pub(super) immediate_conditions: Option<Vec<(LocalId, LabelValue)>>,
+    /// Known ordinary values of a direct call's inputs and immutable locals.
+    pub(super) immediate_values: Option<Vec<(LocalId, Rc<Expr>)>>,
     /// The first of its own locals. Earlier locals would be captures.
     pub(super) first_local: LocalId,
 }
@@ -132,17 +134,18 @@ impl Typer<'_> {
         self.check_capability_captures(function);
         let mut mark = self.mark();
         let first_local = mark.locals;
-        let immediate_conditions = direct_arguments.map(|arguments| {
+        let immediate_values = direct_arguments.map(|arguments| {
             let mut known = self
                 .anonymous
                 .as_ref()
-                .and_then(|outer| outer.immediate_conditions.clone())
+                .and_then(|outer| outer.immediate_values.clone())
                 .unwrap_or_default();
             for argument in arguments {
                 if let Some(parameter) = argument.parameter
-                    && let Some(value) = super::lifting::known_selector(&argument.value, &known)
+                    && let Some(value) = ImmediateValues::new(self.program, &self.instance, &known)
+                        .read(&argument.value)
                 {
-                    known.push((first_local + parameter, value));
+                    known.push((first_local + parameter, Rc::new(value)));
                 }
             }
             known
@@ -150,7 +153,7 @@ impl Typer<'_> {
         let outer = self.anonymous.replace(Anonymous {
             result: result.cloned(),
             infer_result,
-            immediate_conditions,
+            immediate_values,
             first_local,
         });
         let temporal = self.temporal.take();
@@ -183,9 +186,12 @@ impl Typer<'_> {
             && self
                 .anonymous
                 .as_ref()
-                .and_then(|scope| scope.immediate_conditions.as_deref())
+                .and_then(|scope| scope.immediate_values.as_deref())
                 .zip(statements.as_deref())
-                .is_some_and(|(known, body)| flow::result_is_live(self, body, known));
+                .is_some_and(|(known, body)| {
+                    let known = ImmediateValues::new(self.program, &self.instance, known);
+                    flow::result_is_live(self, body, known)
+                });
         let needs_pack_inputs = specialization.is_none()
             && statements
                 .as_deref()
