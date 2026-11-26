@@ -150,9 +150,11 @@ transpiler: partial
   atomic struct connections, and maps supported children to endpoints.
 - Boolean membership reads typed SDK proxies as Boolean values, including temporal
   set inputs/results and a dictionary's Boolean key set (TIME-1, SET-1).
-- Gives concrete struct applications with supported type arguments their own nominal
-  schemas and maps their substituted fields to child endpoints.
-- Left: Reports abstract temporal structs, structs with generic value arguments,
+- Gives concrete struct applications with supported type and value arguments (`i64`,
+  `bool`, finite `f64`, enum, and `Type`) their own nominal schemas and maps their
+  substituted fields to child endpoints.
+- Left: Reports abstract temporal structs, structs with unsupported generic value
+  argument kinds (such as `str`, non-finite `f64`, or packs),
   bundles with unsupported field or type argument schemas, list parts that are
   sets, dictionaries, windows or atomic structs, nullable
   aggregate connections, non-scalar temporal keys, and dictionary values outside

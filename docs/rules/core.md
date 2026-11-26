@@ -659,7 +659,8 @@ transpiler: partial
 - Replays scalar publications, whole or delta collection entries, and window arrivals as
   their forms require.
 - Replays a supported nested dictionary.
-- Replays supported concrete struct applications with generic type arguments.
+- Replays supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-11.
 
 ## CEVAL-4
@@ -668,7 +669,8 @@ transpiler: partial
 
 - Records independent timestamp and delta pairs, including an empty recording. A cycle
   that only ages a window adds no entry.
-- Records supported concrete struct applications with generic type arguments.
+- Records supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-16.
 
 ## CEVAL-5

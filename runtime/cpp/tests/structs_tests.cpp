@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -547,6 +548,93 @@ TEST_CASE("type_tag distinguishes generic struct template identities (TYPE-18, G
     const First a{7};
     const Same b{7};
     CHECK(a == b);
+}
+
+enum class SampleMode : i64 { fast = 0, slow = 2 };
+constexpr hglrt::EnumNames<SampleMode, 2> hgl_enum(SampleMode) noexcept {
+    return {"test::SampleMode", {{SampleMode::fast, "fast"}, {SampleMode::slow, "slow"}}, {0, 2}};
+}
+
+enum class OtherMode : i64 { fast = 0 };
+constexpr hglrt::EnumNames<OtherMode, 1> hgl_enum(OtherMode) noexcept {
+    return {"test::OtherMode", {{OtherMode::fast, "fast"}}, {0}};
+}
+
+TEST_CASE("nominal_struct_name distinguishes generic value arguments and builds distinct schemas (TYPE-3, TYPE-9)") {
+    using IntOne = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Bucket", hglrt::value_arg<i64{1}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using IntTwo = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Bucket", hglrt::value_arg<i64{2}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using IntMin = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Bucket", hglrt::value_arg<std::numeric_limits<i64>::min()>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using PlainBucket1 = hgraph::NominalBundle<
+        "test", "Bucket_1", false, hgraph::BundleParents<>, hgraph::BundleArguments<>,
+        hgraph::Field<"value", i64>>;
+    using PosZero = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Scaled", hglrt::value_arg<0.0>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using NegZero = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Scaled", hglrt::value_arg<-0.0>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using FlagTrue = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Flagged", hglrt::value_arg<true>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using FlagFalse = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Flagged", hglrt::value_arg<false>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using ModeFast = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Modeled", hglrt::value_arg<SampleMode::fast>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using ModeSlow = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Modeled", hglrt::value_arg<SampleMode::slow>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using OtherModeFast = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Modeled", hglrt::value_arg<OtherMode::fast>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using KindInt = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Tagged", hglrt::value_arg<hglrt::type_tag{"i64"}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using KindStr = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Tagged", hglrt::value_arg<hglrt::type_tag{"str"}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using MixedInt1 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Mixed", hglrt::type_arg_slot, hglrt::value_arg<i64{1}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<i64>, hgraph::Field<"value", i64>>;
+    using MixedStr1 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Mixed", hglrt::type_arg_slot, hglrt::value_arg<i64{1}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<hglrt::str>, hgraph::Field<"value", hglrt::str>>;
+    using MixedInt2 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Mixed", hglrt::type_arg_slot, hglrt::value_arg<i64{2}>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<i64>, hgraph::Field<"value", i64>>;
+
+    CHECK(hgraph::value_schema_descriptor<IntOne>::value_meta() !=
+          hgraph::value_schema_descriptor<IntTwo>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<IntOne>::value_meta() !=
+          hgraph::value_schema_descriptor<IntMin>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<IntOne>::value_meta() !=
+          hgraph::value_schema_descriptor<PlainBucket1>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<PosZero>::value_meta() !=
+          hgraph::value_schema_descriptor<NegZero>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<FlagTrue>::value_meta() !=
+          hgraph::value_schema_descriptor<FlagFalse>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<ModeFast>::value_meta() !=
+          hgraph::value_schema_descriptor<ModeSlow>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<ModeFast>::value_meta() !=
+          hgraph::value_schema_descriptor<OtherModeFast>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<KindInt>::value_meta() !=
+          hgraph::value_schema_descriptor<KindStr>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<MixedInt1>::value_meta() !=
+          hgraph::value_schema_descriptor<MixedStr1>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<MixedInt1>::value_meta() !=
+          hgraph::value_schema_descriptor<MixedInt2>::value_meta());
+    CHECK(hglrt::applied_struct_name<hglrt::type_arg<i64>, hglrt::value_arg<i64{2}>>("test::Mixed") ==
+          "test::Mixed<i64, 2>");
+    CHECK(hglrt::applied_struct_name<hglrt::value_arg<true>>("test::Flagged") == "test::Flagged<true>");
+    CHECK(hglrt::applied_struct_name<hglrt::value_arg<hglrt::type_tag{"i64"}>>("test::Tagged") ==
+          "test::Tagged<i64>");
 }
 
 // The generated code sets the HGL file and line at each publication.

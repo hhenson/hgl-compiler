@@ -32,7 +32,10 @@
 #include <hgraph/types/native_bundle.h>
 
 #include <array>
+#include <bit>
+#include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -675,12 +678,206 @@ struct bundle_value<std::array<T, N>> { using type = list_value<typename bundle_
 template <class T>
 using bundle_value = typename detail::bundle_value<T>::type;
 
-/// The display name of a concrete application and its ordered type arguments.
+/// Marks a generic type argument's position in a compile-time nominal struct
+/// schema name when value arguments are also present (TYPE-3, TYPE-9).
+struct type_arg_slot {};
+
+/// Wraps a generic type argument for display naming (`applied_struct_name`).
+template <class T>
+struct type_arg {};
+
+/// Wraps a generic value argument for compile-time nominal schema naming and
+/// display naming (TYPE-3, TYPE-9, GEN-8).
+template <auto V>
+struct value_arg {};
+
+namespace detail {
+template <class T>
+struct is_type_tag : std::false_type {};
+
+template <std::size_t N>
+struct is_type_tag<type_tag<N>> : std::true_type {};
+
+template <std::int64_t V>
+consteval std::size_t signed_decimal_length() noexcept {
+    std::uint64_t magnitude = V < 0 ? static_cast<std::uint64_t>(-(V + 1)) + 1U : static_cast<std::uint64_t>(V);
+    std::size_t digits = 1;
+    while (magnitude >= 10U) {
+        magnitude /= 10U;
+        ++digits;
+    }
+    return digits + (V < 0 ? 1U : 0U);
+}
+
+template <std::int64_t V>
+consteval auto signed_decimal_fixed() noexcept {
+    constexpr std::size_t len = signed_decimal_length<V>();
+    char buf[len + 1]{};
+    std::uint64_t magnitude = V < 0 ? static_cast<std::uint64_t>(-(V + 1)) + 1U : static_cast<std::uint64_t>(V);
+    std::size_t pos = len;
+    do {
+        buf[--pos] = static_cast<char>('0' + (magnitude % 10U));
+        magnitude /= 10U;
+    } while (magnitude != 0U);
+    if constexpr (V < 0) {
+        buf[0] = '-';
+    }
+    return hgraph::fixed_string<len + 1>{buf};
+}
+
+template <hgraph::fixed_string Prefix, hgraph::fixed_string Suffix>
+consteval auto join_fixed() noexcept {
+    constexpr std::size_t a = Prefix.sv().size();
+    constexpr std::size_t b = Suffix.sv().size();
+    char buf[a + b + 1]{};
+    for (std::size_t i = 0; i < a; ++i) {
+        buf[i] = Prefix.value[i];
+    }
+    for (std::size_t i = 0; i < b; ++i) {
+        buf[a + i] = Suffix.value[i];
+    }
+    return hgraph::fixed_string<a + b + 1>{buf};
+}
+
+template <auto V>
+consteval auto nominal_value_token() noexcept {
+    using T = std::remove_cvref_t<decltype(V)>;
+    if constexpr (std::same_as<T, bool>) {
+        if constexpr (V) {
+            return hgraph::fixed_string{"true"};
+        } else {
+            return hgraph::fixed_string{"false"};
+        }
+    } else if constexpr (std::integral<T>) {
+        return signed_decimal_fixed<static_cast<std::int64_t>(V)>();
+    } else if constexpr (std::same_as<T, double>) {
+        // TYPE-3, UNIT-13: bit-exact encoding keeps `-0.0` distinct from `0.0`.
+        constexpr std::uint64_t bits = std::bit_cast<std::uint64_t>(V);
+        constexpr char hex[] = "0123456789abcdef";
+        char buf[23]{'f', '6', '4', ':', '0', 'x'};
+        for (std::size_t i = 0; i < 16; ++i) {
+            buf[6 + i] = hex[(bits >> (60U - i * 4U)) & 0xFU];
+        }
+        return hgraph::fixed_string<23>{buf};
+    } else if constexpr (std::is_enum_v<T>) {
+        constexpr auto raw = signed_decimal_fixed<static_cast<std::int64_t>(V)>();
+        if constexpr (named_enum<T>) {
+            constexpr std::string_view enum_type = hgl_enum(V).type;
+            constexpr std::size_t type_len = enum_type.size();
+            constexpr std::size_t raw_len = raw.sv().size();
+            char buf[5 + type_len + 1 + raw_len + 1]{'e', 'n', 'u', 'm', ':'};
+            for (std::size_t i = 0; i < type_len; ++i) {
+                buf[5 + i] = enum_type[i];
+            }
+            buf[5 + type_len] = ':';
+            for (std::size_t i = 0; i < raw_len; ++i) {
+                buf[5 + type_len + 1 + i] = raw.value[i];
+            }
+            return hgraph::fixed_string<5 + type_len + 1 + raw_len + 1>{buf};
+        } else {
+            return join_fixed<hgraph::fixed_string{"enum:"}, raw>();
+        }
+    } else if constexpr (is_type_tag<T>::value) {
+        constexpr std::size_t len = sizeof(V.identity) - 1;
+        constexpr auto len_text = signed_decimal_fixed<static_cast<std::int64_t>(len)>();
+        constexpr std::size_t len_digits = len_text.sv().size();
+        char buf[5 + len_digits + 1 + len + 1]{'t', 'y', 'p', 'e', ':'};
+        for (std::size_t i = 0; i < len_digits; ++i) {
+            buf[5 + i] = len_text.value[i];
+        }
+        buf[5 + len_digits] = ':';
+        for (std::size_t i = 0; i < len; ++i) {
+            buf[5 + len_digits + 1 + i] = V.identity[i];
+        }
+        return hgraph::fixed_string<5 + len_digits + 1 + len + 1>{buf};
+    } else {
+        static_assert(!std::same_as<T, T>, "unsupported generic value argument for nominal bundle");
+    }
+}
+
+template <class Arg>
+struct nominal_arg_string;
+
+template <>
+struct nominal_arg_string<type_arg_slot> {
+    static constexpr auto value = hgraph::fixed_string{"_"};
+};
+
+template <auto V>
+struct nominal_arg_string<value_arg<V>> {
+    static constexpr auto value = nominal_value_token<V>();
+};
+
+template <hgraph::fixed_string Name, class... Args>
+consteval auto make_nominal_struct_name() noexcept {
+    constexpr std::size_t name_len = Name.sv().size();
+    constexpr std::size_t arg_count = sizeof...(Args);
+    constexpr std::size_t total =
+        name_len + 2U + (nominal_arg_string<Args>::value.sv().size() + ...) + (arg_count > 1 ? (arg_count - 1) * 2U : 0U);
+    char buf[total + 1]{};
+    std::size_t pos = 0;
+    for (std::size_t i = 0; i < name_len; ++i) {
+        buf[pos++] = Name.value[i];
+    }
+    buf[pos++] = '<';
+    bool first = true;
+    const auto append = [&](std::string_view token) {
+        if (!first) {
+            buf[pos++] = ',';
+            buf[pos++] = ' ';
+        }
+        first = false;
+        for (char c : token) {
+            buf[pos++] = c;
+        }
+    };
+    (append(nominal_arg_string<Args>::value.sv()), ...);
+    buf[pos++] = '>';
+    return hgraph::fixed_string<total + 1>{buf};
+}
+
+template <class Arg>
+std::string display_generic_arg() {
+    return type_name<Arg>();
+}
+
+template <class T>
+std::string display_generic_arg_tag(type_arg<T>) {
+    return type_name<T>();
+}
+
+template <auto V>
+std::string display_generic_arg_tag(value_arg<V>) {
+    using T = std::remove_cvref_t<decltype(V)>;
+    if constexpr (is_type_tag<T>::value) {
+        return std::string{V.identity, sizeof(V.identity) - 1};
+    } else {
+        return text_of(V);
+    }
+}
+
+template <class Arg>
+std::string format_applied_arg() {
+    if constexpr (requires { display_generic_arg_tag(Arg{}); }) {
+        return display_generic_arg_tag(Arg{});
+    } else {
+        return display_generic_arg<Arg>();
+    }
+}
+} // namespace detail
+
+/// Compile-time nominal schema name encoding a struct's generic value
+/// arguments alongside placeholders for any type arguments (TYPE-3, TYPE-9).
+template <hgraph::fixed_string Name, class... Args>
+inline constexpr auto nominal_struct_name = detail::make_nominal_struct_name<Name, Args...>();
+
+/// The display name of a concrete application and its ordered generic
+/// arguments (type arguments, `type_arg<T>`, or `value_arg<V>`).
 template <class... Args>
 std::string applied_struct_name(std::string_view name) {
     std::string result{name};
     const char* separator = "<";
-    ((result += std::exchange(separator, ", "), result += type_name<Args>()), ...);
+    ((result += std::exchange(separator, ", "), result += detail::format_applied_arg<Args>()), ...);
     return result + ">";
 }
 

@@ -37,3 +37,138 @@ test same_fields_with_distinct_type_arguments {
     assert eval same_int_tag(value: [Tagged<i64>(value: 3)]) == [Tagged<i64>(value: 3)]
     assert eval same_str_tag(value: [Tagged<str>(value: 4)]) == [Tagged<str>(value: 4)]
 }
+
+# TYPE-3, TYPE-9, CEVAL-3, CEVAL-4: concrete generic value arguments carry
+# distinct nominal bundle schemas and replay/record both whole values and deltas.
+struct Bucket<const N: i64> { value: i64 }
+struct Bucket_1 { value: i64 }
+
+fn same_bucket_1(value: Bucket<1>) -> Bucket<1> => value
+fn same_bucket_2(value: Bucket<2>) -> Bucket<2> => value
+fn same_bucket_neg(value: Bucket<-3>) -> Bucket<-3> => value
+fn same_plain_bucket_1(value: Bucket_1) -> Bucket_1 => value
+fn wrap_bucket_2(value: i64) -> Bucket<2> {
+    when { return Bucket<2>(value: value) }
+}
+
+test value_argument_int_replay_and_record {
+    assert eval same_bucket_1(value: [Bucket<1>(value: 7), _, delta<Bucket<1>>(value: 9)]) ==
+        [Bucket<1>(value: 7), _, delta<Bucket<1>>(value: 9)]
+    assert eval same_bucket_2(value: [Bucket<2>(value: 11)]) == [Bucket<2>(value: 11)]
+    assert eval same_bucket_neg(value: [Bucket<-3>(value: 13)]) == [Bucket<-3>(value: 13)]
+    assert eval same_plain_bucket_1(value: [Bucket_1(value: 15)]) == [Bucket_1(value: 15)]
+    assert eval wrap_bucket_2(value: [21]) == [Bucket<2>(value: 21)]
+}
+
+struct Flagged<const B: bool> { value: i64 }
+struct Scaled<const F: f64> { value: i64 }
+enum Mode { fast, slow }
+struct Modeled<const M: Mode> { value: i64 }
+struct TaggedKind<const K: Type> { value: i64 }
+
+fn same_flag_true(value: Flagged<true>) -> Flagged<true> => value
+fn same_flag_false(value: Flagged<false>) -> Flagged<false> => value
+fn same_pos_zero(value: Scaled<0.0>) -> Scaled<0.0> => value
+fn same_neg_zero(value: Scaled<-0.0>) -> Scaled<-0.0> => value
+fn same_scaled_half(value: Scaled<1.5>) -> Scaled<1.5> => value
+fn same_mode_fast(value: Modeled<Mode.fast>) -> Modeled<Mode.fast> => value
+fn same_mode_slow(value: Modeled<Mode.slow>) -> Modeled<Mode.slow> => value
+fn same_kind_int(value: TaggedKind<type(1)>) -> TaggedKind<type(1)> => value
+fn same_kind_str(value: TaggedKind<type("a")>) -> TaggedKind<type("a")> => value
+
+test value_argument_kinds_stay_distinct {
+    assert eval same_flag_true(value: [Flagged<true>(value: 1)]) == [Flagged<true>(value: 1)]
+    assert eval same_flag_false(value: [Flagged<false>(value: 2)]) == [Flagged<false>(value: 2)]
+    assert eval same_pos_zero(value: [Scaled<0.0>(value: 3)]) == [Scaled<0.0>(value: 3)]
+    assert eval same_neg_zero(value: [Scaled<-0.0>(value: 4)]) == [Scaled<-0.0>(value: 4)]
+    assert eval same_scaled_half(value: [Scaled<1.5>(value: 5)]) == [Scaled<1.5>(value: 5)]
+    assert eval same_mode_fast(value: [Modeled<Mode.fast>(value: 6)]) == [Modeled<Mode.fast>(value: 6)]
+    assert eval same_mode_slow(value: [Modeled<Mode.slow>(value: 7)]) == [Modeled<Mode.slow>(value: 7)]
+    assert eval same_kind_int(value: [TaggedKind<type(1)>(value: 8)]) == [TaggedKind<type(1)>(value: 8)]
+    assert eval same_kind_str(value: [TaggedKind<type("a")>(value: 9)]) == [TaggedKind<type("a")>(value: 9)]
+}
+
+struct Mixed<T, const N: i64> { value: T }
+struct Fixed<T, const N: i64> { items: list<T, N> }
+struct PairBuckets {
+    first: Bucket<1>
+    second: Bucket<2>
+}
+
+fn same_mixed_i1(value: Mixed<i64, 1>) -> Mixed<i64, 1> => value
+fn same_mixed_i2(value: Mixed<i64, 2>) -> Mixed<i64, 2> => value
+fn same_mixed_opt(value: Mixed<str?, 1>) -> Mixed<str?, 1> => value
+fn same_fixed_2(value: Fixed<i64, 2>) -> Fixed<i64, 2> => value
+fn same_fixed_3(value: Fixed<i64, 3>) -> Fixed<i64, 3> => value
+fn same_pair_buckets(value: PairBuckets) -> PairBuckets => value
+fn same_outer_b1(value: Packet<Bucket<1>>) -> Packet<Bucket<1>> => value
+fn same_outer_b2(value: Packet<Bucket<2>>) -> Packet<Bucket<2>> => value
+fn same_atomic_bucket(value: atomic<Bucket<1>>) -> atomic<Bucket<1>> => value
+
+test mixed_and_nested_value_argument_structs {
+    assert eval same_mixed_i1(value: [Mixed<i64, 1>(value: 10)]) == [Mixed<i64, 1>(value: 10)]
+    assert eval same_mixed_i2(value: [Mixed<i64, 2>(value: 20)]) == [Mixed<i64, 2>(value: 20)]
+    assert eval same_mixed_opt(value: [Mixed<str?, 1>(value: null), delta<Mixed<str?, 1>>(value: "ok")]) ==
+        [Mixed<str?, 1>(value: null), delta<Mixed<str?, 1>>(value: "ok")]
+    assert eval same_fixed_2(value: [Fixed<i64, 2>(items: [1, 2]), delta<Fixed<i64, 2>>(items: delta<list<i64, 2>>(updated: [1: 9]))]) ==
+        [Fixed<i64, 2>(items: [1, 2]), delta<Fixed<i64, 2>>(items: delta<list<i64, 2>>(updated: [1: 9]))]
+    assert eval same_fixed_3(value: [Fixed<i64, 3>(items: [3, 4, 5])]) == [Fixed<i64, 3>(items: [3, 4, 5])]
+    assert eval same_pair_buckets(value: [PairBuckets(first: Bucket<1>(value: 1), second: Bucket<2>(value: 2))]) ==
+        [PairBuckets(first: Bucket<1>(value: 1), second: Bucket<2>(value: 2))]
+    assert eval same_outer_b1(value: [Packet<Bucket<1>>(value: Bucket<1>(value: 3))]) ==
+        [Packet<Bucket<1>>(value: Bucket<1>(value: 3))]
+    assert eval same_outer_b2(value: [Packet<Bucket<2>>(value: Bucket<2>(value: 4))]) ==
+        [Packet<Bucket<2>>(value: Bucket<2>(value: 4))]
+    assert eval same_atomic_bucket(value: [Bucket<1>(value: 5), Bucket<1>(value: 6)]) ==
+        [Bucket<1>(value: 5), Bucket<1>(value: 6)]
+}
+
+struct PairVal<const N: i64> {
+    left: i64
+    right: i64
+}
+
+struct Growing<const N: i64> {
+    items: list<i64>
+}
+
+fn piecewise_pair(x: PairVal<2>) -> PairVal<2> {
+    inject out
+    when {
+        if valid(x.left) && modified(x.left) {
+            out.left = x.left + 1
+        }
+        if all_valid(x) {
+            out.right = x.right + 10
+        }
+    }
+}
+
+fn same_growing(value: Growing<4>) -> Growing<4> => value
+fn same_bucket_list(value: list<Bucket<1>, 2>) -> list<Bucket<1>, 2> => value
+
+test piecewise_and_collection_value_argument_structs {
+    assert eval piecewise_pair(x: [
+        delta<PairVal<2>>(left: 3),
+        delta<PairVal<2>>(right: 5),
+        PairVal<2>(left: 7, right: 9),
+    ]) == [
+        delta<PairVal<2>>(left: 4),
+        delta<PairVal<2>>(right: 15),
+        PairVal<2>(left: 8, right: 19),
+    ]
+    assert eval same_growing(value: [
+        Growing<4>(items: [1, 2]),
+        delta<Growing<4>>(items: delta<list<i64>>(updated: [2: 9])),
+    ]) == [
+        Growing<4>(items: [1, 2]),
+        delta<Growing<4>>(items: delta<list<i64>>(updated: [2: 9], size_modified: 3)),
+    ]
+    assert eval same_bucket_list(value: [
+        [Bucket<1>(value: 1), Bucket<1>(value: 2)],
+        delta<list<Bucket<1>, 2>>(updated: [0: delta<Bucket<1>>(value: 8)]),
+    ]) == [
+        [Bucket<1>(value: 1), Bucket<1>(value: 2)],
+        delta<list<Bucket<1>, 2>>(updated: [0: delta<Bucket<1>>(value: 8)]),
+    ]
+}
