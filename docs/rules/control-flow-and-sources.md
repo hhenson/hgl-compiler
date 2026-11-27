@@ -99,8 +99,8 @@ transpiler: partial
 
 - Hooks loop over the supported whole list, set and dictionary reads, retaining list
   index order.
-- Left: Struct-field traversal awaits #373. A guarded struct read still rejects as
-  a loop sequence before emission (CTRL-12).
+- A hook can traverse the ordinary value from a guarded whole-struct read
+  (CTRL-12).
 
 ## CTRL-9
 
@@ -136,12 +136,17 @@ analyser: done
 analyser: partial
 
 - In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector, and each label a constant of its type (CTRL-6)
-- Field iteration in value code and hooks awaits #373.
+- Value code and hooks traverse a known nominal struct in parent-first
+  declaration order. A one-name pattern binds the field name. A two-name
+  pattern also binds the field at its own type (CTRL-15).
+- Left: Traversal over a generic parameter constrained to the struct
+  category still rejects at its declaration (#373, #751).
 
 transpiler: partial
 
 - Loops over ordinary lists, sets and dictionaries in value code and hooks.
-- Left: Struct-field traversal in value code and hooks awaits #373.
+- An ordinary struct iterable is held once. Each field pass has its own
+  bindings and reads from that held value.
 
 ## CTRL-13
 
@@ -206,14 +211,20 @@ analyser: partial
 - A computed pack reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no entry (FN-19, GEN-7).
 - A pack-key condition with a resolved module constant or generic value parameter checks only the selected branch. A generic pack supplies its keys in the making instance. Ordinary `const` and runtime parameters cannot supply the key (FN-1, GEN-17).
 - An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-10, TYPE-14).
+- In an ordinary struct pass, a resolved constant condition checks its
+  selected branch. Type queries in that condition read the current field
+  bindings (TYPE-18). A switch label can read the constant field name.
 - Left: A module constant computed by a call can remain unresolved in a generic
   value argument within a computed spread or in a pack-key condition (#240). Ordinary
   graph ranges can unroll a bound supplied by such a constant.
+- Left: A field name in a written generic value argument still rejects
+  before the struct pass supplies its value (#373).
 
 transpiler: partial
 
 - C++ emits the entries supplied by the selected branches of a computed pack.
 - C++ emits the selected branch of a resolved pack-key condition in a graph, node or value function.
+- C++ emits selected constant branches of each pass over an ordinary struct.
 
 ## SOURCE-1
 

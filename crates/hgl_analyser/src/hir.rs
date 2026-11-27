@@ -279,6 +279,10 @@ pub type LocalId = usize;
 /// prefix cannot occur in a name written in HGL (LEX-1).
 pub const PACK_ENTRY_LOCAL_PREFIX: &str = "$pack_entry_";
 
+/// Prefix of a generated local that holds the whole value of a struct loop.
+/// No name written in HGL can start with it (LEX-1).
+pub const FIELD_LOOP_LOCAL_PREFIX: &str = "$field_loop_";
+
 /// A parameter or a local of a body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Local {

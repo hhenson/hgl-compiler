@@ -49,6 +49,16 @@ pub(crate) fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
     tokens(node).any(|token| token.kind() == kind)
 }
 
+/// The bare left name of a less-than expression (GEN-14).
+pub(crate) fn name_before_less_than(node: &SyntaxNode) -> Option<SyntaxNode> {
+    if node.kind() != SyntaxKind::BinaryExpr || !has_token(node, SyntaxKind::Lt) {
+        return None;
+    }
+    node.children()
+        .next()
+        .filter(|left| left.kind() == SyntaxKind::NameExpr)
+}
+
 /// The identifier a name uses: of `alias::name` the one after the `::`,
 /// otherwise its first identifier. That is the token the resolver
 /// recorded the use at.

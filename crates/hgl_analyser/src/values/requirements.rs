@@ -818,10 +818,18 @@ impl<'a> Typer<'a> {
                 };
                 let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
                 let project = |ty: &Type| {
-                    placed(
-                        substitute_with_members(ty, &given, &member_type, bound),
-                        &own,
-                    )
+                    let ty = substitute_with_members(ty, &given, &member_type, bound);
+                    // A reflected trial can establish the identity of a
+                    // parameter without choosing its concrete type (GEN-7).
+                    if matches!(ty, Type::Parameter { .. })
+                        && members
+                            .iter()
+                            .any(|(_, member)| same_type(member, &ty) == Some(true))
+                    {
+                        ty
+                    } else {
+                        placed(ty, &own)
+                    }
                 };
                 let placed_generics = generics
                     .iter()
@@ -840,7 +848,15 @@ impl<'a> Typer<'a> {
                     })
                     .collect::<Vec<_>>();
                 let held = self
-                    .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
+                    .requires_for_trial(
+                        callee,
+                        (&placed_generics, &placed_packs),
+                        None,
+                        &[],
+                        members
+                            .iter()
+                            .any(|(_, ty)| matches!(ty, Type::Parameter { .. })),
+                    )
                     .map(|(_, held, _)| held);
                 (held != Some(Some(true))).then_some(held)
             });
@@ -1185,8 +1201,8 @@ impl<'a> Typer<'a> {
     /// regardless of conjunction order (GEN-3, GEN-7, GEN-10). Concrete
     /// bounds narrow the candidate set before open ones; open bounds never
     /// discard a type that an unresolved normalizing or open form can later
-    /// become. Without a concrete bound, only a known-subset open bound is
-    /// kept so differing type variables stay conservative in both orders.
+    /// become. An open type common to every bound is sufficient only if
+    /// the remaining alternatives cannot supply another member type.
     /// An unproved member supplies no choices. Disjoint concrete bounds
     /// rule out this ordinary binding entirely.
     fn intersect_member_bounds(&self, bounds: Vec<Vec<Type>>) -> Option<Vec<Type>> {
@@ -1219,20 +1235,45 @@ impl<'a> Typer<'a> {
             }
             (first, closed, open)
         } else if !open.is_empty() {
-            // Without a concrete bound, keep an open bound only when every
-            // other open bound is known to contain every element of it.
-            let Some(chosen) = open.iter().find(|set| {
-                open.iter().all(|other| {
-                    set.iter().all(|ty| {
-                        other
-                            .iter()
-                            .any(|candidate| same_type(ty, candidate) == Some(true))
-                    })
+            // GEN-3, GEN-7: {T, str} and {T, f64} imply T even if T
+            // itself becomes str or f64. Consider a member outside the
+            // common alternatives: it must occur in every remaining set.
+            let common: Vec<_> = open[0]
+                .iter()
+                .filter(|ty| {
+                    open.iter()
+                        .all(|set| set.iter().any(|other| same_type(ty, other) == Some(true)))
                 })
-            }) else {
+                .cloned()
+                .collect();
+            let remaining: Vec<Vec<_>> = open
+                .iter()
+                .map(|set| {
+                    set.iter()
+                        .filter(|ty| {
+                            !common
+                                .iter()
+                                .any(|known| same_type(ty, known) == Some(true))
+                        })
+                        .collect()
+                })
+                .collect();
+            let exhausted = remaining.iter().any(|set| {
+                set.iter().all(|ty| {
+                    is_concrete(ty)
+                        && remaining.iter().any(|other| {
+                            other.iter().all(|candidate| {
+                                same_type(ty, candidate) == Some(false)
+                                    && (is_concrete(candidate)
+                                        || !self.types_may_meet(ty, candidate))
+                            })
+                        })
+                })
+            });
+            if !exhausted {
                 return Some(Vec::new());
-            };
-            (chosen.clone(), Vec::new(), Vec::new())
+            }
+            (common, Vec::new(), Vec::new())
         } else {
             return Some(Vec::new());
         };
@@ -1681,6 +1722,25 @@ impl<'a> Typer<'a> {
         member_fault: Option<&std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
         laws: &[(u32, Option<bool>)],
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
+        self.requires_for_trial(
+            (module, declaration),
+            (generics, type_packs),
+            member_fault,
+            laws,
+            false,
+        )
+    }
+
+    /// A declaration-time member trial may compare a parameter whose
+    /// identity the reflected bounds have established (GEN-3, GEN-7).
+    fn requires_for_trial(
+        &mut self,
+        (module, declaration): (usize, usize),
+        (generics, type_packs): (&[Argument], &[hir::TypePackArgument]),
+        member_fault: Option<&RefCell<Option<super::dependent_packs::MemberFault>>>,
+        laws: &[(u32, Option<bool>)],
+        symbolic_member: bool,
+    ) -> Option<(SyntaxNode, Option<bool>, bool)> {
         let program = self.program;
         let (parameters, condition) = required(program, (module, declaration))?;
         let declared = &program.modules[module].declarations[declaration];
@@ -1723,6 +1783,7 @@ impl<'a> Typer<'a> {
             generics,
             &condition,
             &Told {
+                symbolic_member,
                 constant: &constant,
                 callable: &callable,
                 quantified: &quantified,
@@ -5380,6 +5441,8 @@ type QuantifiedCall<'a> = dyn Fn(&SyntaxNode, &RequirementType<'_>) -> Option<bo
 /// What the place a `requires` is tested at says of it, beyond the
 /// generic arguments ([`requires_holds`]).
 struct Told<'t> {
+    /// Whether this trial has established an outer type parameter's identity.
+    symbolic_member: bool,
     /// What a constant written in the condition comes to as a value of
     /// the type given (`crate::constant`), read where the declaration
     /// is written. `None` where it is no constant read so.
@@ -5412,6 +5475,7 @@ pub(super) fn declared_requirement(
         arguments,
         &condition,
         &Told {
+            symbolic_member: false,
             constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
             callable: &|_| None,
             quantified: &|_, _| None,
@@ -5454,7 +5518,15 @@ fn requires_holds(
     };
     let own: Vec<Location> = parameters.iter().map(|generic| generic.at).collect();
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
-    let told = |ty: Type| (whole(&ty) && !names_parameter(&ty)).then_some(ty);
+    // A caller's bare type parameter has an identity that GEN-3 may
+    // compare. A nested open form may still normalize at instantiation.
+    let told = |ty: Type| {
+        (whole(&ty)
+            && (!names_parameter(&ty)
+                || (place.symbolic_member
+                    && matches!(&ty, Type::Parameter { at, .. } if !own.contains(at)))))
+        .then_some(ty)
+    };
     let type_of = |name: &str| -> Option<Type> {
         let index = parameters.iter().position(|generic| generic.name == name)?;
         match generics.get(index)? {
@@ -5512,7 +5584,10 @@ fn requires_holds(
     };
     let written = |node: &SyntaxNode| keyed_type(node, &[]);
     let callable = |call: &SyntaxNode, keys: &[ConstraintKey<'_>]| {
-        let written = |operand: &SyntaxNode| told(placed(keyed_type(operand, keys)?, &own));
+        let written = |operand: &SyntaxNode| {
+            let ty = placed(keyed_type(operand, keys)?, &own);
+            (whole(&ty) && !names_parameter(&ty)).then_some(ty)
+        };
         (place.quantified)(call, &written)
     };
     // A constant the condition compares an option with is a value of

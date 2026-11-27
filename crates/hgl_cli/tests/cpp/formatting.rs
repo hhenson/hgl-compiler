@@ -24,6 +24,18 @@ impl const fn show_variant{const pattern: str}(value: f64) -> str => format(patt
 impl const fn show_variant{const pattern: str}(value: i64) -> str => pattern
 const fn choose_variant<T>(const pattern: str, value: T) -> str
     requires T in {f64, i64} => show_variant{pattern: pattern}(value)
+operator required_format<T>{const pattern: str = "<{}>"}(value: T) -> str
+impl const fn required_format{const pattern: str}(value: f64) -> str => format(pattern, value)
+impl const fn required_format{const pattern: str}(value: i64) -> str => pattern
+const fn required_variant<T>(const pattern: str, value: T) -> str
+    requires required_format(T) -> str => required_format{pattern: pattern}(value)
+const fn indexed_variant<...As>(const pattern: str, values: ...As) -> str =>
+    required_format{pattern: pattern}(values[0])
+operator packed_format<T>{const pattern: str = "<{}>"}(value: T) -> str
+impl const fn packed_format{const pattern: str}(value: f64) -> str => format(pattern, value)
+impl const fn packed_format{const pattern: str}(value: i64) -> str => format(pattern, value)
+const fn indexed_format<...As>(const pattern: str, values: ...As) -> str =>
+    packed_format{pattern: pattern}(values[0])
 const fn repeat_variant<T>(const pattern: str, value: T, turns: i64) -> str
     requires T in {f64, i64} {
     if turns == 0 { return choose_variant(pattern, value) }
@@ -155,6 +167,18 @@ test deferred_patterns {
     assert capture_typed_pattern("{:x}", 255) == "ff"
     assert capture_typed_pattern("<{}>", 7) == "<7>"
     assert capture_typed_pattern("<{}>", 1.5) == "<1.5>"
+}
+
+# FMT-3, FN-19 and GEN-7: the named requirement and indexed pack
+# resolve their candidates before deciding which const values are read.
+test selected_operator_patterns {
+    assert required_variant("{:.1f}", 1.5) == "1.5"
+    assert required_variant("<{:.2f}>", 1.5) == "<1.50>"
+    assert required_variant(UNREAD_PATTERN, 7) == "{:x}"
+    assert indexed_variant(UNREAD_PATTERN, 7) == "{:x}"
+    assert indexed_format("{:.1f}", 1.5) == "1.5"
+    assert indexed_format("<{:.2f}>", 1.5) == "<1.50>"
+    assert indexed_format("{:x}", 15) == "f"
 }
 "#;
 
@@ -426,6 +450,7 @@ fn core_format_and_write_run_on_the_sdk() {
         "nullable_formats",
         "selected_converters",
         "deferred_patterns",
+        "selected_operator_patterns",
     ] {
         assert!(
             stdout.contains(&format!("passed   executable  demo.formatting::{test}")),

@@ -439,3 +439,272 @@ test observed { assert same2<bool>(true, 1) == 1.5 }
     )]);
     assert!(!checked.rejected, "{}", checked.report);
 }
+
+/// GEN-5, EXPR-9 and WRITE-7: report exactly the ambiguous literal in
+/// a successful call. A typed input, sole viable reading or acknowledged
+/// warning needs no report.
+#[test]
+fn a_viable_alternate_set_warns_at_the_selected_literal() {
+    let checked = common::module(concat!(
+        "operator pick<T>(x: T) -> i64\n",
+        "impl const fn pick(x: list<i64, 2>) -> i64 => 1\n",
+        "impl const fn pick(x: set<i64>) -> i64 => 2\n",
+        "operator nested<T>(x: T) -> i64\n",
+        "impl const fn nested(x: list<list<i64, 2>, 1>) -> i64 => 1\n",
+        "impl const fn nested(x: list<set<i64>, 1>) -> i64 => 2\n",
+        "const fn mixed() -> i64 => pick([1,2]) + nested([[3,4]])\n",
+        "const fn specified() -> i64 => pick<set<i64>>([1,2])\n",
+        "const fn only_set() -> i64 => pick([1,2,3])\n",
+        "@suppress_warning(\"operator.sequence_reading\")\n",
+        "const fn suppressed() -> i64 => pick([1,2])\n",
+        "const fn only_list() -> i64 => pick([8,8])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:33 warning/operator.sequence_reading GEN-5",
+            "m.hgl:8:50 warning/operator.sequence_reading GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("let members: set<i64> = [3,4]"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-5: after choosing the bracket reading, parameter and result type fits
+/// settle the integer literal's precision before candidate conditions run.
+#[test]
+fn exact_integer_fits_count_within_the_selected_sequence_reading() {
+    let operator = "operator pick<const on:bool>(xs:any, n:any)->i64\n";
+    let exact = "impl const fn pick<const on:bool>(xs:list<i64>, n:i64)->i64 requires on => 1\n";
+    let list = "impl const fn pick<const on:bool>(xs:list<i64>, n:f64)->i64 => 2\n";
+    let set = "impl const fn pick<const on:bool>(xs:set<i64>, n:f64)->i64 => 3\n";
+    let calls = concat!(
+        "const fn inline()->i64 => pick{on:false}([3,8],11)\n",
+        "const fn stored(xs:list<i64>)->i64 => pick{on:false}(xs,11)\n",
+        "const fn floated()->i64 => pick{on:false}([3,8],11.0)\n",
+        "const fn enabled()->i64 => pick{on:true}([3,8],11)\n",
+    );
+    for implementations in [[exact, list, set], [set, list, exact]] {
+        let checked = common::module(&[operator, &implementations.concat(), calls].concat());
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:6:27 operator/operator.no_candidate GEN-5",
+                "m.hgl:7:39 operator/operator.no_candidate GEN-5",
+                "m.hgl:8:43 warning/operator.sequence_reading GEN-5",
+                "m.hgl:9:42 warning/operator.sequence_reading GEN-5",
+            ],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-5: an exact fit in a discarded set reading cannot block the widened
+/// list. Its condition can also leave the list as the only admitted reading.
+#[test]
+fn a_disabled_set_type_fit_does_not_set_the_lists_precision() {
+    let operator = "operator pick<const on:bool>(xs:any, n:any)->i64\n";
+    let exact = "impl const fn pick<const on:bool>(xs:set<i64>, n:i64)->i64 requires on => 1\n";
+    let list = "impl const fn pick<const on:bool>(xs:list<i64>, n:f64)->i64 => 2\n";
+    let set = "impl const fn pick<const on:bool>(xs:set<i64>, n:f64)->i64 => 3\n";
+    let call = "const fn chosen()->i64 => pick{on:false}([3,8],11)\n";
+    let both = common::module(&[operator, exact, set, list, call].concat());
+    assert_eq!(
+        both.summary(),
+        ["m.hgl:6:42 warning/operator.sequence_reading GEN-5"],
+        "{}",
+        both.report
+    );
+    let only = common::module(&[operator, exact, list, call].concat());
+    assert!(only.findings.is_empty(), "{}", only.report);
+}
+
+/// GEN-5: an unresolved list tie cannot fall through to the set candidate.
+/// Opposite choices at two independent arguments have no preferred ordering.
+#[test]
+fn tied_list_candidates_and_crossed_arguments_stay_ambiguous() {
+    let checked = common::module(concat!(
+        "operator tied<X,A,B>(x:X,a:A,b:B)->i64\n",
+        "impl const fn tied(x:list<i64,2>,a:i64,b:any)->i64=>1\n",
+        "impl const fn tied(x:list<i64,2>,a:any,b:i64)->i64=>2\n",
+        "impl const fn tied(x:set<i64>,a:i64,b:i64)->i64=>3\n",
+        "const fn first()->i64 => tied([8,13],1,2)\n",
+        "operator crossed<A,B>(x:A,y:B)->i64\n",
+        "impl const fn crossed(x:list<i64>,y:set<i64>)->i64=>1\n",
+        "impl const fn crossed(x:set<i64>,y:list<i64>)->i64=>2\n",
+        "const fn second()->i64 => crossed([1,2],[3,4])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:26 operator/operator.ambiguous GEN-5",
+            "m.hgl:10:27 operator/operator.ambiguous GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// EXPR-9: constant string members must be distinct in a set. A
+/// repeated member can still be read as a list without a choice warning.
+#[test]
+fn an_invalid_set_reading_does_not_warn_or_reject_a_valid_list() {
+    let checked = common::module(concat!(
+        "operator pick<T>(x:T)->i64\n",
+        "impl const fn pick(x:list<str>)->i64 => 1\n",
+        "impl const fn pick(x:set<str>)->i64 => 2\n",
+        "const fn repeated()->i64 => pick([\"x\",\"x\"])\n",
+        "const fn invalid()->i64 => pick<set<str>>([\"x\",\"x\"])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:48 type/set.duplicate_member EXPR-9",],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-5: compare the complete combinations before numeric precision or
+/// ordinary specificity. Either declaration order yields the same outcome.
+#[test]
+fn all_list_readings_dominate_crossed_ones_as_a_group() {
+    let public = "operator mixed<A,B,C>(a:A,b:B,c:C)->i64\n";
+    let first = "impl const fn mixed(a:list<i64>,b:set<i64>,c:i64)->i64 => 1\n";
+    let second = "impl const fn mixed(a:set<i64>,b:list<i64>,c:f64)->i64 => 2\n";
+    let both = "impl const fn mixed(a:list<i64>,b:list<i64>,c:f64)->i64 => 3\n";
+    let call = "const fn value()->i64 => mixed([1],[2],7)\n";
+    for (left, right) in [(first, second), (second, first)] {
+        let checked = common::module(&[public, left, right, call].concat());
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:5:26 operator/operator.ambiguous GEN-5"],
+            "{}",
+            checked.report
+        );
+        let checked = common::module(&[public, left, right, both, call].concat());
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:6:32 warning/operator.sequence_reading GEN-5",
+                "m.hgl:6:36 warning/operator.sequence_reading GEN-5",
+            ],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// ERR-15 selects the fewest result reads before GEN-5. A list
+/// interpretation requiring an extra payload read cannot trigger WRITE-7.
+#[test]
+fn a_whole_result_precedes_a_competing_list_reading() {
+    let checked = common::module(concat!(
+        "operator pick<A,B>(xs:A,b:B)->i64\n",
+        "impl const fn pick(xs:list<i64,1>,b:i64)->i64 => 1\n",
+        "impl const fn pick(xs:set<i64>,b:result<i64,error>)->i64 => 2\n",
+        "const fn kept(input:result<i64,error>)->i64 => pick([5],input)\n",
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// GEN-5, EXPR-9: a dictionary's key and value each supply context to
+/// their own literal. The containing dictionary has no list/set choice.
+#[test]
+fn dictionary_keys_and_values_warn_at_the_inner_literal() {
+    let checked = common::module(concat!(
+        "operator table<T>(xs:T)->i64\n",
+        "impl const fn table(xs:dict<str,list<i64>>)->i64 => 1\n",
+        "impl const fn table(xs:dict<str,set<i64>>)->i64 => 2\n",
+        "operator keyed<T>(xs:T)->i64\n",
+        "impl const fn keyed(xs:dict<list<i64>,str>)->i64 => 1\n",
+        "impl const fn keyed(xs:dict<set<i64>,str>)->i64 => 2\n",
+        "const fn item()->i64 => table([\"a\": [1,2]])\n",
+        "const fn key()->i64 => keyed([[3,4]: \"b\"])\n",
+        "const fn wanted()->i64 => table<dict<str,set<i64>>>([\"a\": [1,2]])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:37 warning/operator.sequence_reading GEN-5",
+            "m.hgl:9:31 warning/operator.sequence_reading GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// EXPR-9, GEN-5: the public tuple supplies a list context for the
+/// first slot. Its `any` slot still admits two collection readings.
+#[test]
+fn public_input_context_only_fixes_the_literals_it_types() {
+    let checked = common::module(concat!(
+        "operator pick<T>(xs:T)->i64\n",
+        "impl const fn pick(xs:tuple<list<i64>,list<i64>>)->i64=>1\n",
+        "impl const fn pick(xs:tuple<list<i64>,set<i64>>)->i64=>2\n",
+        "const fn result_value()->i64 => pick<tuple<list<i64>,any>>(([1],[2]))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:65 warning/operator.sequence_reading GEN-5"],
+        "{}",
+        checked.report
+    );
+}
+
+/// ERR-2 supplies the success or failure payload's type from the
+/// candidate. Compare the literals of both tagged arguments together.
+#[test]
+fn tagged_payload_choices_follow_the_candidate_result_type() {
+    let checked = common::module(concat!(
+        "operator pick<A,B>(x:A,y:B)->i64\n",
+        "impl const fn pick(x:result<list<i64>,error>,y:result<bool,set<i64>>)->i64=>1\n",
+        "impl const fn pick(x:result<set<i64>,error>,y:result<bool,list<i64>>)->i64=>2\n",
+        "const fn crossed()->i64=>pick(ok([1]),err([2]))\n",
+        "const fn selected()->i64=>pick<result<set<i64>,error>>(ok([1]),err([2]))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:26 operator/operator.ambiguous GEN-5"],
+        "{}",
+        checked.report
+    );
+    let checked = common::module(concat!(
+        "operator pick<A,B>(x:A,y:B)->i64\n",
+        "impl const fn pick(x:result<list<i64>,error>,y:result<bool,set<i64>>)->i64=>1\n",
+        "impl const fn pick(x:result<set<i64>,error>,y:result<bool,list<i64>>)->i64=>2\n",
+        "impl const fn pick(x:result<list<i64>,error>,y:result<bool,list<i64>>)->i64=>3\n",
+        "const fn both()->i64=>pick(ok([1]),err([2]))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:31 warning/operator.sequence_reading GEN-5",
+            "m.hgl:6:40 warning/operator.sequence_reading GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// EXPR-17: the comprehension's result supplies its element context.
+#[test]
+fn a_comprehension_compares_its_entry_and_leaves_the_iterable_alone() {
+    let checked = common::module(concat!(
+        "operator pick<T>(v:T)->i64\n",
+        "impl const fn pick(v:result<list<list<i64>>,error>)->i64=>1\n",
+        "impl const fn pick(v:result<list<set<i64>>,error>)->i64=>2\n",
+        "const fn selected()->i64=>pick(ok([for j in [3,4]: [j,5]]))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:52 warning/operator.sequence_reading GEN-5"],
+        "{}",
+        checked.report
+    );
+}
