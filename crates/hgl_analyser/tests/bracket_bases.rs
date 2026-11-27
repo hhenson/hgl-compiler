@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::module;
+use common::{check, module};
 
 /// EXPR-7 admits an element of a list or tuple and a dictionary value.
 /// The base of each other read below is known where the body is checked.
@@ -217,6 +217,10 @@ fn anonymous_generic_bracket_bases_check_concrete_instances() {
         "    return kept\n",
         "})(0)\n",
         "fn node_close<T>(src: T?) -> i64 { when { return (fn(i: i64) => src[i])(0) } }\n",
+        "fn graph_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "fn graph_passed<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+        "fn graph_nested<T>(src: T?) -> i64 => (fn(i: i64) => (fn(j: i64) => src[i + j])(0))(0)\n",
+        "fn graph_forwarded_close<U>(src: U?) -> i64 => graph_close(src)\n",
         "const fn static_bad<T>(x: T) -> i64 => (fn(b: bool) => b[0])(true)\n",
         "const fn never_called<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
         "test probe {\n",
@@ -229,6 +233,10 @@ fn anonymous_generic_bracket_bases_check_concrete_instances() {
         "    typed_param(true)\n",
         "    place_close(flag)\n",
         "    assert eval node_close(src: [true]) == [1]\n",
+        "    assert eval graph_close(src: [true]) == [1]\n",
+        "    assert eval graph_passed(src: [true]) == [1]\n",
+        "    assert eval graph_nested(src: [true]) == [1]\n",
+        "    assert eval graph_forwarded_close(src: [true]) == [1]\n",
         "    static_bad(1)\n",
         "    static_bad(\"two\")\n",
         "}\n",
@@ -238,15 +246,19 @@ fn anonymous_generic_bracket_bases_check_concrete_instances() {
         [
             "m.hgl:2:64 type/type.mismatch EXPR-7",
             "m.hgl:4:27 type/type.mismatch EXPR-7",
-            "m.hgl:25:56 type/type.mismatch EXPR-7",
-            "m.hgl:29:5 type/type.mismatch EXPR-7",
-            "m.hgl:30:5 type/type.mismatch EXPR-7",
-            "m.hgl:31:5 type/type.mismatch EXPR-7",
-            "m.hgl:32:5 type/type.mismatch EXPR-7",
+            "m.hgl:29:56 type/type.mismatch EXPR-7",
             "m.hgl:33:5 type/type.mismatch EXPR-7",
             "m.hgl:34:5 type/type.mismatch EXPR-7",
             "m.hgl:35:5 type/type.mismatch EXPR-7",
-            "m.hgl:36:12 type/type.mismatch EXPR-7",
+            "m.hgl:36:5 type/type.mismatch EXPR-7",
+            "m.hgl:37:5 type/type.mismatch EXPR-7",
+            "m.hgl:38:5 type/type.mismatch EXPR-7",
+            "m.hgl:39:5 type/type.mismatch EXPR-7",
+            "m.hgl:40:12 type/type.mismatch EXPR-7",
+            "m.hgl:41:12 type/type.mismatch EXPR-7",
+            "m.hgl:42:12 type/type.mismatch EXPR-7",
+            "m.hgl:43:12 type/type.mismatch EXPR-7",
+            "m.hgl:44:12 type/type.mismatch EXPR-7",
         ],
         "{}",
         rejected.report
@@ -260,6 +272,10 @@ fn anonymous_generic_bracket_bases_check_concrete_instances() {
         "this call makes the instance `typed_param<bool>`",
         "this call makes the instance `place_close<bool>`",
         "this call makes the instance `node_close<bool>`",
+        "this call makes the instance `graph_close<bool>`",
+        "this call makes the instance `graph_passed<bool>`",
+        "this call makes the instance `graph_nested<bool>`",
+        "this call makes the instance `graph_forwarded_close<bool>`",
         "src[i]",
     ] {
         assert!(
@@ -293,6 +309,10 @@ fn anonymous_generic_bracket_bases_check_concrete_instances() {
         "const fn close_tuple<T>(src: T?) -> i64 => (fn(_unused: i64) => src[0])(0)\n",
         "const fn close_key<T>(src: T?) -> i64 => (fn(k: str) => src[k])(\"k\")\n",
         "fn node_close<T>(src: T?) -> i64 { when { return (fn(i: i64) => src[i])(0) } }\n",
+        "fn graph_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "fn graph_passed<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+        "fn graph_nested<T>(src: T?) -> i64 => (fn(i: i64) => (fn(j: i64) => src[i + j])(0))(0)\n",
+        "fn graph_forwarded_close<U>(src: U?) -> i64 => graph_close(src)\n",
         "const fn uninstantiated<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
         "test probe {\n",
         "    let xs: list<i64>? = [7]\n",
@@ -312,7 +332,90 @@ fn anonymous_generic_bracket_bases_check_concrete_instances() {
         "    let book: dict<str, i64>? = [\"k\": 9]\n",
         "    close_key(book)\n",
         "    assert eval node_close(src: [[11]]) == [11]\n",
+        "    assert eval graph_close(src: [[11]]) == [11]\n",
+        "    assert eval graph_passed(src: [[11]]) == [11]\n",
+        "    assert eval graph_nested(src: [[11]]) == [11]\n",
+        "    assert eval graph_forwarded_close(src: [[11]]) == [11]\n",
         "}\n",
     ));
+    assert_eq!(valid.summary(), Vec::<String>::new(), "{}", valid.report);
+}
+
+/// UNIT-1, EXPR-7, GEN-7: multi-file module parts recheck concrete generic
+/// bracket bases (including direct anonymous calls and live connection
+/// markers) across files without cross-file span collisions.
+#[test]
+fn multi_file_part_generic_bracket_bases_check_concrete_instances() {
+    let rejected = check(&[
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "const fn concrete_anon<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+                "fn main_graph_passed<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+                "test from_main {\n",
+                "    let flag: bool? = true\n",
+                "    concrete_anon(flag, [1])\n",
+                "    part_close(flag)\n",
+                "    part_typed_param(true)\n",
+                "    assert eval part_graph_close(src: [true]) == [1]\n",
+                "}\n",
+            ),
+        ),
+        (
+            "extra.hgl",
+            concat!(
+                "module m part extra\n",
+                "const fn part_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+                "const fn part_typed_param<T>(x: T) -> i64 {\n",
+                "    let f = fn(p: T?) => p[0]\n",
+                "    return 0\n",
+                "}\n",
+                "fn part_graph_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+                "test from_part {\n",
+                "    assert eval main_graph_passed(src: [true]) == [1]\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        rejected.summary(),
+        [
+            "extra.hgl:9:12 type/type.mismatch EXPR-7",
+            "m.hgl:7:5 type/type.mismatch EXPR-7",
+            "m.hgl:8:5 type/type.mismatch EXPR-7",
+            "m.hgl:9:12 type/type.mismatch EXPR-7",
+        ],
+        "{}",
+        rejected.report
+    );
+
+    let valid = check(&[
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "const fn concrete_anon<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+                "fn main_graph_passed<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+                "test from_main {\n",
+                "    let xs: list<i64>? = [7]\n",
+                "    concrete_anon(true, [1])\n",
+                "    part_close(xs)\n",
+                "    assert eval part_graph_close(src: [[11]]) == [11]\n",
+                "}\n",
+            ),
+        ),
+        (
+            "extra.hgl",
+            concat!(
+                "module m part extra\n",
+                "const fn part_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+                "fn part_graph_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+                "test from_part {\n",
+                "    assert eval main_graph_passed(src: [[13]]) == [13]\n",
+                "}\n",
+            ),
+        ),
+    ]);
     assert_eq!(valid.summary(), Vec::<String>::new(), "{}", valid.report);
 }

@@ -6706,8 +6706,8 @@ fn lexical_names_can_hide_module_and_prelude_functions() {
 }
 
 /// EXPR-7 and GEN-7: concrete generic bracket reads over lists, tuples and
-/// dictionaries (direct, forwarded and nullable `T?`) compile and run on the
-/// C++ SDK.
+/// dictionaries (direct, forwarded, nullable `T?`, and across multi-file
+/// module parts) compile and run on the C++ SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn generic_bracket_bases_run_on_the_sdk() {
@@ -6715,7 +6715,7 @@ fn generic_bracket_bases_run_on_the_sdk() {
         return;
     }
     let root = scratch("generic-bracket-bases");
-    let file = write(
+    write(
         &root,
         "src/demo.generic-bracket-bases.hgl",
         concat!(
@@ -6736,14 +6736,30 @@ fn generic_bracket_bases_run_on_the_sdk() {
             "    let xs: list<i64>? = [12]\n",
             "    assert opt_zero(xs) == 12\n",
             "    assert opt_forwarded(xs) == 12\n",
+            "    assert part_opt_zero(xs) == 12\n",
             "    let pair: tuple<i64, str>? = (13, \"z\")\n",
             "    assert opt_zero(pair) == 13\n",
             "    let opt_book: dict<str, i64>? = [\"k\": 14]\n",
             "    assert opt_key(opt_book) == 14\n",
+            "    assert eval part_node_zero(value: [[15]]) == [15]\n",
             "}\n",
         ),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    write(
+        &root,
+        "src/demo.generic-bracket-bases.helpers.hgl",
+        concat!(
+            "module demo.generic_bracket_bases part helpers\n",
+            "const fn part_opt_zero<T>(value: T?) -> i64 => opt_zero(value)\n",
+            "fn part_node_zero<T>(value: T) -> i64 { when all_valid(value) { return value[0] } }\n",
+            "test valid_from_part {\n",
+            "    assert forwarded_zero([16]) == 16\n",
+            "    let xs: list<i64>? = [17]\n",
+            "    assert part_opt_zero(xs) == 17\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &argument(&root), "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -6752,7 +6768,7 @@ fn generic_bracket_bases_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

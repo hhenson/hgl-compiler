@@ -53,7 +53,7 @@ pub(crate) fn has_dependent_index(
             unread_locations.push(value.at);
         }
         ExprKind::Call {
-            callee: Callee::Unread | Callee::DeferredPackCall,
+            callee: Callee::Unread | Callee::UnreadWithConnection | Callee::DeferredPackCall,
             arguments,
             ..
         } => {
@@ -1080,7 +1080,11 @@ mod tests {
             "    return 0\n",
             "}\n",
             "const fn retained_dependent<T>(src: T?) -> i64 => apply_one(fn(i: i64) => src[i], 0)\n",
+            "fn graph_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+            "fn graph_passed<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+            "fn graph_nested<T>(src: T?) -> i64 => (fn(i: i64) => (fn(j: i64) => src[i + j])(0))(0)\n",
             "const fn unrelated_concrete<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+            "fn graph_concrete<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
             "const fn retained_concrete<T>(x: T, xs: list<i64>) -> i64 => apply_one(fn(i: i64) => xs[i], 0)\n",
             "const fn static_bad<T>(x: T) -> i64 => (fn(b: bool) => b[0])(true)\n",
             "const fn no_index<T>(src: T?) -> i64 => (fn(i: i64) => i)(0)\n",
@@ -1101,6 +1105,9 @@ mod tests {
             "typed_param",
             "unused_captured",
             "retained_dependent",
+            "graph_close",
+            "graph_passed",
+            "graph_nested",
         ] {
             assert!(
                 dependent_index_for(&program, expected_true),
@@ -1109,6 +1116,7 @@ mod tests {
         }
         for expected_false in [
             "unrelated_concrete",
+            "graph_concrete",
             "retained_concrete",
             "static_bad",
             "no_index",
@@ -1130,7 +1138,7 @@ mod tests {
             "const fn concrete_anon<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
         );
         let file_b = concat!(
-            "module m\n",
+            "module m part extra\n",
             "const fn other_file<T>(padding_0: i64, padding_1: i64, y: T?) -> i64 => 0\n",
         );
         let mut sources = SourceMap::new();
@@ -1152,6 +1160,7 @@ mod tests {
             })
             .collect();
         let program = analyse(&parsed, &mut diagnostics);
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
         let unit = &program.modules[0];
         let position = unit
             .declarations
