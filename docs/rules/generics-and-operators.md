@@ -172,6 +172,7 @@ parser: done
 analyser: partial
 
 - A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected
+- An `instantiate` request must name a callable. A single callable's written generic argument kinds are checked and requests over a fixed parameter list reject excess arguments. An underscore remains open.
 - When a written generic argument fixes an ordinary public input type, the call checks the argument in that type before trying candidates. A mismatch is reported at the argument (`type.mismatch`, EXPR-5 or FN-17). Candidate-only options and inferred arguments still take part in the normal candidate selection.
 - A checked child used in a result input, directly or as a component of a compound argument, keeps its fixed list extent when the public pattern omits it (ERR-14, TYPE-10).
 - A generic value parameter given by name or after the callee's name, and one a type gives, read as a value of the parameter's type (EXPR-5, `type.mismatch`): a literal, an enum member however it is written (TYPE-7), a constant, a generic value parameter in scope, and a constant expression of those, of numbers, durations, tenors, strings, bools, lists and tuples (`constant`); one that is no compile-time constant, and one whose value this compiler does not work out, is `generic.argument_constant`
@@ -180,7 +181,7 @@ analyser: partial
 - A call that writes a positional type pack supplies its whole type sequence. An unwritten positional or named pack infers each type from its own argument or eval trace. A graph instance completes its deferred inferred types in capture order (GEN-7, GEN-10). An unresolved type rejects, or a sequence that requires context gives `sequence.context_type` (EXPR-9).
 - One a generic body works out from its own generic parameters is worked out for each instance, and where its evaluation fails there (NUM-2: an `i64` out of range; a division of two `i64` by zero) or is not worked out, the call that makes the instance is `generic.argument_constant` (ERR-9)
 - Two generic value arguments are one where they are the same constant (`ConstantValue::same`), which for an `f64` is not `==`: `Scaled<-0.0>` is not `Scaled<0.0>`, and any two NaNs are one constant (UNIT-13, GEN-13); hgraph writes each as an instance of its own. A comparison of a NaN constant is the language's: false, but `!=` (NUM-5)
-- Left: an operator's own generic value parameter given by name; `instantiate`; unresolved and reflected public input types; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
+- Left: an operator's own generic value parameter given by name; materializing `instantiate` candidates and checking the remaining paired or pack requests; unresolved and reflected public input types; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
 
 ## GEN-9
 
