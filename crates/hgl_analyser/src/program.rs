@@ -238,6 +238,8 @@ pub struct Module {
     /// Type-reading diagnostics for bare names excluded as values by UNIT-7.
     /// Calls to a pair select one reading once its FN-4/FN-17 role is known.
     pub(crate) paired_default_names: HashMap<Location, PairedDefaultName>,
+    /// GEN-8, CTRL-12: ordinary call arguments that must be read with the loop bindings.
+    pub(crate) field_name_arguments: HashSet<Location>,
     /// Local bindings that hide a callable, mapped to the callable's declaration (UNIT-12).
     pub(crate) hidden_callables: HashMap<Location, Location>,
     /// What each `name<...>(...)` the parser left undecided was decided

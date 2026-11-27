@@ -377,7 +377,7 @@ impl Reader<'_> {
     /// The function or operator the name `node` uses is bound to: the
     /// first of a pair (FN-4). A contextual Type argument of a pair is
     /// deferred until the expression reader selects a role.
-    fn callable_named(&self, node: &SyntaxNode) -> Option<Id> {
+    pub(super) fn callable_named(&self, node: &SyntaxNode) -> Option<Id> {
         let name = name_token(node)?;
         let Some(Binding::Declarations {
             module,

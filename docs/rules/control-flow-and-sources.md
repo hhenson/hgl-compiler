@@ -138,7 +138,9 @@ analyser: partial
 - In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector, and each label a constant of its type (CTRL-6)
 - Value code and hooks traverse a known nominal struct in parent-first
   declaration order. A one-name pattern binds the field name. A two-name
-  pattern also binds the field at its own type (CTRL-15).
+  pattern also binds the field at its own type (CTRL-15). An explicitly
+  written value argument to an ordinary function can use the field name as
+  a constant string in each pass (GEN-8).
 - Left: Traversal over a generic parameter constrained to the struct
   category still rejects at its declaration (#373, #751).
 
@@ -217,8 +219,8 @@ analyser: partial
 - Left: A module constant computed by a call can remain unresolved in a generic
   value argument within a computed spread or in a pack-key condition (#240). Ordinary
   graph ranges can unroll a bound supplied by such a constant.
-- Left: A field name in a written generic value argument still rejects
-  before the struct pass supplies its value (#373).
+- Left: A nominal struct type or constructor with a field name as its
+  written generic value argument still rejects before the pass (#373).
 
 transpiler: partial
 

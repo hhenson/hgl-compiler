@@ -869,6 +869,44 @@ impl Reader<'_> {
         read(&scope)
     }
 
+    /// CTRL-12 and GEN-8: the first binding of an enclosing `for` can
+    /// acquire a constant field name when the body types its iterable.
+    /// Check binding locations so a shadowing ordinary local stays ordinary.
+    fn may_read_field_name_at_call(&self, node: &SyntaxNode) -> bool {
+        let Some(list) = node
+            .parent()
+            .filter(|list| list.kind() == SyntaxKind::GenericArgs)
+        else {
+            return false;
+        };
+        let Some((module, declaration)) = list
+            .parent()
+            .and_then(|callee| self.callable_named(&callee))
+        else {
+            return false;
+        };
+        self.program.modules[module].declarations[declaration]
+            .kind
+            .binding_role()
+            .is_some()
+            && node
+                .descendants_with_tokens()
+                .filter_map(|part| part.into_token())
+                .any(|token| {
+                    let Some(Binding::Local {
+                        at,
+                        kind: LocalKind::Iteration,
+                    }) = self.bindings.get(&(self.file, token.span().start)).copied()
+                    else {
+                        return false;
+                    };
+                    node.ancestors()
+                        .filter(|part| part.kind() == SyntaxKind::ForStmt)
+                        .filter_map(|statement| name_token(&statement))
+                        .any(|name| self.at(name.span()) == *at)
+                })
+    }
+
     /// The constant `node` is, read as `read`, held as a value of
     /// `expected`. Where `place` names its place, a value of another
     /// type is reported (`type.mismatch`, EXPR-5), and so is a member
@@ -925,6 +963,12 @@ impl Reader<'_> {
                 ConstantValue::Unknown
             }
             Ok(value) => value,
+            Err(Fault::NotConstant)
+                if place.is_some() && self.may_read_field_name_at_call(node) =>
+            {
+                self.field_name_arguments.insert(self.at(node.span()));
+                ConstantValue::Unevaluated
+            }
             Err(Fault::NotConstant) if place.is_some() => {
                 if let Some(place) = place {
                     self.diagnostics.emit(error(

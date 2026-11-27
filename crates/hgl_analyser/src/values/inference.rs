@@ -878,10 +878,12 @@ impl<'a> Typer<'a> {
                 // A parameter whose kind its signature does not settle
                 // is what the call gives it (GEN-13).
                 _ => {
-                    // GEN-8, TYPE-18: resolve any `type(...)` constant deferred
-                    // from `read` now that locals and signatures are in scope.
+                    // GEN-8, TYPE-18 and CTRL-12: the declaration reader
+                    // cannot resolve a type query or the current field name.
+                    let field_argument = self.module.field_name_arguments.contains(at);
                     if let Argument::Constant(constant) = argument
-                        && crate::constant::has_deferred_type_query(&constant.value)
+                        && (field_argument
+                            || crate::constant::has_deferred_type_query(&constant.value))
                     {
                         let unknown = Argument::Type(Type::Unknown);
                         let expected = match &generic.kind {
@@ -898,13 +900,18 @@ impl<'a> Typer<'a> {
                             }
                             _ => None,
                         };
-                        let place = format!("the generic parameter `{}`", generic.name);
-                        let value = self.resolve_deferred_value(
-                            *at,
-                            &constant.value,
-                            expected.as_ref(),
-                            Some(&place),
-                        );
+                        let value = if field_argument {
+                            let place = format!("`{}` of `{callee}`", generic.name);
+                            self.resolve_deferred_constant(*at, expected.as_ref(), Some(&place))
+                        } else {
+                            let place = format!("the generic parameter `{}`", generic.name);
+                            self.resolve_deferred_value(
+                                *at,
+                                &constant.value,
+                                expected.as_ref(),
+                                Some(&place),
+                            )
+                        };
                         found[position] = Some(Argument::Constant(Constant {
                             text: constant.text.clone(),
                             value,

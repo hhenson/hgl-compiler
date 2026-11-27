@@ -111,6 +111,7 @@ pub(crate) fn assemble<'a>(
             contextual_type_reports: Default::default(),
             default_type_reports: Default::default(),
             paired_default_names: Default::default(),
+            field_name_arguments: Default::default(),
             hidden_callables: Default::default(),
             decisions: Vec::new(),
             details: Vec::new(),

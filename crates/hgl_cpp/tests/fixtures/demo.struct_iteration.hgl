@@ -41,9 +41,11 @@ const fn describe(quote: Quote) -> str {
     return text
 }
 
+const fn written<T, const Key: T>() -> T => Key
+
 const fn names(quote: Quote) -> str {
     var text = ""
-    for name in quote { text += name + " " }
+    for name in quote { text += written<str, name>() + " " }
     return text
 }
 
@@ -51,7 +53,7 @@ const fn reflected_types(quote: Quote) -> str {
     var text = convert<str>(type(quote.ask)) + " "
     let flags = Flags(ready: true, rank: 1)
     for name, value in quote {
-        text += name + "=" + convert<str>(type(value)) + ":"
+        text += written<str, name>() + "=" + convert<str>(type(value)) + ":"
         for flag, item in flags {
             text += convert<str>(type(item)) + ","
         }
@@ -119,7 +121,7 @@ fn hook_names(quote: Quote) -> str {
     when all_valid(quote) {
         var text = ""
         for name, value in quote {
-            if name == "label" { text += value }
+            if name == "label" { text += written<str, name>() + "=" + value }
             if name == "bid" { text += convert<str>(value) }
         }
         return text
@@ -134,6 +136,14 @@ test field_types_and_order {
     assert reflected_types(quote) ==
         "f64 label=str:bool,i64,str bid=i64:bool,i64,i64 ask=f64:bool,i64,f64 open=bool:bool,i64,bool str"
     assert describe_by_type(quote) == "first!9"
+    let flags = Flags(ready: true, rank: 2)
+    var pairs = ""
+    for name in quote {
+        for flag, item in flags {
+            pairs += written<str, (name + "." + flag)>() + " "
+        }
+    }
+    assert pairs == "label.ready label.rank bid.ready bid.rank ask.ready ask.rank open.ready open.rank "
     for name, value in quote {
         let marked: FieldTag<type(value)> = FieldTag<type(value)>(mark: 0)
         if name == "bid" {
@@ -155,5 +165,5 @@ test guarded_hook_reads_ordinary_fields {
     assert eval hook_names([
         Quote(label: "top", bid: 1, ask: 2.5, open: true),
         Quote(label: "next", bid: 2, ask: 3.5, open: false),
-    ]) == ["top1", "next2"]
+    ]) == ["label=top1", "label=next2"]
 }

@@ -66,6 +66,40 @@ fn ordinary_struct_iteration_checks_each_selected_field_type() {
     );
 }
 
+/// CTRL-12/16 and GEN-8: only the name of a known struct field is a
+/// compile-time string. A runtime iteration or field value stays dynamic,
+/// including inside a struct pass. Each error points to its written argument.
+#[test]
+fn written_field_arguments_check_type_and_constancy() {
+    let checked = module(concat!(
+        "struct Quote {\n",
+        "    bid: str\n",
+        "    ask: str\n",
+        "}\n",
+        "const fn text<const K: str>() -> str => K\n",
+        "const fn count<const N: i64>() -> i64 => N\n",
+        "const fn scan(row: Quote, names: list<str>, entries: dict<str, i64>, suffix: str) {\n",
+        "    for field, value in row {\n",
+        "        let wrong_type = count<field>()\n",
+        "        let runtime_field = text<value>()\n",
+        "        let runtime_suffix = text<(field + suffix)>()\n",
+        "        for name in names { let runtime_name = text<name>() }\n",
+        "    }\n",
+        "    for key, value in entries { let runtime_key = text<key>() }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:32 type/type.mismatch EXPR-5",
+            "m.hgl:11:34 type/generic.argument_constant GEN-8",
+            "m.hgl:12:35 type/generic.argument_constant GEN-8",
+            "m.hgl:13:53 type/generic.argument_constant GEN-8",
+            "m.hgl:15:56 type/generic.argument_constant GEN-8",
+        ]
+    );
+}
+
 /// TST-3: "Outside the argument of an `eval` or a `run`, which is
 /// composition (TST-5, TST-8), its statements are value code, as an
 /// application's are (UNIT-14) ... They call `const fn`s only: a call of
