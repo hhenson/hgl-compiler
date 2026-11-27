@@ -1260,7 +1260,19 @@ pub(crate) fn demands(
                 else {
                     return;
                 };
-                if matches!(callee, Callee::DeferredPackCall) {
+                // FN-19: an indexed pack entry can leave the entire call
+                // unread, before it has a provisional operator selection.
+                let indexed_pack_call = matches!(callee, Callee::Unread | Callee::DeferredValue)
+                    && arguments.iter().any(|argument| {
+                        let mut deferred = false;
+                        argument.value.walk(&mut |value| {
+                            deferred |= matches!(value.kind, ExprKind::DeferredPackRead);
+                        });
+                        deferred
+                    });
+                if indexed_pack_call
+                    || matches!(callee, Callee::DeferredPackCall | Callee::Required { .. })
+                {
                     forwarding.push(call.at);
                     return;
                 }
@@ -1313,9 +1325,9 @@ pub(crate) fn demands(
                     });
                 }
             });
-            // FN-19 and GEN-7: a call that spreads a pack is read in each
-            // instance, where its entries are known, and its callee and
-            // the slot of each written argument with them. A const read
+            // FN-19 and GEN-7: pack calls and named requirements are read
+            // in each instance, where the selected callee
+            // and the slot of each written argument are known. A const read
             // anywhere in it is followed there, as a deferred candidate's
             // is, and is an input only where that instance reads it.
             for call in forwarding {

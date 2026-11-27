@@ -171,6 +171,76 @@ fn formatting_checks_deferred_const_inputs_at_the_caller() {
     }
 }
 
+/// FMT-3 and GEN-7: a named requirement admits the declaration, then the
+/// selected candidate's pattern demand reaches the outside making call.
+#[test]
+fn formatting_follows_a_named_requirements_selected_const_demand() {
+    let checked = with_core(concat!(
+        "operator variant<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn variant{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn variant{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn req<T>(const p: str, v: T) -> str requires variant(T) -> str => variant{pattern: p}(v)\n",
+        "test bad { assert req(\"{:x}\", 1.5) == \"\" }\n",
+        "test good { assert req(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+        "test literal { assert req(\"{:x}\", 7) == \"{:x}\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:19 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `req<f64>`")
+    );
+}
+
+/// FMT-3, FN-19 and GEN-7: an indexed pack leaves the operator unread
+/// until specialization, including its ordinary const option demand.
+#[test]
+fn formatting_follows_an_indexed_packs_selected_const_demand() {
+    let checked = with_core(concat!(
+        "operator lab<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn lab{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn lab{const pattern: str}(value: i64) -> str => format(pattern, value)\n",
+        "const fn top<...As>(const p: str, args: ...As) -> str => lab{pattern: p}(args[0])\n",
+        "test bad { assert top(\"{:x}\", 1.5) == \"\" }\n",
+        "test good { assert top(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+        "test integer { assert top(\"{:x}\", 15) == \"f\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:19 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `top<[f64]>`")
+    );
+}
+
+/// FMT-3 and GEN-7: conditional discovery does not read an ordinary
+/// const parameter when the selected candidate returns it at run time.
+#[test]
+fn selected_operator_patterns_can_remain_runtime_values() {
+    let checked = with_core(concat!(
+        "operator variant<T>{const pattern: str}(value: T) -> str\n",
+        "impl const fn variant{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn variant{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn req<T>(const p: str, v: T) -> str requires variant(T) -> str => variant{pattern: p}(v)\n",
+        "const fn packed<...As>(const p: str, args: ...As) -> str => variant{pattern: p}(args[0])\n",
+        "const fn identity(value: str) -> str => value\n",
+        "const P: str = identity(\"{:x}\")\n",
+        "test required { assert req(P, 7) == \"{:x}\" }\n",
+        "test indexed { assert packed(P, 7) == \"{:x}\" }\n",
+    ));
+    assert!(!checked.rejected, "{}", checked.report);
+}
+
 /// GEN-7: an independent const input rejects at its body call once.
 #[test]
 fn formatting_checks_independent_const_inputs_once() {
