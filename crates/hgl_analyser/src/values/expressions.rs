@@ -935,15 +935,20 @@ impl<'a> Typer<'a> {
         fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let items: Vec<_> = node.children().collect();
-        if !items.is_empty()
-            && let Some(Type::Named {
+        let schema = match expected {
+            Some(Type::Named {
                 module,
                 declaration,
                 arguments,
                 kind: crate::types::NamedKind::Struct,
                 ..
-            }) = expected
-        {
+            }) if !items.is_empty() => Some((module, declaration, arguments)),
+            _ => None,
+        };
+        if let Some(reads) = &mut self.capture_key_reads {
+            reads.push((Location::new(self.file, node.span()), schema.is_some()));
+        }
+        if let Some((module, declaration, arguments)) = schema {
             let declared = &self.program.modules[*module].declarations[*declaration];
             if let Some(name) = tokens(&declared.syntax).find(|token| token.text() == declared.name)
             {

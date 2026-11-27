@@ -48,7 +48,11 @@ impl<'a> Typer<'a> {
     /// TIME-8 forbids capturing a capability through a `let` or a
     /// parameter as well as by its injected name. Look throughout the
     /// body, even where the typing pass cannot yet read an expression.
-    pub(super) fn check_capability_captures(&mut self, function: &SyntaxNode) {
+    pub(super) fn check_capability_captures(
+        &mut self,
+        function: &SyntaxNode,
+    ) -> Vec<(SyntaxNode, LocalId)> {
+        let mut keyed = Vec::new();
         for name in function
             .descendants()
             .filter(|name| name.kind() == SyntaxKind::NameExpr)
@@ -64,21 +68,79 @@ impl<'a> Typer<'a> {
             {
                 continue;
             }
-            self.diagnostics.emit(
-                error(
-                    Category::Injectable,
-                    codes::CAPABILITY_AS_VALUE,
-                    self.at(&name),
-                    format!(
-                        "`{}` is a capability, and is not retained: this is a capture of an \
-                         anonymous function",
-                        self.locals[local].name
-                    ),
-                    "TIME-8",
-                )
-                .with_note("give the function what it needs of the capability as an argument"),
-            );
+            if crate::syntax::is_keyed_field_name(&name) {
+                keyed.push((name, local));
+            } else {
+                self.report_capability_capture(&name, local);
+            }
         }
+        keyed
+    }
+
+    /// A field label does not read the name which happens to be in scope.
+    /// Prefer the committed lookup from the anonymous body. An open pack
+    /// or guarded branch can leave its entries unread. In that case an
+    /// call or typed block can still supply a fixed schema, independent of the
+    /// pack. Keep only the key classification from that tentative lookup.
+    pub(super) fn check_keyed_captures(&mut self, keyed: Vec<(SyntaxNode, LocalId)>, start: usize) {
+        for (name, local) in keyed {
+            let literal = name.parent().and_then(|pair| pair.parent()).unwrap();
+            let at = self.at(&literal);
+            let role = |typer: &Self| {
+                let mut roles = typer.capture_key_reads.as_deref()?[start..]
+                    .iter()
+                    .filter_map(|(read, field)| (*read == at).then_some(*field));
+                let first = roles.next()?;
+                Some(first && roles.all(|field| field))
+            };
+            let field = role(self).or_else(|| {
+                let contexts: Vec<_> = literal
+                    .ancestors()
+                    .take_while(|parent| {
+                        !matches!(
+                            parent.kind(),
+                            SyntaxKind::FnExpr | SyntaxKind::PackComprehension
+                        ) && !crate::syntax::is_pack_key_if(parent)
+                    })
+                    .filter(|parent| {
+                        matches!(
+                            parent.kind(),
+                            SyntaxKind::Block
+                                | SyntaxKind::CallExpr
+                                | SyntaxKind::TypedConstructor
+                                | SyntaxKind::UndecidedConstructor
+                        )
+                    })
+                    .collect();
+                contexts.iter().rev().find_map(|context| {
+                    let mark = self.mark();
+                    self.expression(context, None);
+                    let field = role(self);
+                    self.take_back(mark, false);
+                    field
+                })
+            });
+            if field != Some(true) {
+                self.report_capability_capture(&name, local);
+            }
+        }
+    }
+
+    fn report_capability_capture(&mut self, name: &SyntaxNode, local: LocalId) {
+        self.diagnostics.emit(
+            error(
+                Category::Injectable,
+                codes::CAPABILITY_AS_VALUE,
+                self.at(name),
+                format!(
+                    "`{}` is a capability, and is not retained: this is a capture of an \
+                         anonymous function",
+                    self.locals[local].name
+                ),
+                "TIME-8",
+            )
+            .with_note("give the function what it needs of the capability as an argument"),
+        );
     }
 
     /// How the capability named at `node` is retained where it stands,

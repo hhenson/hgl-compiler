@@ -124,7 +124,11 @@ impl Typer<'_> {
         specialization: Option<bool>,
     ) -> (Option<AnonymousDefinition>, bool) {
         // CTRL-5: a return belongs to this function alone.
-        self.check_capability_captures(function);
+        let keyed = self.check_capability_captures(function);
+        let record_keys = !keyed.is_empty() && self.capture_key_reads.is_none();
+        if record_keys {
+            self.capture_key_reads = Some(Vec::new());
+        }
         let mut mark = self.mark();
         let first_local = mark.locals;
         let outer = self.anonymous.replace(Anonymous {
@@ -157,6 +161,10 @@ impl Typer<'_> {
             self.at(function),
             "this anonymous function",
         );
+        self.check_keyed_captures(keyed, mark.capture_key_reads);
+        if record_keys {
+            self.capture_key_reads = None;
+        }
         let needs_pack_inputs = specialization.is_none()
             && statements
                 .as_deref()
