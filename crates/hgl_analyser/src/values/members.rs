@@ -93,6 +93,14 @@ pub(crate) fn has_dependent_index(
         .filter(|location| location.file == file)
         .map(|location| location.span)
         .collect();
+    let own: Vec<Location> = match unit.details.get(declaration) {
+        Some(Detail::Callable(signature)) => signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect(),
+        _ => Vec::new(),
+    };
     let dependent_locals: HashSet<&str> = body
         .locals
         .iter()
@@ -102,95 +110,105 @@ pub(crate) fn has_dependent_index(
     // FN-7: direct anonymous calls and standalone anonymous functions are
     // checked without retaining their body HIR. Recheck only when a discarded
     // anonymous function contains a bracket syntax node and touches a generic
-    // parameter via capture, written type in the declaration's file, or
-    // direct-call argument.
-    has_dependent_anonymous_index(
+    // parameter via capture, written type, explicit generic call arguments in
+    // the declaration's file, or direct-call argument.
+    let context = AnonymousIndexContext {
         unit,
         file,
-        &declared.syntax,
-        &unread_spans,
-        &unread_dependent_calls,
-        &dependent_locals,
-    )
+        own,
+        unread_spans,
+        unread_dependent_calls,
+        dependent_locals,
+    };
+    context.scan(&declared.syntax)
 }
 
 fn contains_span(outer: Span, inner: Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 
-fn has_dependent_anonymous_index(
-    unit: &Module,
+struct AnonymousIndexContext<'a> {
+    unit: &'a Module,
     file: FileId,
-    node: &SyntaxNode,
-    unread_spans: &[Span],
-    unread_dependent_calls: &[Span],
-    dependent_locals: &HashSet<&str>,
-) -> bool {
-    if node.kind() == SyntaxKind::TypeOfExpr {
-        return false;
+    own: Vec<Location>,
+    unread_spans: Vec<Span>,
+    unread_dependent_calls: Vec<Span>,
+    dependent_locals: HashSet<&'a str>,
+}
+
+impl AnonymousIndexContext<'_> {
+    fn scan(&self, node: &SyntaxNode) -> bool {
+        if node.kind() == SyntaxKind::TypeOfExpr {
+            return false;
+        }
+        if node.kind() == SyntaxKind::FnExpr {
+            let span = node.span();
+            let discarded = self
+                .unread_spans
+                .iter()
+                .any(|&outer| contains_span(outer, span));
+            if discarded && self.anonymous_has_dependent_index(node) {
+                return true;
+            }
+        }
+        node.children().any(|part| self.scan(&part))
     }
-    if node.kind() == SyntaxKind::FnExpr {
-        let span = node.span();
-        let discarded = unread_spans.iter().any(|&outer| contains_span(outer, span));
-        if discarded
-            && anonymous_has_dependent_index(
-                unit,
-                file,
-                node,
-                unread_dependent_calls,
-                dependent_locals,
-            )
+
+    fn anonymous_has_dependent_index(&self, function: &SyntaxNode) -> bool {
+        let span = function.span();
+        let mut has_index = false;
+        let mut captures_dependent = false;
+        let mut shadowed = HashSet::new();
+        let mut typeof_spans = Vec::new();
+        scan_anonymous_body(
+            function,
+            &self.dependent_locals,
+            &mut shadowed,
+            &mut has_index,
+            &mut captures_dependent,
+            &mut typeof_spans,
+        );
+        if !has_index {
+            return false;
+        }
+        if captures_dependent {
+            return true;
+        }
+        if self
+            .unread_dependent_calls
+            .iter()
+            .any(|&outer| contains_span(outer, span))
         {
             return true;
         }
+        let in_typeof = |inner: Span| {
+            typeof_spans
+                .iter()
+                .any(|&outer| contains_span(outer, inner))
+        };
+        let type_depends = |ty: &Type| {
+            crate::declared::names_parameter(ty) || crate::declared::mentions(ty, &self.own)
+        };
+        let has_written = self.unit.written.iter().any(|written| {
+            written.at.file == self.file
+                && contains_span(span, written.at.span)
+                && !in_typeof(written.at.span)
+                && type_depends(&written.ty)
+        });
+        if has_written {
+            return true;
+        }
+        self.unit.call_arguments.iter().any(|call| {
+            call.at.file == self.file
+                && contains_span(span, call.at.span)
+                && !in_typeof(call.at.span)
+                && call.arguments.iter().any(|(_, argument)| match argument {
+                    Argument::Type(ty) => type_depends(ty),
+                    Argument::Constant(constant) => constant.value.names_one_of(&self.own),
+                    Argument::NoResult => false,
+                })
+        })
     }
-    node.children().any(|part| {
-        has_dependent_anonymous_index(
-            unit,
-            file,
-            &part,
-            unread_spans,
-            unread_dependent_calls,
-            dependent_locals,
-        )
-    })
-}
-
-fn anonymous_has_dependent_index(
-    unit: &Module,
-    file: FileId,
-    function: &SyntaxNode,
-    unread_dependent_calls: &[Span],
-    dependent_locals: &HashSet<&str>,
-) -> bool {
-    let span = function.span();
-    let mut has_index = false;
-    let mut captures_dependent = false;
-    let mut shadowed = HashSet::new();
-    scan_anonymous_body(
-        function,
-        dependent_locals,
-        &mut shadowed,
-        &mut has_index,
-        &mut captures_dependent,
-    );
-    if !has_index {
-        return false;
-    }
-    if captures_dependent {
-        return true;
-    }
-    if unread_dependent_calls
-        .iter()
-        .any(|&outer| contains_span(outer, span))
-    {
-        return true;
-    }
-    unit.written.iter().any(|written| {
-        written.at.file == file
-            && contains_span(span, written.at.span)
-            && crate::declared::names_parameter(&written.ty)
-    })
 }
 
 fn scan_anonymous_body(
@@ -199,9 +217,13 @@ fn scan_anonymous_body(
     shadowed: &mut HashSet<String>,
     has_index: &mut bool,
     captures_dependent: &mut bool,
+    typeof_spans: &mut Vec<Span>,
 ) {
     match node.kind() {
-        SyntaxKind::TypeOfExpr => return,
+        SyntaxKind::TypeOfExpr => {
+            typeof_spans.push(node.span());
+            return;
+        }
         SyntaxKind::IndexExpr => *has_index = true,
         SyntaxKind::NameExpr => {
             if let Some(name) = name_token(node)
@@ -234,6 +256,7 @@ fn scan_anonymous_body(
                     shadowed,
                     has_index,
                     captures_dependent,
+                    typeof_spans,
                 );
             }
             for name in added {
@@ -250,6 +273,7 @@ fn scan_anonymous_body(
             shadowed,
             has_index,
             captures_dependent,
+            typeof_spans,
         );
     }
 }
@@ -1068,6 +1092,9 @@ mod tests {
     fn anonymous_dependent_index_detection_stays_narrow() {
         let program = analyse_module(concat!(
             "module m\n",
+            "operator build<T>() -> T\n",
+            "impl const fn build<T>() -> bool requires T == bool => false\n",
+            "const fn make_opt<T>() -> T? => null\n",
             "const fn apply_one(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
             "const fn close_over<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
             "const fn passed_arg<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
@@ -1083,8 +1110,15 @@ mod tests {
             "fn graph_close<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
             "fn graph_passed<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
             "fn graph_nested<T>(src: T?) -> i64 => (fn(i: i64) => (fn(j: i64) => src[i + j])(0))(0)\n",
+            "fn call_produced_operator<T>(i: i64) -> i64 requires T == bool => (fn() -> i64 => build<T>()[i])()\n",
+            "const fn call_produced_nullable<T>() -> i64 => (fn() -> i64 => make_opt<T>()[0])()\n",
             "const fn unrelated_concrete<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
             "fn graph_concrete<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+            "const fn concrete_generic_call<T>(x: T) -> i64 => (fn() -> i64 => make_opt<list<i64>>()[0])()\n",
+            "const fn concrete_with_inner_typeof<T>(xs: list<i64>) -> i64 => (fn(i: i64) -> i64 {\n",
+            "    let _t = type(make_opt<T>())\n",
+            "    return xs[i]\n",
+            "})(0)\n",
             "const fn retained_concrete<T>(x: T, xs: list<i64>) -> i64 => apply_one(fn(i: i64) => xs[i], 0)\n",
             "const fn static_bad<T>(x: T) -> i64 => (fn(b: bool) => b[0])(true)\n",
             "const fn no_index<T>(src: T?) -> i64 => (fn(i: i64) => i)(0)\n",
@@ -1108,6 +1142,8 @@ mod tests {
             "graph_close",
             "graph_passed",
             "graph_nested",
+            "call_produced_operator",
+            "call_produced_nullable",
         ] {
             assert!(
                 dependent_index_for(&program, expected_true),
@@ -1117,6 +1153,8 @@ mod tests {
         for expected_false in [
             "unrelated_concrete",
             "graph_concrete",
+            "concrete_generic_call",
+            "concrete_with_inner_typeof",
             "retained_concrete",
             "static_bad",
             "no_index",
@@ -1139,7 +1177,8 @@ mod tests {
         );
         let file_b = concat!(
             "module m part extra\n",
-            "const fn other_file<T>(padding_0: i64, padding_1: i64, y: T?) -> i64 => 0\n",
+            "const fn f<T>() -> T? => null\n",
+            "const fn g<T>(a: T?) -> T? => f<T>()\n",
         );
         let mut sources = SourceMap::new();
         let mut diagnostics = Diagnostics::new();
@@ -1174,8 +1213,9 @@ mod tests {
             .find(|node| node.kind() == hgl_parser::SyntaxKind::FnExpr)
             .unwrap()
             .span();
-        // Verify another file in the same module has a generic written type
-        // whose byte offsets fall inside `concrete_anon`'s `FnExpr` span.
+        // Verify another file in the same module has both a generic written type
+        // and explicit generic call arguments whose byte offsets fall inside
+        // `concrete_anon`'s `FnExpr` span.
         assert!(
             unit.written.iter().any(|written| {
                 written.at.file != declared.at.file
@@ -1183,6 +1223,20 @@ mod tests {
                     && crate::declared::names_parameter(&written.ty)
             }),
             "test setup must place another file's generic written type within `fn_span`"
+        );
+        assert!(
+            unit.call_arguments.iter().any(|call| {
+                call.at.file != declared.at.file
+                    && super::contains_span(fn_span, call.at.span)
+                    && call.arguments.iter().any(|(_, argument)| {
+                        matches!(
+                            argument,
+                            crate::types::Argument::Type(ty)
+                                if crate::declared::names_parameter(ty)
+                        )
+                    })
+            }),
+            "test setup must place another file's generic call arguments within `fn_span`"
         );
         let body = unit.bodies[position].as_ref().unwrap();
         assert!(!has_dependent_index(&program, (0, position), body));

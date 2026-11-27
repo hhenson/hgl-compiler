@@ -419,3 +419,155 @@ fn multi_file_part_generic_bracket_bases_check_concrete_instances() {
     ]);
     assert_eq!(valid.summary(), Vec::<String>::new(), "{}", valid.report);
 }
+
+/// EXPR-7, GEN-7, GEN-8: an explicitly generic producing call (`build<T>()`
+/// or an ordinary nullable generic producer `make_opt<T>()`) inside a reached
+/// immediate anonymous function rechecks the bracket base in concrete
+/// instances, matching the direct form's primary/related locations while
+/// accepting valid collections.
+#[test]
+fn explicit_generic_call_produced_bracket_bases_check_concrete_instances() {
+    let direct_rejected = module(concat!(
+        "operator build<T>() -> T\n",
+        "impl const fn build<T>() -> bool requires T == bool => false\n",
+        "fn select_slot<T>(i: i64) -> i64 requires T == bool => build<T>()[i]\n",
+        "fn probe(i: i64) -> i64 => select_slot<bool>(i)\n",
+    ));
+    let wrapped_rejected = module(concat!(
+        "operator build<T>() -> T\n",
+        "impl const fn build<T>() -> bool requires T == bool => false\n",
+        "fn select_slot<T>(i: i64) -> i64 requires T == bool => (fn() -> i64 => build<T>()[i])()\n",
+        "fn probe(i: i64) -> i64 => select_slot<bool>(i)\n",
+    ));
+    assert_eq!(
+        direct_rejected.summary(),
+        ["m.hgl:5:28 type/type.mismatch EXPR-7"],
+        "{}",
+        direct_rejected.report
+    );
+    assert!(
+        direct_rejected
+            .report
+            .contains("this destination in the generic graph is checked for this instance"),
+        "{}",
+        direct_rejected.report
+    );
+    assert!(
+        direct_rejected.report.contains("build<T>()[i]"),
+        "{}",
+        direct_rejected.report
+    );
+    assert_eq!(
+        wrapped_rejected.summary(),
+        ["m.hgl:5:28 type/type.mismatch EXPR-7"],
+        "{}",
+        wrapped_rejected.report
+    );
+    assert!(
+        wrapped_rejected
+            .report
+            .contains("the instance's body rejects here"),
+        "{}",
+        wrapped_rejected.report
+    );
+    assert!(
+        wrapped_rejected
+            .report
+            .contains("this call makes the instance `select_slot<bool>`"),
+        "{}",
+        wrapped_rejected.report
+    );
+    assert!(
+        wrapped_rejected.report.contains("build<T>()[i]"),
+        "{}",
+        wrapped_rejected.report
+    );
+
+    let nested_wrapped_rejected = module(concat!(
+        "operator build<T>() -> T\n",
+        "impl const fn build<T>() -> bool requires T == bool => false\n",
+        "fn select_slot<T>(i: i64) -> i64 requires T == bool => (fn() -> i64 => (fn() -> i64 => build<T>()[i])())()\n",
+        "fn probe(i: i64) -> i64 => select_slot<bool>(i)\n",
+    ));
+    assert_eq!(
+        nested_wrapped_rejected.summary(),
+        ["m.hgl:5:28 type/type.mismatch EXPR-7"],
+        "{}",
+        nested_wrapped_rejected.report
+    );
+    assert!(
+        nested_wrapped_rejected
+            .report
+            .contains("this call makes the instance `select_slot<bool>`"),
+        "{}",
+        nested_wrapped_rejected.report
+    );
+
+    let valid_operator = module(concat!(
+        "operator build<T>() -> T\n",
+        "impl const fn build<T>() -> list<i64> requires T == list<i64> => [7]\n",
+        "fn select_slot<T>(i: i64) -> i64 requires T == list<i64> => (fn() -> i64 => build<T>()[i])()\n",
+        "fn probe(i: i64) -> i64 => select_slot<list<i64>>(i)\n",
+    ));
+    assert_eq!(
+        valid_operator.summary(),
+        Vec::<String>::new(),
+        "{}",
+        valid_operator.report
+    );
+
+    let nullable_rejected = module(concat!(
+        "const fn make_opt<T>() -> T? => null\n",
+        "const fn wrap_value<T>() -> i64 => (fn() -> i64 => make_opt<T>()[0])()\n",
+        "fn wrap_graph<T>(i: i64) -> i64 => (fn() -> i64 => make_opt<T>()[i])()\n",
+        "const fn forwarded_wrap<U>() -> i64 => wrap_value<U>()\n",
+        "test probe {\n",
+        "    wrap_value<bool>()\n",
+        "    forwarded_wrap<bool>()\n",
+        "    assert eval wrap_graph<bool>(i: [0]) == [1]\n",
+        "}\n",
+    ));
+    assert_eq!(
+        nullable_rejected.summary(),
+        [
+            "m.hgl:7:5 type/type.mismatch EXPR-7",
+            "m.hgl:8:5 type/type.mismatch EXPR-7",
+            "m.hgl:9:12 type/type.mismatch EXPR-7",
+        ],
+        "{}",
+        nullable_rejected.report
+    );
+    for expected in [
+        "this call makes the instance `wrap_value<bool>`",
+        "this call makes the instance `forwarded_wrap<bool>`",
+        "this call makes the instance `wrap_graph<bool>`",
+        "make_opt<T>()[0]",
+        "make_opt<T>()[i]",
+    ] {
+        assert!(
+            nullable_rejected.report.contains(expected),
+            "missing `{expected}` in:\n{}",
+            nullable_rejected.report
+        );
+    }
+
+    let nullable_valid = module(concat!(
+        "const fn make_opt<T>() -> T? => null\n",
+        "const fn wrap_value<T>() -> i64 => (fn() -> i64 => make_opt<T>()[0])()\n",
+        "fn wrap_graph<T>(i: i64) -> i64 => (fn() -> i64 => make_opt<T>()[i])()\n",
+        "const fn forwarded_wrap<U>() -> i64 => wrap_value<U>()\n",
+        "const fn concrete_generic_call<T>(x: T) -> i64 => (fn() -> i64 => make_opt<list<i64>>()[0])()\n",
+        "test probe {\n",
+        "    wrap_value<list<i64>>()\n",
+        "    forwarded_wrap<tuple<i64, str>>()\n",
+        "    assert eval wrap_graph<list<i64>>(i: [0]) == [1]\n",
+        "    concrete_generic_call(true)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        nullable_valid.summary(),
+        Vec::<String>::new(),
+        "{}",
+        nullable_valid.report
+    );
+}
