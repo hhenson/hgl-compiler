@@ -57,6 +57,9 @@ pub struct Program {
     pub(crate) instance_sites: Vec<crate::values::InstanceSites>,
     /// Concrete selected calls already examined for an ordinary const slot.
     pub(crate) selected_const_demands: crate::const_inputs::SelectedDemands,
+    /// Formerly unread module format operands and their original
+    /// `(graph, value_code)` contexts, retried once typed helpers exist.
+    pub(crate) unplanned_module_patterns: std::cell::RefCell<HashMap<Location, (bool, bool)>>,
     /// Source diagnostics for a branch selected only by a pack key (CTRL-16).
     pub(crate) pack_branch_reports: HashMap<Location, Vec<Diagnostic>>,
 }

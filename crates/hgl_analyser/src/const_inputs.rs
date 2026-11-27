@@ -9,6 +9,7 @@ use std::hash::Hash;
 use std::rc::Rc;
 
 use hgl_diagnostics::{Diagnostics, Location};
+use hgl_parser::HasSpan;
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::DiGraph;
 
@@ -368,7 +369,7 @@ impl Program {
                     {
                         return Err(Unread);
                     }
-                    reader.read(&given.value, INPUT_DEPTH, &[])?
+                    reader.read_input(&given.value, INPUT_DEPTH, &[])?
                 } else if let Some(default) = self.inherited_configuration_default(callee, slot) {
                     if let Callee::Candidate {
                         operator,
@@ -385,14 +386,14 @@ impl Program {
                             .map(|(parameter, value)| (parameter.at, value))
                             .collect();
                     }
-                    reader.read(&default.value, INPUT_DEPTH, &generics)?
+                    reader.read_input(&default.value, INPUT_DEPTH, &generics)?
                 } else if let Some(default) = owner
                     .defaults
                     .get(declaration)
                     .and_then(|defaults| defaults.get(slot))
                     .and_then(Option::as_ref)
                 {
-                    reader.read(&default.value, INPUT_DEPTH, &generics)?
+                    reader.read_input(&default.value, INPUT_DEPTH, &generics)?
                 } else if matches!(parameter.ty, Type::Nullable(_)) {
                     Expr {
                         kind: ExprKind::Literal(Value::Null),
@@ -687,11 +688,15 @@ impl Program {
 
 struct Reader<'a> {
     program: &'a Program,
-    /// Present only when reading a reached immediate expression.
+    /// Known values in a reached expression or a bounded helper body.
     locals: Option<&'a [(LocalId, Rc<Expr>)]>,
     steps_left: usize,
     text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
+    /// Completed proofs share this read's budget, never another read's.
+    proven_helpers: HashSet<Declaration>,
+    /// Successful bounded helper reads, shared across lexical frames.
+    helper_reads: usize,
     read_string_helpers: bool,
 }
 
@@ -705,7 +710,32 @@ pub(crate) fn projection_value(
         .iter()
         .map(|(at, argument)| (*at, argument))
         .collect();
-    Reader::new(program).read(expression, INPUT_DEPTH, &generics)
+    Reader::new(program).read_input(expression, INPUT_DEPTH, &generics)
+}
+
+/// FMT-3, UNIT-13: extend pattern reading only through an admitted
+/// module helper. Other previously unread expressions keep their
+/// existing diagnostics and target boundary.
+pub(crate) fn module_helper_pattern(
+    program: &Program,
+    expression: &Expr,
+    generics: &[(Location, GenericArgument)],
+) -> Result<Expr, ConstInputFault> {
+    // FN-1: reading one helper does not make an enclosing runtime
+    // expression a fixed format operand.
+    if !crate::values::fixed_expression(expression, &|_| false) {
+        return Err(ConstInputFault::Unread);
+    }
+    let generics: Vec<_> = generics
+        .iter()
+        .map(|(at, argument)| (*at, argument))
+        .collect();
+    let mut reader = Reader::new(program);
+    let value = reader.read_input(expression, INPUT_DEPTH, &generics)?;
+    if reader.helper_reads == 0 {
+        return Err(ConstInputFault::Unread);
+    }
+    Ok(value)
 }
 
 /// Normalize a known value in an immediate anonymous call's lexical scope.
@@ -734,8 +764,48 @@ impl<'a> Reader<'a> {
             steps_left: INPUT_BUDGET,
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
+            proven_helpers: HashSet::new(),
+            helper_reads: 0,
             read_string_helpers: true,
         }
+    }
+
+    /// Check the whole input that used a helper, not only the root
+    /// visited by that helper (UNIT-13). Independent inputs retain
+    /// their own helper-use test while sharing the existing budgets.
+    fn read_input(
+        &mut self,
+        expression: &Expr,
+        depth: usize,
+        generics: &[(Location, &GenericArgument)],
+    ) -> Result<Expr, ConstInputFault> {
+        let before = self.helper_reads;
+        let value = self.read(expression, depth, generics)?;
+        if self.helper_reads != before {
+            let mut roots = Vec::new();
+            expression.walk(&mut |value| match &value.kind {
+                ExprKind::Constant {
+                    module,
+                    declaration,
+                } => roots.push((*module, *declaration)),
+                ExprKind::Call {
+                    callee,
+                    form: Form::Named,
+                    ..
+                } => {
+                    if let Some(root) = callee.declaration() {
+                        roots.push(root);
+                    }
+                }
+                _ => {}
+            });
+            roots.sort_unstable();
+            roots.dedup();
+            for root in roots {
+                self.helper_dependencies(root)?;
+            }
+        }
+        Ok(value)
     }
 
     fn read_declaration(
@@ -829,10 +899,21 @@ impl<'a> Reader<'a> {
                 arguments,
                 form: Form::Named,
                 ..
-            } if self.read_string_helpers
-                && arguments.is_empty()
-                && expression.ty == Type::Scalar(Scalar::Str) =>
-            {
+            } if self.read_string_helpers && expression.ty == Type::Scalar(Scalar::Str) => {
+                // UNIT-13: extend only a module constant's helper, retaining
+                // the established zero-argument sole-return read first.
+                let module_helper = self.reading.iter().any(|&((module, declaration), field)| {
+                    field.is_none()
+                        && self.program.modules[module].declarations[declaration].kind
+                            == crate::DeclarationKind::Constant
+                });
+                if !arguments.is_empty() {
+                    return if module_helper {
+                        self.string_helper(callee, arguments, next, generics)
+                    } else {
+                        Err(Unread)
+                    };
+                }
                 // Match the existing format reader's single-return string
                 // helpers. A general compile-time call is tracked separately.
                 let (module, declaration) = callee.declaration().ok_or(Unread)?;
@@ -860,7 +941,11 @@ impl<'a> Reader<'a> {
                     },
                 ] = body.statements.as_slice()
                 else {
-                    return Err(Unread);
+                    return if module_helper {
+                        self.string_helper(callee, arguments, next, generics)
+                    } else {
+                        Err(Unread)
+                    };
                 };
                 return self.read_declaration((module, declaration), None, returned, next, &[]);
             }
@@ -1007,6 +1092,294 @@ impl<'a> Reader<'a> {
             ty: expression.ty.clone(),
             category: ValueCategory::Value,
         })
+    }
+
+    /// Read the straight-line string helper of a module constant (UNIT-13).
+    /// Calls with effects, mutation, packs or generic bodies stay unread.
+    fn string_helper(
+        &mut self,
+        callee: &Callee,
+        arguments: &[Argument],
+        depth: usize,
+        generics: &[(Location, &GenericArgument)],
+    ) -> Result<Expr, ConstInputFault> {
+        use ConstInputFault::{ReaderLimit, Unread};
+
+        let (module, declaration) = callee.declaration().ok_or(Unread)?;
+        let owner = &self.program.modules[module];
+        if owner.declarations[declaration].kind != crate::DeclarationKind::Function(Role::Value)
+            || self.reading.contains(&((module, declaration), None))
+        {
+            return Err(Unread);
+        }
+        let Some(Detail::Callable(signature)) = owner.details.get(declaration) else {
+            return Err(Unread);
+        };
+        if !signature.generics.is_empty()
+            || signature.parameters.len() != arguments.len()
+            || signature
+                .parameters
+                .iter()
+                .any(|p| p.var || p.reference || p.pack.is_some())
+        {
+            return Err(Unread);
+        }
+        let body = owner
+            .bodies
+            .get(declaration)
+            .and_then(Option::as_ref)
+            .ok_or(Unread)?;
+        let Some((
+            Stmt::Return {
+                value: Some(returned),
+                ..
+            },
+            statements,
+        )) = body.statements.split_last()
+        else {
+            return Err(Unread);
+        };
+        if statements.iter().any(|statement| {
+            !matches!(statement, Stmt::Declare { local, value: Some(_) }
+                if body.locals.get(*local).is_some_and(|l| l.kind == crate::LocalKind::Let))
+        }) {
+            return Err(Unread);
+        }
+        let root = self
+            .reading
+            .iter()
+            .find_map(|&((unit, member), field)| {
+                (field.is_none()
+                    && self.program.modules[unit].declarations[member].kind
+                        == crate::DeclarationKind::Constant)
+                    .then_some((unit, member))
+            })
+            .ok_or(Unread)?;
+        self.helper_dependencies(root)?;
+        let bindings = arguments.len().saturating_add(statements.len());
+        if bindings > self.steps_left {
+            return Err(ReaderLimit);
+        }
+        let mut locals = Vec::with_capacity(bindings);
+        // Actual arguments belong to the caller. Normalize them before
+        // installing the callee's independent LocalId namespace (UNIT-7).
+        for argument in arguments {
+            let slot = argument.parameter.ok_or(Unread)?;
+            if argument.pack.is_some()
+                || slot >= signature.parameters.len()
+                || locals.iter().any(|(id, _)| *id == slot)
+            {
+                return Err(Unread);
+            }
+            locals.push((slot, Rc::new(self.read(&argument.value, depth, generics)?)));
+        }
+        self.reading.push(((module, declaration), None));
+        let read = (|| {
+            for statement in statements {
+                self.steps_left = self.steps_left.checked_sub(1).ok_or(ReaderLimit)?;
+                let Stmt::Declare {
+                    local,
+                    value: Some(value),
+                } = statement
+                else {
+                    return Err(Unread);
+                };
+                let value = self.in_local_scope(value, depth, &locals)?;
+                locals.push((*local, Rc::new(value)));
+            }
+            self.in_local_scope(returned, depth, &locals)
+        })();
+        self.reading.pop();
+        if read.is_ok() {
+            // Every call already spent a traversal step, bounding this count.
+            self.helper_reads += 1;
+        }
+        read
+    }
+
+    /// UNIT-13 follows written dependencies, including an unselected branch.
+    /// Prove only this reader's fixed helper subset; the final cycle pass
+    /// still reports failures and handles the rest of the language.
+    fn helper_dependencies(&mut self, root: Declaration) -> Result<(), ConstInputFault> {
+        use ConstInputFault::{ReaderLimit, Unread};
+        if self.proven_helpers.contains(&root) {
+            return Ok(());
+        }
+        let mut active = HashSet::new();
+        let mut done = HashSet::new();
+        let mut pending = vec![(root, INPUT_DEPTH, false)];
+        while let Some((declaration, depth, leaving)) = pending.pop() {
+            if leaving {
+                active.remove(&declaration);
+                done.insert(declaration);
+                continue;
+            }
+            if done.contains(&declaration) {
+                continue;
+            }
+            if !active.insert(declaration) {
+                return Err(Unread);
+            }
+            let next = depth.checked_sub(1).ok_or(ReaderLimit)?;
+            self.steps_left = self.steps_left.checked_sub(1).ok_or(ReaderLimit)?;
+            let dependencies = self.helper_edges(declaration)?;
+            pending.push((declaration, depth, true));
+            pending.extend(dependencies.into_iter().map(|dep| (dep, next, false)));
+        }
+        self.proven_helpers.insert(root);
+        Ok(())
+    }
+
+    /// Gather only dependencies whose declaration and lexical body are fixed.
+    fn helper_edges(
+        &mut self,
+        (module, declaration): Declaration,
+    ) -> Result<Vec<Declaration>, ConstInputFault> {
+        use ConstInputFault::{ReaderLimit, Unread};
+        let program = self.program;
+        let owner = &program.modules[module];
+        let declared = &owner.declarations[declaration];
+        // Nominal storage and implicit defaults have their own dependency
+        // rules. This small helper reader does not prove those declarations.
+        let opaque_type = |ty: &Type| {
+            ty.any_part(
+                &|part| {
+                    matches!(
+                        part,
+                        Type::Named { .. }
+                            | Type::Parameter { .. }
+                            | Type::PackMember { .. }
+                            | Type::Function(_)
+                            | Type::Unknown
+                    )
+                },
+                &|_| false,
+            )
+        };
+        let (body, value, locals) = match &owner.details[declaration] {
+            Detail::Constant(ty) if !opaque_type(ty) => {
+                let value = owner
+                    .constants
+                    .get(declaration)
+                    .and_then(Option::as_ref)
+                    .ok_or(Unread)?;
+                (None, Some(&value.value), value.locals.as_slice())
+            }
+            Detail::Callable(signature)
+                if declared.kind == crate::DeclarationKind::Function(Role::Value)
+                    && signature.generics.is_empty()
+                    && signature.parameters.iter().all(|p| {
+                        !p.var
+                            && !p.reference
+                            && p.pack.is_none()
+                            && !p.has_default
+                            && !opaque_type(&p.ty)
+                    }) =>
+            {
+                let body = owner
+                    .bodies
+                    .get(declaration)
+                    .and_then(Option::as_ref)
+                    .ok_or(Unread)?;
+                (Some(body), None, body.locals.as_slice())
+            }
+            _ => return Err(Unread),
+        };
+        if locals.iter().any(|local| opaque_type(&local.ty)) {
+            return Err(Unread);
+        }
+        let mut dependencies = Vec::new();
+        let mut fault = None;
+        let mut visit = |value: &Expr| {
+            let Some(remaining) = self.steps_left.checked_sub(1) else {
+                fault = Some(ReaderLimit);
+                return;
+            };
+            self.steps_left = remaining;
+            if opaque_type(&value.ty) {
+                fault = Some(Unread);
+            }
+            match &value.kind {
+                ExprKind::Constant {
+                    module,
+                    declaration,
+                } => dependencies.push((*module, *declaration)),
+                ExprKind::Call {
+                    callee,
+                    form: Form::Named,
+                    ..
+                } => match callee.declaration() {
+                    Some(called)
+                        if program.modules[called.0].declarations[called.1].kind
+                            == crate::DeclarationKind::Function(Role::Value) =>
+                    {
+                        dependencies.push(called)
+                    }
+                    _ => fault = Some(Unread),
+                },
+                ExprKind::Call { .. } if !builtin_operation(program, value) => fault = Some(Unread),
+                _ => {}
+            }
+        };
+        if let Some(body) = body {
+            crate::hir::walk_statements(&body.statements, &mut visit);
+        }
+        if let Some(value) = value {
+            value.walk(&mut visit);
+        }
+        if let Some(fault) = fault {
+            return Err(fault);
+        }
+        // Resolved names also cover constant reads in local annotations and
+        // other written positions not retained as expression operands.
+        let span = declared.syntax.span();
+        for used in &owner.uses {
+            if used.at.file != declared.at.file
+                || !(span.start..span.end).contains(&used.at.span.start)
+            {
+                continue;
+            }
+            self.steps_left = self.steps_left.checked_sub(1).ok_or(ReaderLimit)?;
+            if let Binding::Declarations {
+                module,
+                declarations,
+            } = &used.binding
+            {
+                dependencies.extend(declarations.iter().filter_map(|&declaration| {
+                    (program.modules[*module].declarations[declaration].kind
+                        == crate::DeclarationKind::Constant)
+                        .then_some((*module, declaration))
+                }));
+            }
+        }
+        dependencies.sort_unstable();
+        dependencies.dedup();
+        Ok(dependencies)
+    }
+
+    /// Borrow one lexical frame without resetting the shared reader budgets.
+    fn in_local_scope(
+        &mut self,
+        expression: &Expr,
+        depth: usize,
+        locals: &[(LocalId, Rc<Expr>)],
+    ) -> Result<Expr, ConstInputFault> {
+        let mut scope = Reader {
+            program: self.program,
+            locals: Some(locals),
+            steps_left: self.steps_left,
+            text_left: self.text_left,
+            reading: self.reading.clone(),
+            proven_helpers: self.proven_helpers.clone(),
+            helper_reads: self.helper_reads,
+            read_string_helpers: self.read_string_helpers,
+        };
+        let read = scope.read(expression, depth, &[]);
+        self.steps_left = scope.steps_left;
+        self.text_left = scope.text_left;
+        self.proven_helpers = scope.proven_helpers;
+        self.helper_reads = scope.helper_reads;
+        read
     }
 
     fn scalar(
@@ -2571,6 +2944,51 @@ mod tests {
 
     use super::*;
     use crate::{ParsedFile, analyse};
+
+    /// UNIT-13's bounded helper reads have the same support boundary on
+    /// every check; another check must not have prepaid their proof work.
+    #[test]
+    fn module_helper_read_budgets_do_not_depend_on_previous_checks() {
+        let mut sources = SourceMap::new();
+        let mut diagnostics = Diagnostics::new();
+        let file = sources.add("m.hgl", "module m\nconst fn pattern(s: str) -> str {\nlet text = s\nreturn text\n}\nconst P: str = pattern(\"{}\")\n").unwrap();
+        let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+        let tree = parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            Limits::default(),
+            &mut diagnostics,
+        );
+        let program = analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics);
+        assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+        let declaration = program.modules[0].scope["P"][0];
+        let value = Expr {
+            kind: ExprKind::Constant {
+                module: 0,
+                declaration,
+            },
+            at: program.modules[0].declarations[declaration].at,
+            ty: Type::Scalar(Scalar::Str),
+            category: ValueCategory::Value,
+        };
+        let read = |budget| {
+            let mut reader = Reader::new(&program);
+            reader.steps_left = budget;
+            let value = reader.read_input(&value, INPUT_DEPTH, &[]);
+            (value, budget - reader.steps_left)
+        };
+        let (first, spent) = read(INPUT_BUDGET);
+        assert!(
+            matches!(first.unwrap().kind, ExprKind::Literal(Value::Str(ref text)) if text == "{}")
+        );
+        assert_eq!(read(INPUT_BUDGET).1, spent);
+        for _ in 0..2 {
+            assert_eq!(read(spent - 1).0, Err(ConstInputFault::ReaderLimit));
+            assert!(read(spent).0.is_ok());
+        }
+    }
 
     /// Equal composite values have the same identity even when their named
     /// fields are given in a different order. Floating keys keep their bits.

@@ -184,7 +184,7 @@ test selected_operator_patterns {
 
 /// FMT-3, #695: the target needs the analyser's checked pattern text.
 #[test]
-fn target_declines_unresolved_format_patterns() {
+fn rejects_invalid_module_helper_patterns_before_emission() {
     let root = scratch("unresolved-format-constants");
     let cases = [
         (
@@ -201,8 +201,130 @@ fn target_declines_unresolved_format_patterns() {
     for (name, declaration, call) in cases {
         let source = format!("module {name}\n{declaration}\ntest t {{ assert {call} == \"\" }}\n");
         let file = write(&root, &format!("{name}.hgl"), &source);
-        assert_target_declines_pattern(&file, &root.join(name));
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stderr));
+        assert!(text(&checked.stderr).contains("type/format.specifier"));
+        let output = root.join(name);
+        let emitted = emit_format_program(&file, &output);
+        assert_eq!(emitted.status.code(), Some(1));
+        assert!(text(&emitted.stderr).contains("type/format.specifier"));
+        assert!(!output.exists());
     }
+}
+
+/// FMT-3 and UNIT-13: the helper extension does not preempt an older
+/// memoized source fold when the typed helper body is already available.
+#[test]
+fn module_helper_fallback_preserves_legacy_cross_module_source_folds() {
+    let root = scratch("legacy-module-helper-pattern");
+    let mut helper = "module legacy.helper\nconst fn p0() -> str => \"a\"\n".to_string();
+    for level in 1..=14 {
+        writeln!(
+            helper,
+            "const fn p{level}() -> str => p{}() + p{}()",
+            level - 1,
+            level - 1
+        )
+        .unwrap();
+    }
+    helper.push_str("export const fn pattern() -> str => p14() + \"{}\"\n");
+    let a = write(&root, "a.hgl", &helper);
+    let b = write(
+        &root,
+        "b.hgl",
+        "module legacy.user\nuse legacy.helper::{pattern}\nconst P: str = pattern()\ntest t { assert format(P, 1.5) != \"\" }\n",
+    );
+    for (index, files) in [[&a, &b], [&b, &a]].iter().enumerate() {
+        let emitted = hgl_in(
+            &[
+                "emit",
+                files[0],
+                files[1],
+                "--target",
+                "cpp",
+                "--out",
+                &argument(&root.join(format!("cpp-{index}"))),
+            ],
+            &[],
+            &[],
+        );
+        assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+    }
+}
+
+/// FMT-3, UNIT-13: the older const-input reader's zero-argument
+/// sole-return helpers keep their accepted inputs and branch behavior.
+#[test]
+fn module_helper_extension_preserves_legacy_const_input_reads() {
+    let root = scratch("legacy-const-input-helper");
+    let file = write(
+        &root,
+        "legacy.hgl",
+        "module legacy.const_input\nconst fn pattern() -> str => if true { \"{}\" } else { convert<str>([1, 2]) }\nconst P: str = pattern()\nconst fn show(const p: str, value: i64) -> str => format(p, value)\ntest t { assert show(P, 1) == \"1\" }\n",
+    );
+    let emitted = emit_format_program(&file, &root.join("cpp"));
+    assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+}
+
+/// FMT-3/4/5 and UNIT-13: helper arguments and immutable locals yield
+/// compiled patterns in direct calls, concrete instances and lifted calls.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn module_helper_patterns_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("module-helper-patterns");
+    write(
+        &root,
+        "helpers.hgl",
+        r#"module module_helper_patterns
+const fn pattern(s: str) -> str { let first = s
+let second = first
+return second }
+const fn relay(s: str) -> str => pattern(pattern(s))
+const P: str = relay("{:.1f}")
+const Q: str = pattern("{:x}")
+const R: str = pattern("{") + pattern("}")
+const fn legacy_pattern() -> str => if true { "{}" } else { convert<str>([1, 2]) }
+const LEGACY: str = legacy_pattern()
+const fn direct(value: f64) -> str => format(P, value)
+const fn forwarded<T>(const p: str, value: T) -> str => format(p, value)
+fn lifted(value: f64) -> str => format(P, value)
+test direct_patterns {
+    assert direct(1.5) == "1.5"
+    assert format(Q, 255) == "ff"
+    assert format(R, [1, 2]) == "[1, 2]"
+    assert forwarded(P, 1.5) == "1.5"
+    assert forwarded(Q, 255) == "ff"
+    assert forwarded(LEGACY, 1.5) == "1.5"
+}
+test lifted_pattern { assert eval lifted(value: [1.5]) == ["1.5"] }
+"#,
+    );
+    write(
+        &root,
+        "a.hgl",
+        "module q695.a\nuse q695.z::{inner}\nexport const fn pattern(text: str) -> str => inner(text)\n",
+    );
+    write(
+        &root,
+        "b.hgl",
+        "module q695.b\nuse q695.a::{pattern}\nconst P: str = pattern(\"{:.1f}\")\nconst fn show(value: f64) -> str => format(P, value)\ntest later_body { assert show(1.5) == \"1.5\" }\n",
+    );
+    write(
+        &root,
+        "z.hgl",
+        "module q695.z\nexport const fn inner(text: str) -> str => text\n",
+    );
+    let report = hgl_in(&["test", &argument(&root), "--target", "cpp"], &[], &[]);
+    assert!(
+        report.status.success(),
+        "{}{}",
+        text(&report.stdout),
+        text(&report.stderr)
+    );
+    assert!(text(&report.stdout).contains("3 passed"));
 }
 
 /// FN-1 and FMT-3: equivalent option values share a compiled body.

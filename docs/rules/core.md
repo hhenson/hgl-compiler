@@ -990,7 +990,8 @@ analyser: partial
 - The analyser checks demanded const inputs and concrete argument conversions after selecting the value candidate. GEN-7 reports failures that depend on the instance at its outside call. Lowering uses the same concrete values to select the checked body.
 - A pattern reached through forwarded calls is checked in the instance the entries make, and a failure is reported at the call outside every generic body that makes it, with the code of the same direct call (GEN-7, #706).
 - The same conditional demand reaches calls through a named operator requirement and an indexed pack entry (#710, #755). A selected candidate that only returns the pattern at run time does not require its compile-time value.
-- Left: patterns made by general constant function evaluation (#695).
+- Module constants produced by nongeneric string helpers with explicit arguments or immutable local declarations followed by a returned expression are checked after typed helper bodies are available. Every written module-constant root, including dependencies in dead branches, is proved independently (UNIT-13). Existing typed/source folds and their limit outcomes retain priority over the helper fallback. The same values reach forwarded concrete instances.
+- Left: patterns made by general constant function evaluation (#695); effects, mutation, loops, recursive or generic helpers and helper defaults remain outside the bounded reader.
 
 ## FMT-4
 
