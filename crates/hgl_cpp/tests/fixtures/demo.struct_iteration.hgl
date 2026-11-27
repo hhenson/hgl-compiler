@@ -42,6 +42,7 @@ const fn describe(quote: Quote) -> str {
 }
 
 const fn written<T, const Key: T>() -> T => Key
+const fn later<const Key: T, T>(witness: T) -> T => Key
 
 const fn names(quote: Quote) -> str {
     var text = ""
@@ -132,6 +133,11 @@ test field_types_and_order {
     let quote = Quote(label: "first", bid: 7, ask: 2.5, open: true)
     assert describe(quote) == "label:first;bid:8;ask:3.0;open:yes;"
     assert names(quote) == "label bid ask open "
+    var copies = ""
+    for name in quote {
+        copies += later<name, str>("") + later<name>("") + " "
+    }
+    assert copies == "labellabel bidbid askask openopen "
     assert constant_labels(quote) == 1
     assert reflected_types(quote) ==
         "f64 label=str:bool,i64,str bid=i64:bool,i64,i64 ask=f64:bool,i64,f64 open=bool:bool,i64,bool str"

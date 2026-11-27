@@ -100,6 +100,46 @@ fn written_field_arguments_check_type_and_constancy() {
     );
 }
 
+/// GEN-7/8/13: the type of a written field name is checked after the
+/// call supplies all its generics, including later and inferred types.
+#[test]
+fn written_field_arguments_fit_the_final_declared_type() {
+    let checked = module(concat!(
+        "struct Quote {\n",
+        "    bid: str\n",
+        "    ask: str\n",
+        "}\n",
+        "const fn later<const Key: T, T>(witness: T) -> T => witness\n",
+        "const fn earlier<T, const Key: T>(witness: T) -> T => witness\n",
+        "const fn check_names(quote: Quote, runtime: list<str>) {\n",
+        "    for field in quote {\n",
+        "        let explicit = later<field, i64>(2)\n",
+        "        let inferred = later<field>(2)\n",
+        "        let reordered = earlier<i64, field>(2)\n",
+        "    }\n",
+        "    for name in runtime {\n",
+        "        let invalid = later<name, str>(\"bid\")\n",
+        "    }\n",
+        "}\n",
+        "const fn unconstrained<T>(row: Quote, w: T) {\n",
+        "    for field in row { let invalid = later<field, T>(w) }\n",
+        "}\n",
+        "const fn permitted<T>(row: Quote, w: T) requires T == str {\n",
+        "    for field in row { let accepted = later<field, T>(w) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:30 type/type.mismatch EXPR-5",
+            "m.hgl:11:30 type/type.mismatch EXPR-5",
+            "m.hgl:12:38 type/type.mismatch EXPR-5",
+            "m.hgl:15:29 type/generic.argument_constant GEN-8",
+            "m.hgl:19:44 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
 /// TST-3: "Outside the argument of an `eval` or a `run`, which is
 /// composition (TST-5, TST-8), its statements are value code, as an
 /// application's are (UNIT-14) ... They call `const fn`s only: a call of

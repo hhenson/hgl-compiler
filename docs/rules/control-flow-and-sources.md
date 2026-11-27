@@ -140,7 +140,8 @@ analyser: partial
   declaration order. A one-name pattern binds the field name. A two-name
   pattern also binds the field at its own type (CTRL-15). An explicitly
   written value argument to an ordinary function can use the field name as
-  a constant string in each pass (GEN-8).
+  a constant string in each pass. Its declared type can come from a later
+  written or inferred type argument (GEN-8, GEN-13).
 - Left: Traversal over a generic parameter constrained to the struct
   category still rejects at its declaration (#373, #751).
 
