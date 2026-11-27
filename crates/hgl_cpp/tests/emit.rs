@@ -2127,6 +2127,10 @@ fn a_composed_nullable_guard_declines_the_independent_read() {
 fn both(x: i64?) -> bool => x != null && x > 3
 fn either(x: i64?) -> bool => x == null || x > 3
 fn chained(enabled: bool, x: i64?) -> bool => enabled && null != x && x > 3
+fn grouped_both(enabled: bool, x: i64?) -> bool => (enabled && x != null) && x > 3
+fn grouped_either(enabled: bool, x: i64?) -> bool => (enabled || x == null) || x > 3
+fn grouped_other(enabled: bool, x: i64?, y: i64?) -> bool => (enabled && x != null) && y > 3
+fn mixed(enabled: bool, x: i64?) -> bool => (enabled || x != null) && x > 3
 fn different(x: i64?, y: i64?) -> bool => x != null && y > 3
 fn unguarded(x: i64?) -> bool => x == null && x > 3
 fn composed_if(x: i64?) -> bool => if x != null { x > 3 } else { false }
@@ -2137,6 +2141,10 @@ fn lifted_value(x: i64?) -> bool => scalar_either(x)
 test and_chain { assert eval both(x: [null, 5, 2]) == [false, true, false] }
 test or_chain { assert eval either(x: [null, 5, 2]) == [true, true, false] }
 test pack_chain { assert eval chained(x: [null, 5, 2], enabled: [true, true, true]) == [false, true, false] }
+test grouped_and { assert eval grouped_both(x: [null, 5], enabled: [true, true]) == [false, true] }
+test grouped_or { assert eval grouped_either(x: [null, 5], enabled: [false, false]) == [true, true] }
+test grouped_unrelated { assert eval grouped_other(x: [null, 5], y: [5, 2], enabled: [true, true]) == [false, false] }
+test mixed_connectives { assert eval mixed(x: [5, 2], enabled: [true, true]) == [true, false] }
 test unrelated { assert eval different(x: [null, 5], y: [5, 2]) == [false, false] }
 test wrong_polarity { assert eval unguarded(x: [5, 2]) == [false, false] }
 test temporal_if { assert eval composed_if(x: [null, 5, 2]) == [false, true, false] }
@@ -2150,6 +2158,8 @@ test lifted_scalar { assert eval lifted_value(x: [null, 5, 2]) == [true, true, f
         ("and_chain", "&&"),
         ("or_chain", "||"),
         ("pack_chain", "&&"),
+        ("grouped_and", "&&"),
+        ("grouped_or", "||"),
     ] {
         let blocked = emitted
             .blocked(test)
@@ -2163,6 +2173,8 @@ test lifted_scalar { assert eval lifted_value(x: [null, 5, 2]) == [true, true, f
     }
     for test in [
         "unrelated",
+        "grouped_unrelated",
+        "mixed_connectives",
         "wrong_polarity",
         "temporal_if",
         "scalar",

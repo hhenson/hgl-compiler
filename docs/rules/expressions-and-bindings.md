@@ -96,7 +96,8 @@ transpiler: partial
   guarding a payload read.
 - A Boolean call over connections wires every connected operand as an input (FN-6, FN-11).
 - The C++ target declines a composed Boolean guard followed by an independent read
-  of that same nullable connection (ERR-12). A temporal `if` supplies separate branches.
+  of that same nullable connection, including chains grouped with the same connective
+  (ERR-12). A temporal `if` supplies separate branches.
 
 ## EXPR-7
 

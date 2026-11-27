@@ -214,7 +214,7 @@ impl Emitter<'_> {
             return self.missing(value.at, "this lifted call");
         };
         if let Form::Binary(operator @ (BinaryOperator::And | BinaryOperator::Or)) = form
-            && lifts_guarded_nullable_read(*operator, arguments)
+            && lifts_guarded_nullable_read(*operator, arguments, &mut HashSet::new())
         {
             return self.missing(
                 value.at,
@@ -1218,16 +1218,34 @@ fn form_on(form: &Expr, operand: Expr) -> Expr {
 /// EXPR-6 gives every connected operand its own dependency. If a
 /// nullable guard is the only thing separating an eager reader from a
 /// null (ERR-12), the target cannot use that dependency as a guard.
-fn lifts_guarded_nullable_read(operator: BinaryOperator, arguments: &[Argument]) -> bool {
+fn lifts_guarded_nullable_read(
+    operator: BinaryOperator,
+    arguments: &[Argument],
+    guarded: &mut HashSet<LocalId>,
+) -> bool {
     let test = match operator {
         BinaryOperator::And => BinaryOperator::NotEqual,
         BinaryOperator::Or => BinaryOperator::Equal,
         _ => unreachable!("only short-circuit Boolean connectives can guard a read"),
     };
-    let mut guarded = HashSet::new();
     for argument in arguments {
         let operand = &argument.value;
-        if !guarded.is_empty() && reads_guarded_connection(operand, &guarded) {
+        // A grouped chain of the same operator must pass each of its guards
+        // before the surrounding chain reaches the next operand.
+        if let ExprKind::Call {
+            form: Form::Binary(grouped),
+            arguments,
+            lifted: true,
+            ..
+        } = &operand.kind
+            && *grouped == operator
+        {
+            if lifts_guarded_nullable_read(operator, arguments, guarded) {
+                return true;
+            }
+            continue;
+        }
+        if !guarded.is_empty() && reads_guarded_connection(operand, guarded) {
             return true;
         }
         if let Some((comparison, left, right)) = operand.kind.binary()
