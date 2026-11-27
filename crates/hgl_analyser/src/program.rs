@@ -25,6 +25,8 @@ pub struct Program {
     pub(crate) deferred_type_fits: HashSet<(usize, usize)>,
     /// Graphs that select a named pair with a value callback still unbound (FN-4/17).
     pub(crate) callback_phase_bodies: HashSet<(usize, usize)>,
+    /// Graphs with local list extents whose category needs concrete inputs (TYPE-10).
+    pub(crate) deferred_list_sizes: HashSet<(usize, usize)>,
     /// Checked TYPE-18 identities needed by reached struct applications.
     pub(crate) layout_queries: crate::layout_queries::LayoutQueries,
     /// Storage dependencies after declared struct fields resolve (TYPE-18).

@@ -521,6 +521,34 @@ fn an_alias_qualifies_a_public_declaration() {
 
 // ---- GEN-1 and GEN-14: generics ----
 
+/// GEN-8 and GEN-14: a request names a callable and checks its written
+/// argument kinds. An underscore keeps a slot open.
+#[test]
+fn an_instantiate_request_checks_its_target_and_written_arguments() {
+    let checked = module(concat!(
+        "operator choose<T>(value: T) -> i64\n",
+        "operator pair<T, U>(first: T, second: U) -> i64\n",
+        "operator sized<const N: i64>(value: i64) -> i64\n",
+        "const value: i64 = 7\n",
+        "instantiate choose<7>\n",
+        "instantiate choose<i64, str>\n",
+        "instantiate value<i64>\n",
+        "instantiate pair<i64, _>, choose<i64>, sized<4>\n",
+        "instantiate sized<i64>\n",
+        "instantiate missing<i64>\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:20 type/generic.argument_kind GEN-14",
+            "m.hgl:7:13 type/generic.argument_count GEN-8",
+            "m.hgl:8:13 type/generic.invalid_application GEN-8",
+            "m.hgl:10:19 type/generic.argument_kind GEN-14",
+            "m.hgl:11:13 name/name.unknown UNIT-10",
+        ]
+    );
+}
+
 /// GEN-1: "Generic scope covers the whole declaration": the signature,
 /// the constraints, the body. An `each` constraint binds its name inside
 /// its braces.
@@ -638,6 +666,64 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
         ]
     );
     assert_eq!(checked.prelude_names("m"), ["unknown"]);
+}
+
+/// GEN-14 and LEX-27: an adjacent `<` opens a generic callable's
+/// arguments. A spaced comparison and a local value keep their reading.
+#[test]
+fn adjacent_less_than_starts_a_generic_callable_application() {
+    let checked = module(concat!(
+        "const fn alpha<T>(value: T) -> T => value\n",
+        "operator beta<T>(value: T) -> T\n",
+        "impl const fn beta<T>(value: T) -> T => value\n",
+        "const fn wrong_fn(x: i64) -> bool => alpha<x\n",
+        "const fn wrong_op(x: i64) -> bool => beta<x\n",
+        "const fn spaced(x: i64) -> bool => alpha < x\n",
+        "const fn shadow(alpha: i64, x: i64) -> bool => alpha<x\n",
+        "const fn applied() -> i64 => alpha<i64>(beta<i64>(2))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:38 type/generic.invalid_application GEN-14",
+            "m.hgl:6:38 type/generic.invalid_application GEN-14",
+        ]
+    );
+}
+
+/// GEN-14: a qualified application uses the resolved callable and the
+/// `<` adjoining its final identifier.
+#[test]
+fn a_qualified_generic_callable_does_not_fall_back_to_comparison() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export const fn alpha<T>(value: T) -> T => value\n",
+                "export operator beta<T>(value: T) -> T\n",
+                "impl const fn beta<T>(value: T) -> T => value\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib as l\n",
+                "const fn wrong_fn(x: i64) -> bool => l::alpha<x\n",
+                "const fn wrong_op(x: i64) -> bool => l::beta<x\n",
+                "const fn spaced(x: i64) -> bool => l::alpha < x\n",
+                "const fn applied() -> i64 => l::alpha<i64>(l::beta<i64>(2))\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:41 type/generic.invalid_application GEN-14",
+            "m.hgl:4:41 type/generic.invalid_application GEN-14",
+        ]
+    );
 }
 
 /// GEN-14: the same holds for a generic type reached as `alias::name`

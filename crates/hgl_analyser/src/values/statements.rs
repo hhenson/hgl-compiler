@@ -445,6 +445,9 @@ impl<'a> Typer<'a> {
             .find(|part| is_type(part.kind()))
             .and_then(|part| {
                 let ty = self.written_type_at(part.span().start)?;
+                if self.graph && self.reject_connection_list_size(&part) {
+                    return Some(Type::Unknown);
+                }
                 Some(self.project_pack_pass_type(&ty, self.at(&part)))
             });
         // The first value: the child that is no type.
@@ -527,6 +530,11 @@ impl<'a> Typer<'a> {
             None if self.graph => ValueCategory::Unsettled,
             _ => ValueCategory::Value,
         };
+        if kind == LocalKind::Let
+            && let Some(value) = &value
+        {
+            self.remember_immediate_local(local, value);
+        }
         Stmt::Declare { local, value }
     }
 

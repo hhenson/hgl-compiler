@@ -1348,6 +1348,8 @@ pub enum Callee {
     DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
+    /// An opaque direct anonymous call whose checked result needs a live input.
+    UnreadWithConnection,
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
@@ -1404,6 +1406,7 @@ impl Callee {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => None,
         }
     }
@@ -1420,6 +1423,7 @@ impl Callee {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => &[],
         }
     }
@@ -1436,6 +1440,7 @@ impl Callee {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => &[],
         }
     }
@@ -1887,16 +1892,20 @@ impl Expr {
     pub fn walk_nodes<'a>(&'a self, visit: &mut dyn FnMut(Node<'a>)) {
         let _: Result<(), ()> = self.walk_nodes_at(1, &mut |node, _| {
             visit(node);
-            Ok(())
+            Ok(true)
         });
     }
 
-    fn walk_nodes_at<'a, E>(
+    /// Walk an expression and its descendants, starting at `depth`.
+    /// Returning `false` omits a node's children, and an error ends the walk.
+    pub(crate) fn walk_nodes_at<'a, E>(
         &'a self,
         depth: usize,
-        visit: &mut dyn FnMut(Node<'a>, usize) -> Result<(), E>,
+        visit: &mut dyn FnMut(Node<'a>, usize) -> Result<bool, E>,
     ) -> Result<(), E> {
-        visit(Node::Expression(self), depth)?;
+        if !visit(Node::Expression(self), depth)? {
+            return Ok(());
+        }
         let child = depth + 1;
         match &self.kind {
             ExprKind::Literal(_)
@@ -1919,7 +1928,7 @@ impl Expr {
                 }
             }
             ExprKind::Block { statements, value } => {
-                walk_statement_nodes_at(statements, child, visit)?;
+                walk_statement_nodes_if_at(statements, child, visit)?;
                 if let Some(value) = value {
                     value.walk_nodes_at(child, visit)?;
                 }
@@ -2347,9 +2356,21 @@ pub fn walk_statement_nodes_at<'a, E>(
     depth: usize,
     visit: &mut dyn FnMut(Node<'a>, usize) -> Result<(), E>,
 ) -> Result<(), E> {
+    walk_statement_nodes_if_at(statements, depth, &mut |node, depth| {
+        visit(node, depth).map(|()| true)
+    })
+}
+
+fn walk_statement_nodes_if_at<'a, E>(
+    statements: &'a [Stmt],
+    depth: usize,
+    visit: &mut dyn FnMut(Node<'a>, usize) -> Result<bool, E>,
+) -> Result<(), E> {
     let child = depth + 1;
     for statement in statements {
-        visit(Node::Statement(statement), depth)?;
+        if !visit(Node::Statement(statement), depth)? {
+            continue;
+        }
         match statement {
             Stmt::Inject { config, .. } => {
                 for entry in config {
@@ -2377,16 +2398,16 @@ pub fn walk_statement_nodes_at<'a, E>(
                 if let Some(condition) = condition {
                     condition.walk_nodes_at(child, visit)?;
                 }
-                walk_statement_nodes_at(body, child, visit)?;
+                walk_statement_nodes_if_at(body, child, visit)?;
             }
-            Stmt::AssertRaises { body, .. } => walk_statement_nodes_at(body, child, visit)?,
+            Stmt::AssertRaises { body, .. } => walk_statement_nodes_if_at(body, child, visit)?,
             Stmt::Yield { time, value, .. } => {
                 time.walk_nodes_at(child, visit)?;
                 value.walk_nodes_at(child, visit)?;
             }
             Stmt::For { sequence, body, .. } => {
                 sequence.walk_nodes_at(child, visit)?;
-                walk_statement_nodes_at(body, child, visit)?;
+                walk_statement_nodes_if_at(body, child, visit)?;
             }
             Stmt::Switch {
                 selector,
@@ -2397,10 +2418,10 @@ pub fn walk_statement_nodes_at<'a, E>(
                 selector.walk_nodes_at(child, visit)?;
                 for case in cases {
                     case.label.walk_nodes_at(child, visit)?;
-                    walk_statement_nodes_at(&case.body, child, visit)?;
+                    walk_statement_nodes_if_at(&case.body, child, visit)?;
                 }
                 if let Some(default) = default {
-                    walk_statement_nodes_at(default, child, visit)?;
+                    walk_statement_nodes_if_at(default, child, visit)?;
                 }
             }
         }

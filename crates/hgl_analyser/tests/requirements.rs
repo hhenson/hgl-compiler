@@ -14,6 +14,158 @@ use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategor
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// GEN-3, GEN-7 and GEN-17: a name common to two sets keeps its
+/// declaration identity when every alternative outside it is disjoint.
+#[test]
+fn intersecting_open_memberships_establish_a_shared_type() {
+    let prefix = concat!(
+        "const key: str = \"item\"\n",
+        "const other: str = \"other\"\n",
+        "const fn require_same<A,B>(a:A,b:B)->i64 requires A == B => 1\n",
+        "operator select_same<A,B>(a:A,b:B)->i64\n",
+        "impl const fn select_same<X>(a:X,b:X)->i64 => 2\n",
+        "const fn relay<T,U,...Ps>(f:const fn(...{Ps})->i64,t:T,u:U,x:Ps[key])->i64\n",
+    );
+    for (condition, admitted) in [
+        ("Ps[key] in {T, f64} && Ps[key] in {T, str}", true),
+        ("Ps[key] in {str, T} && Ps[key] in {f64, T}", true),
+        (
+            "each k in arg_keys(Ps) { Ps[k] in {T, f64} } && Ps[key] in {T, str}",
+            true,
+        ),
+        (
+            "Ps[key] in {T, f64, i64} && Ps[key] in {T, i64, str} && Ps[key] in {T, str, f64}",
+            true,
+        ),
+        ("Ps[key] in {T, f64} && Ps[key] in {T, f64}", false),
+        ("Ps[key] in {T, f64} && Ps[key] in {U, str}", false),
+        ("Ps[key] in {T, str} && Ps[key] in {T, U}", false),
+        ("Ps[key] in {T, str} && Ps[other] in {T, f64}", false),
+        ("Ps[key] in {T, str} || Ps[key] in {T, f64}", false),
+        ("Ps[key] in {T, delta<U>} && Ps[key] in {T, i64}", false),
+    ] {
+        for (call, code) in [
+            (
+                "require_same<Ps[key], T>(x, t)",
+                "constraint/requires.unmet",
+            ),
+            ("select_same(x, t)", "operator/operator.no_candidate"),
+        ] {
+            let checked = module(&format!("{prefix}    requires {condition} => {call}\n"));
+            if admitted {
+                assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+                assert_eq!(
+                    checked.findings[0].code, code,
+                    "{condition}\n{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
+/// GEN-3 and GEN-7: T in {U, f64} admits each type of U as well
+/// as f64. The proof keeps U and T correlated when the call uses both.
+#[test]
+fn ordinary_memberships_use_the_domains_of_their_named_alternatives() {
+    let prefix = concat!(
+        "const fn numeric<V>(x: V) -> i64 requires V in {i64, f64} => 7\n",
+        "const fn related<A, B>(x: A, y: B) -> i64 requires A == B || A == f64 => 8\n",
+        "const fn equal<A, B>(x: A, y: B) -> i64 requires A == B => 9\n",
+        "operator score<X>(x: X) -> i64\n",
+        "impl const fn score(x: i64) -> i64 => 1\n",
+        "impl const fn score(x: f64) -> i64 => 2\n",
+        "const fn relay<T, U, V>(t: T, u: U, v: V) -> i64 requires ",
+    );
+    for (condition, call, diagnostic) in [
+        ("U in {i64, f64} && T in {U, f64}", "numeric(t)", None),
+        ("T in {f64, U} && U in {f64, i64}", "score(t)", None),
+        ("U in {i64, f64} && T in {U, f64}", "related(t, u)", None),
+        (
+            "T in {U} && U in {V} && V in {i64, f64}",
+            "equal(t, v)",
+            None,
+        ),
+        ("T == i64 && T in {U, f64}", "numeric(u)", None),
+        ("T in {U, V} && U in {i64} && V in {f64}", "score(t)", None),
+        (
+            "T in {U, f64} && V in {f64, i64} && V == U",
+            "related(t, v)",
+            None,
+        ),
+        (
+            "U in {str, f64} && T in {U, f64}",
+            "numeric(t)",
+            Some("constraint/requires.unmet"),
+        ),
+        (
+            "T in {U, f64}",
+            "score(t)",
+            Some("operator/operator.no_candidate"),
+        ),
+        (
+            "V == i64 && T in {U, f64}",
+            "numeric(t)",
+            Some("constraint/requires.unmet"),
+        ),
+        (
+            "T in {U, f64} && U in {i64, f64}",
+            "equal(t, u)",
+            Some("constraint/requires.unmet"),
+        ),
+        (
+            "T in {U, str} && U in {i64, f64}",
+            "related(t, u)",
+            Some("constraint/requires.unmet"),
+        ),
+        (
+            "T in {U, f64} || U in {i64, f64}",
+            "score(t)",
+            Some("operator/operator.no_candidate"),
+        ),
+        (
+            "U in {T, f64} && T in {U, i64}",
+            "numeric(t)",
+            Some("constraint/requires.unmet"),
+        ),
+        (
+            "U == i64 && U == str && T in {U, f64}",
+            "score(t)",
+            Some("operator/operator.no_candidate"),
+        ),
+        (
+            "U == i64 && U == str && T in {U, f64} && T == f64",
+            "score(t)",
+            None,
+        ),
+        (
+            "T in {U, f64} && U in {V} && V == i64 && U == str",
+            "numeric(t)",
+            Some("constraint/requires.unmet"),
+        ),
+        (
+            "U == str && V == i64 && U in {V} && T in {U, f64} && T == f64",
+            "score(t)",
+            None,
+        ),
+        ("U == i64 && U == str && T == f64", "score(t)", None),
+    ] {
+        let checked = module(&format!("{prefix}{condition} => {call}\n"));
+        if let Some(code) = diagnostic {
+            assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+            assert_eq!(
+                checked.findings[0].code, code,
+                "{condition}\n{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+        }
+    }
+}
+
 /// GEN-3 and GEN-7: a generic declaration must support each type admitted
 /// by all of its conjoined memberships and equalities, in either order.
 #[test]
@@ -1413,6 +1565,7 @@ fn callees(checked: &Checked, name: &str) -> Vec<String> {
                 | Callee::DeferredOperator(_)
                 | Callee::DeferredPackCall
                 | Callee::DeferredValue
+                | Callee::UnreadWithConnection
                 | Callee::Unread => "none".to_string(),
             });
         }
@@ -2037,6 +2190,7 @@ fn answers_in(checked: &Checked, body: &Body) -> Vec<String> {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => found.push("none".to_string()),
         }
     });

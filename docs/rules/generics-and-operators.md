@@ -153,7 +153,9 @@ analyser: partial
 - A named operator checks written arguments in their function slots beside a computed spread. Pack cardinality and candidate selection, including a braced selecting option, use the completed entries in each instance (FN-17, FN-19, GEN-6).
 - Repeated positive memberships and concrete equalities on an ordinary parameter intersect. Positive equality chains between parameters and specific reflected keys share one finite set of types. A trial gives the same choice to all equated slots used by the call. An empty domain supplies no evidence for a call using that parameter or member. Other calls can use their own finite domains.
 - A positive `key in arg_keys(Ps)` supplies a member to which the declaration’s universal bounds for `Ps` apply. Those bounds can narrow an equated ordinary parameter. A universal alone also admits an empty pack.
-- Left: finite sets containing open type parameters and reflected evidence in generic function-call replay (#618).
+- When a reflected member belongs to both `{T, str}` and `{T, f64}`, it has type `T`. Every alternative outside the shared type is disjoint. This identity proves a same-type operator or a generic callee’s equality without fixing `T` to a concrete type. Other keys, a shared extra type or unresolved alternatives cannot establish that identity.
+- An ordinary type parameter in a finite set contributes the types its own domain admits. For `U in {i64, f64} && T in {U, f64}`, both numeric types are possible for `T`. A call that uses both parameters is checked for each permitted pair. If the other alternatives cannot match, `T` and `U` must agree. An unbounded alternative alone gives no concrete type bound.
+- Left: an ordinary set containing a structured alternative such as `list<U>` can still lose the finite types of `U` (#618).
 - The covered function, node and graph calls fit integer, float and negative literals to each selected instance's candidate, with or without an operator option. Membership admission records a provisional result type; instance rechecks reach consumers that the declaration already admits with the literal's provisional `i64`. The supplied sum of calls using a typed seed and a literal seed gives `4.5` in its `f64` instance. Literal-free membership-admitted operator chains retain their result consumers too. A contextual result precedes input inference (GEN-2, EXPR-5). Unsupported or unstated memberships still reject the declaration.
 - Left: a literal-call result used as another call's argument, or multiplied by another literal-call result, can still reject where the generic body is declared although each admitted instance has fitting candidates (#734).
 - Instance checks reach named function references, calls in anonymous bodies, and concrete calls produced by pack forwarding, including forwarding reached through a reference. A forwarding instance is read with the ordinary const inputs its body reads at compile time as well as its entries, so a const pattern given beside packs is checked there (FN-1, FMT-3, #706). A concrete body given const inputs it reads is followed as an instance of its own, and so is a candidate a deferred operator call in a walked instance can select. A call given a pack entry not yet read makes no instance where the forwarding body is declared; each instance finds it with the entry's type. An instance two calls make, one through another instance, is reported once at each. They enforce a selected candidate's `var` place (FN-15), `const` argument (FN-1, FN-3), and configuration (EXPR-14). A rejection keeps its ordinary code at the call that makes the instance, with the instance and failing body call named in related sites. Nested instances report at each outermost making call and name each instance in the chain.
@@ -170,6 +172,7 @@ parser: done
 analyser: partial
 
 - A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected
+- An `instantiate` request must name a callable. A single callable's written generic argument kinds are checked and requests over a fixed parameter list reject excess arguments. An underscore remains open.
 - When a written generic argument fixes an ordinary public input type, the call checks the argument in that type before trying candidates. A mismatch is reported at the argument (`type.mismatch`, EXPR-5 or FN-17). Candidate-only options and inferred arguments still take part in the normal candidate selection.
 - A checked child used in a result input, directly or as a component of a compound argument, keeps its fixed list extent when the public pattern omits it (ERR-14, TYPE-10).
 - A generic value parameter given by name or after the callee's name, and one a type gives, read as a value of the parameter's type (EXPR-5, `type.mismatch`): a literal, an enum member however it is written (TYPE-7), a constant, a generic value parameter in scope, and a constant expression of those, of numbers, durations, tenors, strings, bools, lists and tuples (`constant`); one that is no compile-time constant, and one whose value this compiler does not work out, is `generic.argument_constant`
@@ -178,7 +181,7 @@ analyser: partial
 - A call that writes a positional type pack supplies its whole type sequence. An unwritten positional or named pack infers each type from its own argument or eval trace. A graph instance completes its deferred inferred types in capture order (GEN-7, GEN-10). An unresolved type rejects, or a sequence that requires context gives `sequence.context_type` (EXPR-9).
 - One a generic body works out from its own generic parameters is worked out for each instance, and where its evaluation fails there (NUM-2: an `i64` out of range; a division of two `i64` by zero) or is not worked out, the call that makes the instance is `generic.argument_constant` (ERR-9)
 - Two generic value arguments are one where they are the same constant (`ConstantValue::same`), which for an `f64` is not `==`: `Scaled<-0.0>` is not `Scaled<0.0>`, and any two NaNs are one constant (UNIT-13, GEN-13); hgraph writes each as an instance of its own. A comparison of a NaN constant is the language's: false, but `!=` (NUM-5)
-- Left: an operator's own generic value parameter given by name; `instantiate`; unresolved and reflected public input types; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
+- Left: an operator's own generic value parameter given by name; materializing `instantiate` candidates and checking the remaining paired or pack requests; unresolved and reflected public input types; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
 
 ## GEN-9
 
@@ -266,11 +269,11 @@ parser: done
 
 analyser: partial
 
-- Decides an undecided constructor from what its name resolves to, a generic type, function or operator; a generic type before a comparison's `<` rejected; each argument against its parameter's kind
+- Decides an undecided constructor from what its name resolves to and checks each argument against its parameter's kind. Rejects an invalid application when `<` touches a generic function or operator name. A generic type name used in a comparison also rejects.
 - A contextual `Type` argument supplies the descriptor in a known type slot and uses ordinary value lookup in a value slot. Callable signatures and constraints settle their declared slots before call arguments are read, including operator and pack slots. Where the call supplies the kind, module/imported constants and local value bindings take precedence over the descriptor fallback. Value-only lookup diagnostics are retained only on the value path; GEN-8 still requires a constant.
 - With no value named `Type`, a known value slot rejects the descriptor as the wrong argument kind, including struct annotations and constructors.
 - Function pairs defer the contextual spelling until the existing FN-4/6 role selection supplies the receiving signature. Declaration order cannot choose a type or value interpretation.
-- Left: a generic function or operator before a comparison's `<`
+- Left: check the generic arguments of an `instantiate` request (#1018).
 
 ## GEN-15
 

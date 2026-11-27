@@ -32,7 +32,7 @@ use crate::program::{
 };
 use crate::syntax::{
     child, has_token, is_arg_keys_call, leads_its_test, name_before_less_than, name_token,
-    pack_for_names, parent_outside_grouping, suppresses_warning, ungrouped,
+    pack_for_names, parent_outside_grouping, suppresses_warning, tokens, ungrouped,
 };
 use crate::{Detail, INJECTABLES, RESULT_FORMS, Type, codes, error, warning};
 
@@ -1528,10 +1528,9 @@ impl Resolver<'_> {
         })
     }
 
-    /// GEN-14: "Ordinary `<` and `>` do not order type names", and
-    /// "Reject an invalid application without comparison fallback." A
-    /// generic type's name before a `<` that the parser read as a
-    /// comparison is an application its arguments do not complete.
+    /// GEN-14: reject a malformed application that the parser read as a
+    /// comparison. A callable's opening `<` must touch its name (LEX-27).
+    /// A type name cannot be ordered even when the `<` is spaced.
     #[inline(never)]
     fn check_application(&mut self, node: &SyntaxNode) {
         let Some(name) = name_before_less_than(node).and_then(|left| name_token(&left)) else {
@@ -1539,30 +1538,37 @@ impl Resolver<'_> {
         };
         // The name was resolved when the operand was walked.
         let at = self.at(&name);
-        let generic = self
-            .uses
-            .iter()
-            .rev()
-            .find(|used| used.at == at)
-            .is_some_and(|used| self.is_generic_type(&used.binding));
-        if generic {
-            self.diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::GENERIC_INVALID_APPLICATION,
-                    at,
-                    format!(
-                        "`{}` is a generic type: `<` after it opens its arguments, and these \
-                         are not arguments",
-                        name.text()
-                    ),
-                    "GEN-14",
-                )
-                .with_note(format!(
-                    "a generic type is applied as `{}<...>(...)`",
+        let Some(used) = self.uses.iter().rev().find(|used| used.at == at) else {
+            return;
+        };
+        let kind = if self.is_generic_type(&used.binding) {
+            "type"
+        } else if self.is_generic_callable(&used.binding)
+            && tokens(node).any(|token| {
+                token.kind() == SyntaxKind::Lt
+                    && token.text_range().start() == name.text_range().end()
+            })
+        {
+            "callable"
+        } else {
+            return;
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::GENERIC_INVALID_APPLICATION,
+                at,
+                format!(
+                    "`{}` is a generic {kind}: `<` after it opens its arguments, and these \
+                     are not arguments",
                     name.text()
-                )),
-            );
-        }
+                ),
+                "GEN-14",
+            )
+            .with_note(format!(
+                "a generic {kind} is applied as `{}<...>(...)`",
+                name.text()
+            )),
+        );
     }
 }

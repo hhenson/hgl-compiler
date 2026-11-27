@@ -1525,6 +1525,7 @@ pub(super) fn check_instances(
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = program.callback_phase_bodies.clone();
+    forwarding.extend(&program.deferred_list_sizes);
     let mut callers = HashMap::<_, Vec<_>>::new();
     // GEN-5 and GEN-7: a call whose candidate each instance selects may
     // select one that forwards; each candidate of its operator is called.

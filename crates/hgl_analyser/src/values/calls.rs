@@ -406,7 +406,7 @@ impl<'a> Typer<'a> {
         if direct.kind() == SyntaxKind::FnExpr
             && let Some(keyword) = tokens(&direct).find(|token| token.kind() == SyntaxKind::KwFn)
         {
-            return self.call_anonymous(&direct, &keyword, &list, expected);
+            return self.call_anonymous(&direct, &keyword, &list, expected, self.at(node));
         }
         if direct.kind() == SyntaxKind::NameExpr
             && let Some(index) = self.local_of(&direct)

@@ -2,7 +2,9 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::rc::Rc;
 
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
@@ -18,12 +20,236 @@ use super::members::{index_result, indexed_payload};
 use super::results::{captured_binding, captured_output};
 use super::{CapturedOutput, Typer};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut, Run, Stmt, Value,
-    ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
+    BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, LabelValue, Local, LocalId, Node,
+    NodeMut, Run, Stmt, Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut,
+    walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
 use crate::types::{Argument, Detail, Type};
 use crate::{codes, error};
+
+/// The immutable values available when classifying a direct anonymous call.
+#[derive(Clone, Copy)]
+pub(super) struct ImmediateValues<'a> {
+    program: &'a Program,
+    generics: &'a [(Location, Argument)],
+    locals: &'a [(LocalId, Rc<Expr>)],
+    ranges: &'a [(LocalId, Range<i64>)],
+    range_aliases: Option<&'a HashMap<LocalId, LocalId>>,
+    call_categories: Option<&'a HashMap<Location, ValueCategory>>,
+}
+
+/// Categories established along the reached paths of an immediate call.
+/// An absent local keeps the category given by the typing pass.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct ReachedLocals {
+    connections: HashSet<LocalId>,
+    ordinary: HashSet<LocalId>,
+}
+
+impl ReachedLocals {
+    /// Captures belong to the calling scope; the callee owns later IDs.
+    pub(super) fn keep_before(&mut self, first: LocalId) {
+        self.connections.retain(|local| *local < first);
+        self.ordinary.retain(|local| *local < first);
+    }
+
+    /// A fresh lexical binding has no facts from a prior reached pass.
+    pub(super) fn clear(&mut self, local: LocalId) {
+        self.connections.remove(&local);
+        self.ordinary.remove(&local);
+    }
+
+    /// A reached write, or a loop binding from a reached collection.
+    pub(super) fn set(&mut self, local: LocalId, category: ValueCategory) {
+        self.clear(local);
+        match category {
+            ValueCategory::Connection => {
+                self.connections.insert(local);
+            }
+            ValueCategory::Value => {
+                self.ordinary.insert(local);
+            }
+            ValueCategory::Unsettled => {}
+        }
+    }
+
+    /// A connection can arrive from either path. An ordinary override
+    /// must hold on every path that can reach the next read.
+    pub(super) fn join(&mut self, other: &Self) {
+        self.connections.extend(&other.connections);
+        self.ordinary.retain(|local| other.ordinary.contains(local));
+    }
+
+    fn category(&self, local: LocalId) -> Option<ValueCategory> {
+        if self.connections.contains(&local) {
+            Some(ValueCategory::Connection)
+        } else if self.ordinary.contains(&local) {
+            Some(ValueCategory::Value)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> ImmediateValues<'a> {
+    /// Both the written generic arguments and local bindings are lexical.
+    pub(super) fn new(
+        program: &'a Program,
+        generics: &'a [(Location, Argument)],
+        locals: &'a [(LocalId, Rc<Expr>)],
+    ) -> Self {
+        Self {
+            program,
+            generics,
+            locals,
+            ranges: &[],
+            range_aliases: None,
+            call_categories: None,
+        }
+    }
+
+    /// The remaining iteration values where a fixed range was too large to walk.
+    pub(super) fn with_ranges(
+        mut self,
+        ranges: &'a [(LocalId, Range<i64>)],
+        aliases: &'a HashMap<LocalId, LocalId>,
+    ) -> Self {
+        self.ranges = ranges;
+        self.range_aliases = Some(aliases);
+        self
+    }
+
+    /// Results of direct calls evaluated by this immediate flow.
+    pub(super) fn with_call_categories(
+        mut self,
+        calls: &'a HashMap<Location, ValueCategory>,
+    ) -> Self {
+        self.call_categories = Some(calls);
+        self
+    }
+
+    /// A checked ordinary expression reduced by the bounded const reader.
+    pub(super) fn read(self, expression: &Expr) -> Option<Expr> {
+        crate::const_inputs::immediate_value(self.program, expression, self.generics, self.locals)
+            .ok()
+    }
+
+    /// A known selector already in the representation of a `switch` label.
+    pub(super) fn selector(self, expression: &Expr) -> Option<LabelValue> {
+        match self.read(expression)?.kind {
+            ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(value)),
+            ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(value)),
+            ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value)),
+            ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(member)),
+            _ => None,
+        }
+    }
+
+    /// A known Boolean condition of an immediate call.
+    pub(super) fn condition(self, expression: &Expr) -> Option<bool> {
+        if let Some(LabelValue::Bool(value)) = self.selector(expression) {
+            return Some(value);
+        }
+        if self.ranges.is_empty() {
+            return None;
+        }
+        let (operator, left, right) = self.builtin_binary(expression)?;
+        if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
+            let left = self.condition(left)?;
+            return if left == (operator == BinaryOperator::Or) {
+                Some(left)
+            } else {
+                self.condition(right)
+            };
+        }
+        let (min, max) = self.integer_bounds(left)?;
+        let (right_min, right_max) = self.integer_bounds(right)?;
+        use BinaryOperator::{Equal, Greater, GreaterEqual, Less, LessEqual, NotEqual};
+        if self.range_bounds(left).is_some() && self.range_local(left) == self.range_local(right) {
+            return match operator {
+                Equal | LessEqual | GreaterEqual => Some(true),
+                NotEqual | Less | Greater => Some(false),
+                _ => None,
+            };
+        }
+        let (always, never) = match operator {
+            Equal | NotEqual => {
+                let equal = min == max && right_min == right_max && min == right_min;
+                let different = max < right_min || right_max < min;
+                if operator == Equal {
+                    (equal, different)
+                } else {
+                    (different, equal)
+                }
+            }
+            Less => (max < right_min, min >= right_max),
+            LessEqual => (max <= right_min, min > right_max),
+            Greater => (min > right_max, max <= right_min),
+            GreaterEqual => (min >= right_max, max < right_min),
+            _ => return None,
+        };
+        (always || never).then_some(always)
+    }
+
+    /// A known threshold compared with this range's binding or an alias.
+    pub(super) fn comparison_boundary(self, expression: &Expr, binding: LocalId) -> Option<i64> {
+        use BinaryOperator::{Equal, Greater, GreaterEqual, Less, LessEqual, NotEqual};
+        let (operator, left, right) = self.builtin_binary(expression)?;
+        if !matches!(
+            operator,
+            Equal | NotEqual | Less | LessEqual | Greater | GreaterEqual
+        ) {
+            return None;
+        }
+        let other = match (self.range_local(left), self.range_local(right)) {
+            (Some(local), _) if local == binding => right,
+            (_, Some(local)) if local == binding => left,
+            _ => return None,
+        };
+        let LabelValue::Int(value) = self.selector(other)? else {
+            return None;
+        };
+        Some(value)
+    }
+
+    fn builtin_binary(self, expression: &Expr) -> Option<(BinaryOperator, &Expr, &Expr)> {
+        let binary = expression.kind.binary()?;
+        crate::const_inputs::builtin_operation(self.program, expression).then_some(binary)
+    }
+
+    /// The lexical local, following direct immutable copies to their source.
+    pub(super) fn range_local(self, expression: &Expr) -> Option<LocalId> {
+        let ExprKind::Local(local) = expression.kind else {
+            return None;
+        };
+        Some(
+            self.range_aliases
+                .and_then(|aliases| aliases.get(&local))
+                .copied()
+                .unwrap_or(local),
+        )
+    }
+
+    /// Inclusive integer bounds of an active range binding.
+    pub(super) fn range_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
+        let local = self.range_local(expression)?;
+        let (_, range) = self.ranges.iter().find(|(id, _)| *id == local)?;
+        // Only nonempty ranges are installed, so end - 1 cannot overflow.
+        Some((range.start, range.end - 1))
+    }
+
+    /// Inclusive integer bounds of a known value or an active range binding.
+    fn integer_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
+        if let Some(bounds) = self.range_bounds(expression) {
+            return Some(bounds);
+        }
+        let LabelValue::Int(value) = self.selector(expression)? else {
+            return None;
+        };
+        Some((value, value))
+    }
+}
 
 impl<'a> Typer<'a> {
     /// The category of a graph's `var` against that of a value assigned
@@ -67,12 +293,32 @@ impl<'a> Typer<'a> {
     /// What a value read in a graph is (FN-3), as [`category`] says,
     /// with the locals read so far.
     pub(super) fn category(&self, value: &Expr) -> ValueCategory {
+        let known = self
+            .anonymous
+            .as_ref()
+            .filter(|_| !self.type_query)
+            .and_then(|body| body.immediate_values.as_deref())
+            .map(|locals| ImmediateValues::new(self.program, &self.instance, locals));
+        self.category_with_reached_locals(&self.locals, value, known, None)
+    }
+
+    /// Classify an immediately invoked result with the reached writes in
+    /// its discarded body. The additional categories belong to that call.
+    pub(super) fn category_with_reached_locals(
+        &self,
+        locals: &[Local],
+        value: &Expr,
+        known: Option<ImmediateValues<'_>>,
+        reached: Option<&ReachedLocals>,
+    ) -> ValueCategory {
         category_with_functions(
             self.program,
-            &self.locals,
+            locals,
             value,
             &self.pack_functions,
             &self.callback_captures,
+            known,
+            reached,
         )
     }
 
@@ -195,6 +441,7 @@ fn check_const_arguments(
         | Callee::DeferredOperator(_)
         | Callee::DeferredPackCall
         | Callee::DeferredValue
+        | Callee::UnreadWithConnection
         | Callee::Unread => {
             return;
         }
@@ -299,7 +546,14 @@ fn gives_a_value(value: &Expr) -> bool {
 /// as it reads ([`Typer::category`]), and [`record`] writes its answer
 /// on each expression for the stages after the analyser.
 pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
-    category_with_functions(program, locals, value, &[], &[])
+    category_with_functions(program, locals, value, &[], &[], None, None)
+}
+
+fn skips_right(operator: BinaryOperator, left: &Expr, known: ImmediateValues<'_>) -> bool {
+    matches!(
+        (operator, known.condition(left)),
+        (BinaryOperator::And, Some(false)) | (BinaryOperator::Or, Some(true))
+    )
 }
 
 fn category_with_functions(
@@ -308,11 +562,32 @@ fn category_with_functions(
     value: &Expr,
     functions: &[(usize, Callee)],
     callback_captures: &[ValueCategory],
+    evaluated: Option<ImmediateValues<'_>>,
+    reached: Option<&ReachedLocals>,
 ) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
     let category = |value: &Expr| {
-        category_with_functions(program, locals, value, functions, callback_captures)
+        category_with_functions(
+            program,
+            locals,
+            value,
+            functions,
+            callback_captures,
+            evaluated,
+            reached,
+        )
     };
+    let local_category = |id| {
+        reached
+            .and_then(|reached| reached.category(id))
+            .unwrap_or_else(|| locals.get(id).map_or(Value, |local| local.category))
+    };
+    if let Some(known) = evaluated
+        && let Some((operator, left, _)) = value.kind.binary()
+        && skips_right(operator, left, known)
+    {
+        return category(left);
+    }
     let join = join_categories;
     let all = |values: &mut dyn Iterator<Item = &Expr>| values.map(category).fold(Value, join);
     match &value.kind {
@@ -320,9 +595,7 @@ fn category_with_functions(
         // (UNIT-7, UNIT-13).
         ExprKind::Local(local)
         | ExprKind::DeferredPresent(local)
-        | ExprKind::PackEntry { pack: local, .. } => {
-            locals.get(*local).map_or(Value, |local| local.category)
-        }
+        | ExprKind::PackEntry { pack: local, .. } => local_category(*local),
         ExprKind::DeferredPackRead | ExprKind::DeferredPackCondition => Unsettled,
         // EXPR-16: a range has ordinary bounds. Its loop variable does
         // not become a connection even when a bound was reported.
@@ -345,7 +618,7 @@ fn category_with_functions(
             Callee::Anonymous(function) => function
                 .captures
                 .iter()
-                .map(|&local| locals[local].category)
+                .map(|&local| local_category(local))
                 .fold(Value, join),
             _ => Value,
         },
@@ -353,6 +626,13 @@ fn category_with_functions(
             callee, arguments, ..
         } => {
             let given = all(&mut arguments.iter().map(|argument| &argument.value));
+            if matches!(callee, Callee::Unread | Callee::UnreadWithConnection)
+                && let Some(category) = evaluated
+                    .and_then(|known| known.call_categories)
+                    .and_then(|calls| calls.get(&value.at))
+            {
+                return join(given, *category);
+            }
             // FN-17: the binding of a value formal supplies the actual
             // callback's role and its captures for the FN-6 category below.
             let (callee, given) = if let Callee::Parameter {
@@ -406,9 +686,11 @@ fn category_with_functions(
                 Callee::Anonymous(function) => function
                     .captures
                     .iter()
-                    .map(|&local| locals[local].category)
+                    .map(|&local| local_category(local))
                     .fold(given, join),
-                Callee::Parameter { temporal: true, .. } => Connection,
+                Callee::Parameter { temporal: true, .. } | Callee::UnreadWithConnection => {
+                    Connection
+                }
                 // An operation awaiting selection may choose a temporal candidate.
                 Callee::Required { .. }
                 | Callee::DeferredOperator(_)
@@ -483,7 +765,21 @@ fn category_with_functions(
         // from the function gives the `if` no value and takes no
         // part in its type (CTRL-5)", and so none in what it is. An
         // `if` no branch of which gives a value has none itself.
-        ExprKind::If { condition, .. } => {
+        ExprKind::If {
+            condition,
+            then,
+            otherwise,
+            ..
+        } => {
+            if let Some(known) = evaluated
+                && let Some(selected) = known.condition(condition)
+            {
+                return if selected {
+                    category(then)
+                } else {
+                    otherwise.as_deref().map_or(Value, category)
+                };
+            }
             let mut branches = value
                 .kind
                 .branch_values()

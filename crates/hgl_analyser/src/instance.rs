@@ -479,6 +479,8 @@ impl Program {
         if (inputs.test_candidates.is_some()
             || recheck_endpoints
             || (!functions.is_empty() && self.callback_phase_bodies.contains(&(module, declaration)))
+            // TYPE-10: an annotation extent awaits a concrete category.
+            || self.deferred_list_sizes.contains(&(module, declaration))
             || generics.contains(&Argument::NoResult)
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
@@ -488,7 +490,7 @@ impl Program {
             // retained without retaining or executing the operand's calls.
             || crate::type_values::has_instance_query(self, (module, declaration))
             || (!generics.is_empty()
-                && (crate::values::has_dependent_index(&body)
+                && (crate::values::has_dependent_index(self, (module, declaration), &body)
                     || crate::formatting::has_dependent_formatting(
                         self,
                         (module, declaration),
@@ -1230,6 +1232,7 @@ fn place_callee(
         | Callee::DeferredOperator(_)
         | Callee::DeferredPackCall
         | Callee::DeferredValue
+        | Callee::UnreadWithConnection
         | Callee::Unread => {}
     }
 }
