@@ -20,7 +20,7 @@ use super::inference::{
 };
 use super::law_calls::CallbackLawInput;
 use super::{Candidate, Typer};
-use crate::declared::{agree, names_parameter, same_type, substitute_within};
+use crate::declared::{agree, same_type, substitute_within};
 use crate::hir::{
     AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
     TypePackArgument, ValueCategory, walk_statement_nodes,
@@ -885,28 +885,7 @@ impl<'a> Typer<'a> {
         // GEN-13: fit dependent public options once their type arguments
         // are resolved. An option the read pass already rejected needs
         // no further diagnostic (ERR-9).
-        let public_options: Vec<_> = bindings
-            .written
-            .filter(|_| declared.kind == crate::program::DeclarationKind::Operator)
-            .into_iter()
-            .flat_map(|written| {
-                signature
-                    .generics
-                    .iter()
-                    .zip(&written.arguments)
-                    .enumerate()
-            })
-            .filter_map(|(index, (generic, (at, argument)))| {
-                let (GenericKind::Value(ty), Argument::Constant(value)) = (&generic.kind, argument)
-                else {
-                    return None;
-                };
-                if !names_parameter(ty) || matches!(value.value, ConstantValue::Unknown) {
-                    return None;
-                }
-                self.node_at(*at).map(|node| (index, node))
-            })
-            .collect();
+        let public_options = self.dependent_written_values(bindings.written, signature, declared);
         let reported = self.diagnostics.len();
         self.generic_values(
             name,

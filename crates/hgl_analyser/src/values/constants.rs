@@ -478,53 +478,41 @@ impl<'a> Typer<'a> {
         } else {
             return ConstantValue::Unknown;
         };
-        let read = self.read_in(expr_at.file, &node, expected);
-        match read {
+        let not_constant = |why: &str| {
+            place.map(|place| {
+                error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    expr_at,
+                    format!(
+                        "{place} is a generic value parameter, and this is no compile-time \
+                         constant: {why}"
+                    ),
+                    "GEN-8",
+                )
+            })
+        };
+        let report = match self.read_in(expr_at.file, &node, expected) {
             Ok(value)
                 if crate::constant::worked_out(&value)
                     && !crate::constant::has_deferred_type_query(&value) =>
             {
-                value
+                return value;
             }
-            Ok(_) => {
-                if let Some(place) = place {
-                    self.diagnostics.emit(error(
-                        Category::Type,
-                        codes::GENERIC_ARGUMENT_CONSTANT,
-                        expr_at,
-                        format!(
-                            "{place} is a generic value parameter, and this is no compile-time \
-                             constant: this compiler does not work out its value"
-                        ),
-                        "GEN-8",
-                    ));
-                }
-                ConstantValue::Unknown
-            }
-            Err(Fault::NotConstant) => {
-                if let Some(place) = place {
-                    self.diagnostics.emit(error(
-                        Category::Type,
-                        codes::GENERIC_ARGUMENT_CONSTANT,
-                        expr_at,
-                        format!(
-                            "{place} is a generic value parameter, and this is no compile-time \
-                             constant: it is known only when the program runs"
-                        ),
-                        "GEN-8",
-                    ));
-                }
-                ConstantValue::Unknown
-            }
-            Err(fault) => {
-                if let (Some(place), Some(expected)) = (place, expected)
-                    && let Some(report) = fault.report(expr_at, place, expected)
-                {
-                    self.diagnostics.emit(report);
-                }
-                ConstantValue::Unknown
-            }
+            Ok(_) => not_constant("this compiler does not work out its value"),
+            Err(Fault::NotConstant) => not_constant("it is known only when the program runs"),
+            Err(fault) => place
+                .zip(expected)
+                .and_then(|(place, ty)| fault.report(expr_at, place, ty)),
+        };
+        // A field-name argument can fail at the same source in several passes.
+        if let Some(report) = report
+            && (!self.module.field_name_arguments.contains(&expr_at)
+                || !self.diagnostics.as_slice().contains(&report))
+        {
+            self.diagnostics.emit(report);
         }
+        ConstantValue::Unknown
     }
 
     /// Resolves any deferred `type(...)` generic arguments inside `ty` in the

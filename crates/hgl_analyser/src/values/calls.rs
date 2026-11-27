@@ -1713,7 +1713,8 @@ impl<'a> Typer<'a> {
         let callee = &program.modules[module].declarations[declaration];
         let reported = self.diagnostics.len();
         let braces_only = dependent_slot(&program.modules[module], signature).is_some();
-        let named = self.named_generics(list, signature, &mut found, braces_only);
+        let mut values = self.named_generics(list, signature, &mut found, braces_only);
+        values.extend(self.dependent_written_values(given, signature, callee));
 
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is.
@@ -1751,7 +1752,7 @@ impl<'a> Typer<'a> {
             generics,
             settled: !computed && !expected.is_some_and(open),
             aside: &value_names,
-            values: &named,
+            values: &values,
             written_pack: written_pack
                 .as_ref()
                 .map(|pack| (pack.parameter, pack.types.as_slice())),
@@ -1844,7 +1845,7 @@ impl<'a> Typer<'a> {
                     .and_then(|argument| typer.law_value(law, &argument.value))
             },
         );
-        self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
+        self.generic_values(name, callee, generics, (&values, &defaulted), &mut found);
 
         // GEN-8: "A call rejects when it leaves a generic parameter
         // unresolved." Not where something else was reported, or an

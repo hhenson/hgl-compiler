@@ -24,7 +24,7 @@
 //! (UNIT-11) and read as [`Type::Unknown`]; so is one already reported.
 //! Nothing further is reported about an unknown type (ERR-9).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
@@ -89,6 +89,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         let paired_default_names = std::mem::take(&mut reader.paired_default_names);
         let calls = std::mem::take(&mut reader.calls);
+        let field_name_arguments = std::mem::take(&mut reader.field_name_arguments);
         let dependent_packs = std::mem::take(&mut reader.dependent_packs);
         let delta_inputs = std::mem::take(&mut reader.delta_inputs);
         let mut written = reader.written;
@@ -107,6 +108,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.written = written;
         module.delta_inputs = delta_inputs;
         module.call_arguments = calls;
+        module.field_name_arguments = field_name_arguments;
         module.paired_default_names = paired_default_names;
     }
 }
@@ -257,6 +259,8 @@ struct Reader<'a> {
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
+    /// Written call arguments whose constant value depends on a loop binding.
+    field_name_arguments: HashSet<Location>,
     paired_default_names: HashMap<Location, crate::program::PairedDefaultName>,
     /// What each name of the program resolved to, by the file and
     /// offset of its use: a constant a type names may be declared in
@@ -307,6 +311,7 @@ impl<'a> Reader<'a> {
             delta_inputs: Vec::new(),
             dependent_packs: HashMap::new(),
             calls: Vec::new(),
+            field_name_arguments: HashSet::new(),
             paired_default_names: HashMap::new(),
             everywhere: program
                 .modules
