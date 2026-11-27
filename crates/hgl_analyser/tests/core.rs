@@ -953,6 +953,124 @@ fn formatting_checks_a_pattern_returned_to_a_module_constant() {
     );
 }
 
+/// FMT-3/4 and UNIT-13: ordinary module helpers keep lexical frames and
+/// actual inputs distinct, including when the pattern is forwarded.
+#[test]
+fn formatting_checks_module_helper_arguments_and_immutable_locals() {
+    for helper in [
+        "const fn pattern(s: str) -> str => s",
+        "const fn pattern(s: str) -> str { let first = s\nlet second = first\nreturn second }",
+        "const fn id(s: str) -> str => s\nconst fn pattern(s: str) -> str => id(id(s))",
+        "const GLOBAL: str = \"{:x}\"\nconst fn pattern(s: str) -> str { let GLOBAL = s\nreturn GLOBAL }",
+    ] {
+        let checked = with_core(&format!(
+            "{helper}\nconst P: str = pattern(\"{{:.1f}}\")\nconst Q: str = pattern(\"{{:x}}\")\n\
+             const fn good() -> str => format(P, 1.5)\n\
+             const fn relay<T>(const p: str, value: T) -> str => format(p, value)\n\
+             test bad {{ assert relay(Q, 1.5) == \"\" }}\n"
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [("type/format.specifier", "FMT-4")],
+            "{helper}: {}",
+            checked.report
+        );
+    }
+}
+
+/// FMT-3/4/9: late module patterns use the original source phase and
+/// diagnostics, rather than treating an entire test as graph code.
+#[test]
+fn formatting_checks_late_module_patterns_in_their_original_context() {
+    for (pattern, operand, code, rule) in [
+        ("{:x}", ", 1.5", "type/format.specifier", "FMT-4"),
+        ("{", "", "type/format.syntax", "FMT-3"),
+        ("{missing}", ", 1.5", "type/format.argument", "FMT-3"),
+        (
+            "{}",
+            ", convert<i64>(\"3\")",
+            "operator/operator.no_candidate",
+            "FMT-5",
+        ),
+        ("{engine_time}", "", "type/format.argument", "FMT-9"),
+    ] {
+        let checked = with_core(&format!(
+            "const fn pattern(s: str) -> str => s\nconst P: str = pattern(\"{pattern}\")\n\
+             test t {{ assert format(P{operand}) == \"\" }}\n"
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [(code, rule)],
+            "{pattern}: {}",
+            checked.report
+        );
+    }
+}
+
+/// UNIT-13 and ERR-9: written dead branches still take part in cycles.
+/// An unrelated failed constant must not hide an independent FMT-4 error.
+#[test]
+fn formatting_module_helpers_preserve_constant_dependency_failures() {
+    for (helper, unrelated, expected) in [
+        ("P", "", vec!["name/constant.cycle"]),
+        ("if false { P } else { s }", "", vec!["name/constant.cycle"]),
+        (
+            "s",
+            "const Z: i64 = if false { Z } else { 1 }\n",
+            vec!["name/constant.cycle", "type/format.specifier"],
+        ),
+    ] {
+        for forwarded in [false, true] {
+            let call = if forwarded {
+                "relay(P, 1.5)"
+            } else {
+                "format(P, 1.5)"
+            };
+            let checked = with_core(&format!(
+                "{unrelated}const fn pattern(s: str) -> str => {helper}\n\
+                 const P: str = pattern(\"{{:x}}\")\n\
+                 const fn relay<T>(const p: str, value: T) -> str => format(p, value)\n\
+                 test t {{ assert {call} == \"\" }}\n"
+            ));
+            assert_eq!(
+                checked
+                    .findings
+                    .iter()
+                    .map(|f| f.code.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{helper}, forwarded={forwarded}: {}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// FMT-3 remains partial: opaque, effectful and recursive helper bodies
+/// are not evaluated by the bounded module-pattern reader.
+#[test]
+fn formatting_leaves_unsupported_module_helpers_unread() {
+    for helper in [
+        "native const fn pattern(s: str) -> str",
+        "const fn pattern(s: str) -> str { write(\"effect\")\nreturn s }",
+        "const fn pattern(s: str) -> str => pattern(s)",
+    ] {
+        let checked = with_core(&format!(
+            "{helper}\nconst P: str = pattern(\"{{:x}}\")\n\
+             test t {{ assert format(P, 1.5) == \"\" }}\n"
+        ));
+        assert!(checked.findings.is_empty(), "{}", checked.report);
+    }
+}
+
 /// FMT-5: an implicit conversion reaches the same instance and
 /// dependency checks as a written call (GEN-7, UNIT-13).
 #[test]

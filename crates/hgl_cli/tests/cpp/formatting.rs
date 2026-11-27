@@ -184,7 +184,7 @@ test selected_operator_patterns {
 
 /// FMT-3, #695: the target needs the analyser's checked pattern text.
 #[test]
-fn target_declines_unresolved_format_patterns() {
+fn rejects_invalid_module_helper_patterns_before_emission() {
     let root = scratch("unresolved-format-constants");
     let cases = [
         (
@@ -201,8 +201,58 @@ fn target_declines_unresolved_format_patterns() {
     for (name, declaration, call) in cases {
         let source = format!("module {name}\n{declaration}\ntest t {{ assert {call} == \"\" }}\n");
         let file = write(&root, &format!("{name}.hgl"), &source);
-        assert_target_declines_pattern(&file, &root.join(name));
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stderr));
+        assert!(text(&checked.stderr).contains("type/format.specifier"));
+        let output = root.join(name);
+        let emitted = emit_format_program(&file, &output);
+        assert_eq!(emitted.status.code(), Some(1));
+        assert!(text(&emitted.stderr).contains("type/format.specifier"));
+        assert!(!output.exists());
     }
+}
+
+/// FMT-3/4/5 and UNIT-13: helper arguments and immutable locals yield
+/// compiled patterns in direct calls, concrete instances and lifted calls.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn module_helper_patterns_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("module-helper-patterns");
+    let file = write(
+        &root,
+        "helpers.hgl",
+        r#"module module_helper_patterns
+const fn pattern(s: str) -> str { let first = s
+let second = first
+return second }
+const fn relay(s: str) -> str => pattern(pattern(s))
+const P: str = relay("{:.1f}")
+const Q: str = pattern("{:x}")
+const R: str = pattern("{") + pattern("}")
+const fn direct(value: f64) -> str => format(P, value)
+const fn forwarded<T>(const p: str, value: T) -> str => format(p, value)
+fn lifted(value: f64) -> str => format(P, value)
+test direct_patterns {
+    assert direct(1.5) == "1.5"
+    assert format(Q, 255) == "ff"
+    assert format(R, [1, 2]) == "[1, 2]"
+    assert forwarded(P, 1.5) == "1.5"
+    assert forwarded(Q, 255) == "ff"
+}
+test lifted_pattern { assert eval lifted(value: [1.5]) == ["1.5"] }
+"#,
+    );
+    let report = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    assert!(
+        report.status.success(),
+        "{}{}",
+        text(&report.stdout),
+        text(&report.stderr)
+    );
+    assert!(text(&report.stdout).contains("2 passed"));
 }
 
 /// FN-1 and FMT-3: equivalent option values share a compiled body.

@@ -505,13 +505,30 @@ pub(crate) fn constant_pattern_in(
         Ok(Rc::from(text))
     }
 
-    read(
+    let text = read(
         program,
         value,
         instance,
         &mut PatternMemo::default(),
         PATTERN_DECLARATIONS,
-    )
+    );
+    if !matches!(text, Err(Unread)) {
+        return text;
+    }
+    // FMT-3, UNIT-13: a module constant may obtain its string through
+    // a bounded ordinary helper. Reuse the typed const reader rather
+    // than evaluating another copy of the source syntax.
+    use crate::const_inputs::ConstInputFault::{ReaderLimit, TextLimit};
+    let value = crate::const_inputs::projection_value(program, value, instance).map_err(
+        |fault| match fault {
+            ReaderLimit | TextLimit => PatternFault::Limit,
+            _ => Unread,
+        },
+    )?;
+    let ExprKind::Literal(Value::Str(text)) = value.kind else {
+        return Err(Unread);
+    };
+    Ok(Rc::from(text))
 }
 
 /// True where FMT-5 needs a selected `convert<str>` call.

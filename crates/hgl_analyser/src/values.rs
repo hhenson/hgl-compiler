@@ -441,6 +441,7 @@ pub(crate) fn check(
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
+    format_calls::retry_module_patterns(program, diagnostics);
     (
         program.const_demands,
         program.runtime_store_keys,
