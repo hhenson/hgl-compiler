@@ -33,6 +33,39 @@ const DECLARED: &str = concat!(
     "impl const fn paired(value: i64) -> i64 => value\n",
 );
 
+/// CTRL-12/16: each field has its own type and name while its pass
+/// is checked. An ordinary collection iteration name is dynamic.
+#[test]
+fn ordinary_struct_iteration_checks_each_selected_field_type() {
+    let checked = module(concat!(
+        "struct Quote {\n",
+        "    label: str\n",
+        "    bid: i64\n",
+        "}\n",
+        "const fn checked(quote: Quote) {\n",
+        "    for name, value in quote {\n",
+        "        if name == \"bid\" {\n",
+        "            let invalid: str = value\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+        "const fn runtime_label(entries: list<str>) {\n",
+        "    for name in entries {\n",
+        "        switch \"bid\" {\n",
+        "            case name: { }\n",
+        "        }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:32 type/type.mismatch EXPR-5",
+            "m.hgl:16:18 type/switch.label_constant CTRL-12",
+        ]
+    );
+}
+
 /// TST-3: "Outside the argument of an `eval` or a `run`, which is
 /// composition (TST-5, TST-8), its statements are value code, as an
 /// application's are (UNIT-14) ... They call `const fn`s only: a call of

@@ -1033,6 +1033,8 @@ struct Typer<'a> {
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
     pack_passes: Vec<(String, hir::PackKey)>,
+    /// CTRL-16 field names in the currently expanded struct loop passes.
+    field_passes: Vec<(Location, Argument)>,
     /// Packs bound by `let`. Only their individual entries reach lowering.
     bound_packs: HashMap<LocalId, forwarded_packs::BoundPack>,
     /// The generic value parameters of the declaration being read that
@@ -1223,6 +1225,7 @@ impl<'a> Typer<'a> {
             default_name_visits: None,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
+            field_passes: Vec::new(),
             bound_packs: HashMap::new(),
             bound: Vec::new(),
             diagnostics,
@@ -1370,6 +1373,7 @@ impl<'a> Typer<'a> {
     fn mark(&self) -> Mark {
         Mark {
             diagnostics: self.diagnostics.len(),
+            warnings: self.diagnostics.warning_mark(),
             locals: self.locals.len(),
             assigned: self.assigned.clone(),
             returned: self.returned,
@@ -1412,6 +1416,7 @@ impl<'a> Typer<'a> {
         if let Some(deferred) = self.deferred_type_fit {
             deferred.set(mark.deferred_type_fit);
         }
+        self.diagnostics.restore_warnings(mark.warnings);
         let clean = self.diagnostics.len() == mark.diagnostics;
         // A construct's spent allowance is reported once, and the report
         // stands though the reading it was spent in is taken back.
@@ -1426,7 +1431,17 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
-        while self.type_query_locations.len() > mark.type_queries {
+        self.restore_type_queries(mark.type_queries);
+        if let Some(target) = self.resolved_written {
+            target.borrow_mut().truncate(mark.resolved_written);
+        }
+        self.restore_read(mark, keep_flow);
+        clean
+    }
+
+    /// Restore the TYPE-18 query entries that preceded a lexical reread.
+    fn restore_type_queries(&mut self, saved: usize) {
+        while self.type_query_locations.len() > saved {
             if let Some((at, previous)) = self.type_query_locations.pop() {
                 match previous {
                     Some(old) => {
@@ -1436,11 +1451,6 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        if let Some(target) = self.resolved_written {
-            target.borrow_mut().truncate(mark.resolved_written);
-        }
-        self.restore_read(mark, keep_flow);
-        clean
     }
 
     /// Restores the surrounding scope after an anonymous function's
@@ -1563,6 +1573,8 @@ const BOOL: Type = Type::Scalar(Scalar::Bool);
 
 /// What a reading may change, at one moment: see [`Typer::take_back`].
 struct Mark {
+    /// Pending warnings from successful argument readings.
+    warnings: usize,
     /// How many diagnostics there are.
     diagnostics: usize,
     /// How many locals there are.

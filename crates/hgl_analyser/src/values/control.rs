@@ -11,10 +11,12 @@ use super::symbols::is_null;
 use super::{BOOL, Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::agree;
-use crate::hir::{self, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
+use crate::hir::{
+    self, Expr, ExprKind, FIELD_LOOP_LOCAL_PREFIX, IfInference, Local, LocalId, Stmt, ValueCategory,
+};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{Constant, ConstantValue, Detail, Scalar, Type};
+use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
 /// CTRL-13: a graph's no-else `if` has its branch's type where it is a
@@ -458,6 +460,7 @@ impl<'a> Typer<'a> {
         };
         let otherwise = parts.next();
         let guard = ungrouped(condition.clone());
+        let mut checked_condition = None;
         let selected = if self.lexical_default_dependencies {
             None
         } else if guard.kind() == SyntaxKind::PackKeyMembership {
@@ -499,11 +502,25 @@ impl<'a> Typer<'a> {
                 }
             }
         } else {
-            self.active_pack_condition(&condition)
+            self.active_field_condition(&condition)
+                .or_else(|| self.active_pack_condition(&condition))
+                .or_else(|| {
+                    if self.field_passes.is_empty() {
+                        return None;
+                    }
+                    // TYPE-18: check the guard in this pass's lexical scope
+                    // before asking for a constant that uses its type queries.
+                    let queries = self.type_query_locations.len();
+                    checked_condition = Some(self.condition(&condition));
+                    if self.type_query_locations.len() == queries {
+                        return None;
+                    }
+                    self.active_field_condition(&condition)
+                })
         };
         if let Some(selected) = selected {
-            // CTRL-16: a constant condition in a concrete pack pass
-            // composes only the selected branch.
+            // CTRL-16: a constant condition in a concrete pass
+            // checks only the selected branch.
             if selected {
                 self.report_pack_branch(&then);
                 return self.flow_with_fit(&then, expected, value_use, fit);
@@ -533,7 +550,7 @@ impl<'a> Typer<'a> {
                 outcome,
             );
         }
-        let condition = self.condition(&condition);
+        let condition = checked_condition.unwrap_or_else(|| self.condition(&condition));
         // CTRL-1: "A wiring-time condition chooses which branch to
         // compose. A temporal condition in composition selects a child
         // graph at runtime."
@@ -867,6 +884,19 @@ impl<'a> Typer<'a> {
             return self.unread(node);
         };
         let sequence = self.loop_iterable(&sequence);
+        if !self.graph
+            && matches!(names.len(), 1 | 2)
+            && let Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            } = &sequence.ty
+            && let Some(Detail::Struct(layout)) =
+                self.program.modules[*module].details.get(*declaration)
+        {
+            return self.field_loop(node, sequence, &names, &layout.members);
+        }
         let types = self.loop_bindings(&sequence, names.len());
         // CTRL-15: what the loop binds, and whether it makes one child
         // for each member.
@@ -905,6 +935,112 @@ impl<'a> Typer<'a> {
             sequence,
             body,
             at,
+        }
+    }
+
+    /// CTRL-12/15: visit the nominal layout, which has the parents'
+    /// fields in order before the struct's own. Each pass has a typed
+    /// field binding and its own lexical block.
+    fn field_loop(
+        &mut self,
+        node: &SyntaxNode,
+        sequence: Expr,
+        names: &[SyntaxToken],
+        members: &[crate::types::Member],
+    ) -> Stmt {
+        let at = self.at(node);
+        let body = child(node, SyntaxKind::Block);
+        let held = self.locals.len();
+        let base = Expr {
+            kind: ExprKind::Local(held),
+            ty: sequence.ty.clone(),
+            at: sequence.at,
+            category: ValueCategory::Value,
+        };
+        self.locals.push(Local {
+            name: format!("{FIELD_LOOP_LOCAL_PREFIX}{held}"),
+            at: base.at,
+            kind: LocalKind::Let,
+            ty: base.ty.clone(),
+            category: ValueCategory::Value,
+        });
+        self.assigned.push(true);
+        let mut statements = vec![Stmt::Declare {
+            local: held,
+            value: Some(sequence),
+        }];
+        let name = &names[0];
+        let name_at = Location::new(self.file, name.span());
+        let type_queries = self.type_query_locations.len();
+        // A written type inside the loop may differ in every pass.
+        // Each HIR binding keeps its own type. The module's written
+        // table can store only one type at a source location.
+        let outer_written = self.resolved_written.take();
+        for field in members {
+            let name_ty = Type::Scalar(Scalar::Str);
+            let name_local = self.declare(
+                name.text(),
+                name_at,
+                LocalKind::Iteration,
+                name_ty.clone(),
+                true,
+            );
+            let mut pass = vec![Stmt::Declare {
+                local: name_local,
+                value: Some(Expr {
+                    kind: ExprKind::Literal(hir::Value::Str(field.name.clone())),
+                    ty: name_ty,
+                    at: name_at,
+                    category: ValueCategory::Value,
+                }),
+            }];
+            if let Some(value) = names.get(1) {
+                let value_at = Location::new(self.file, value.span());
+                let (kind, ty) = self.member_value(base.clone(), &field.name, value_at, false);
+                let local = self.declare(
+                    value.text(),
+                    value_at,
+                    LocalKind::Iteration,
+                    ty.clone(),
+                    true,
+                );
+                pass.push(Stmt::Declare {
+                    local,
+                    value: Some(Expr {
+                        kind,
+                        ty,
+                        at: value_at,
+                        category: ValueCategory::Value,
+                    }),
+                });
+            }
+            self.field_passes.push((
+                name_at,
+                Argument::Constant(Constant {
+                    text: name.text().to_string(),
+                    value: ConstantValue::Str(field.name.clone()),
+                }),
+            ));
+            pass.extend(self.loop_body(body.as_ref()));
+            self.field_passes.pop();
+            // TYPE-18: the next pass reads the same syntax with a
+            // different field binding. Keep only the enclosing queries.
+            self.restore_type_queries(type_queries);
+            statements.push(field_loop_block(pass, at));
+        }
+        self.resolved_written = outer_written;
+        field_loop_block(statements, at)
+    }
+
+    /// CTRL-16: a constant branch in a struct pass is checked only where
+    /// selected. An ordinary runtime condition keeps its usual typing.
+    fn active_field_condition(&self, condition: &SyntaxNode) -> Option<bool> {
+        if self.field_passes.is_empty() {
+            return None;
+        }
+        match self.read_constant(condition, Some(&BOOL)) {
+            Ok(ConstantValue::Bool(value)) => Some(value),
+            _ => None,
         }
     }
 
@@ -1378,6 +1514,18 @@ impl<'a> Typer<'a> {
             self.returning_tails.get(&tail.at).map(Vec::as_slice)
         }
     }
+}
+
+fn field_loop_block(statements: Vec<Stmt>, at: Location) -> Stmt {
+    Stmt::Expr(Expr {
+        kind: ExprKind::Block {
+            statements,
+            value: None,
+        },
+        ty: Type::Unknown,
+        at,
+        category: ValueCategory::Value,
+    })
 }
 
 /// What was assigned at `before`, for as many locals as there are now.

@@ -14,6 +14,58 @@ use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategor
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// GEN-3, GEN-7 and GEN-17: a name common to two sets keeps its
+/// declaration identity when every alternative outside it is disjoint.
+#[test]
+fn intersecting_open_memberships_establish_a_shared_type() {
+    let prefix = concat!(
+        "const key: str = \"item\"\n",
+        "const other: str = \"other\"\n",
+        "const fn require_same<A,B>(a:A,b:B)->i64 requires A == B => 1\n",
+        "operator select_same<A,B>(a:A,b:B)->i64\n",
+        "impl const fn select_same<X>(a:X,b:X)->i64 => 2\n",
+        "const fn relay<T,U,...Ps>(f:const fn(...{Ps})->i64,t:T,u:U,x:Ps[key])->i64\n",
+    );
+    for (condition, admitted) in [
+        ("Ps[key] in {T, f64} && Ps[key] in {T, str}", true),
+        ("Ps[key] in {str, T} && Ps[key] in {f64, T}", true),
+        (
+            "each k in arg_keys(Ps) { Ps[k] in {T, f64} } && Ps[key] in {T, str}",
+            true,
+        ),
+        (
+            "Ps[key] in {T, f64, i64} && Ps[key] in {T, i64, str} && Ps[key] in {T, str, f64}",
+            true,
+        ),
+        ("Ps[key] in {T, f64} && Ps[key] in {T, f64}", false),
+        ("Ps[key] in {T, f64} && Ps[key] in {U, str}", false),
+        ("Ps[key] in {T, str} && Ps[key] in {T, U}", false),
+        ("Ps[key] in {T, str} && Ps[other] in {T, f64}", false),
+        ("Ps[key] in {T, str} || Ps[key] in {T, f64}", false),
+        ("Ps[key] in {T, delta<U>} && Ps[key] in {T, i64}", false),
+    ] {
+        for (call, code) in [
+            (
+                "require_same<Ps[key], T>(x, t)",
+                "constraint/requires.unmet",
+            ),
+            ("select_same(x, t)", "operator/operator.no_candidate"),
+        ] {
+            let checked = module(&format!("{prefix}    requires {condition} => {call}\n"));
+            if admitted {
+                assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+                assert_eq!(
+                    checked.findings[0].code, code,
+                    "{condition}\n{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
 /// GEN-3 and GEN-7: a generic declaration must support each type admitted
 /// by all of its conjoined memberships and equalities, in either order.
 #[test]

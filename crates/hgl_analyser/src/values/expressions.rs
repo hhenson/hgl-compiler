@@ -4,7 +4,7 @@
 //! pass ([`super`]); [`Typer::expression`] hands every other form to the
 //! module that reads it.
 
-use hgl_diagnostics::Category;
+use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, ValueUse, branch_is_null, branch_takes_its_type};
@@ -19,8 +19,8 @@ use crate::hir::{
     BinaryOperator, EndpointOperation, Expr, ExprKind, Hook, LocalId, UnaryOperator, Value,
     ValueCategory,
 };
-use crate::program::{Binding, LocalKind};
-use crate::syntax::{child, name_token, tokens, ungrouped};
+use crate::program::{Binding, DeclarationKind, LocalKind};
+use crate::syntax::{child, name_before_less_than, name_token, tokens, ungrouped};
 use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
@@ -480,9 +480,8 @@ impl<'a> Typer<'a> {
     }
 
     /// A name: a parameter, a local, a constant of a module, or a
-    /// generic value parameter. Any other, a function or a type or a
-    /// name left for the prelude, is for the pass that reads calls and
-    /// members.
+    /// generic value parameter. Calls and members resolve the names
+    /// they use as callees or type names before reading ordinary values.
     fn name(&mut self, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
         let unread = Expr {
@@ -515,19 +514,37 @@ impl<'a> Typer<'a> {
         };
         // UNIT-13: "A constant is read by its name wherever an ordinary
         // value is." Its type is the one it is written with.
-        if let Some((module, &[declaration])) = self.declarations(&name)
-            && let Some(Detail::Constant(ty)) =
-                self.program.modules[module].details.get(declaration)
-        {
-            return Expr {
-                kind: ExprKind::Constant {
-                    module,
-                    declaration,
-                },
-                ty: ty.clone(),
-                at,
-                category: ValueCategory::Unsettled,
-            };
+        if let Some((module, &[declaration])) = self.declarations(&name) {
+            let owner = &self.program.modules[module];
+            if let Some(Detail::Constant(ty)) = owner.details.get(declaration) {
+                return Expr {
+                    kind: ExprKind::Constant {
+                        module,
+                        declaration,
+                    },
+                    ty: ty.clone(),
+                    at,
+                    category: ValueCategory::Unsettled,
+                };
+            }
+            let declared = &owner.declarations[declaration];
+            if matches!(
+                declared.kind,
+                DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::NativeType
+            ) {
+                // The resolver already reports the malformed generic application (GEN-14).
+                let rejected_application = declared.kind == DeclarationKind::Struct
+                    && child(&declared.syntax, SyntaxKind::GenericParams).is_some()
+                    && node
+                        .parent()
+                        .and_then(|parent| name_before_less_than(&parent))
+                        .as_ref()
+                        == Some(node);
+                if !rejected_application {
+                    self.reject_type_name_value(name.text(), at, declared.at);
+                }
+                return unread;
+            }
         }
         let Some(Binding::Local { at: declared, kind }) =
             self.bindings.get(&(self.file, name.span().start))
@@ -563,6 +580,9 @@ impl<'a> Typer<'a> {
             return unread;
         };
         let GenericKind::Value(ty) = &generic.kind else {
+            if generic.kind == GenericKind::Type {
+                self.reject_type_name_value(name.text(), at, *declared);
+            }
             return unread;
         };
         // GEN-7, GEN-13 and TYPE-10: a signature's list size is read as
@@ -595,6 +615,20 @@ impl<'a> Typer<'a> {
             at,
             category: ValueCategory::Unsettled,
         }
+    }
+
+    /// GEN-13: a type name does not denote an ordinary value.
+    fn reject_type_name_value(&mut self, name: &str, at: Location, declared: Location) {
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                at,
+                format!("`{name}` names a type and cannot be read as a value"),
+                "GEN-13",
+            )
+            .with_related(declared, "type declared here"),
+        );
     }
 
     /// A read of the local `local`, written at `node`. EXPR-3: "every
@@ -738,6 +772,19 @@ impl<'a> Typer<'a> {
             Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
         };
+        if let Some((_, Argument::Constant(value))) = self
+            .field_passes
+            .iter()
+            .find(|(binding, _)| *binding == self.locals[local].at)
+            && let Some(kind) = self.program.constant(&value.value, &ty, at)
+        {
+            return Expr {
+                kind,
+                ty,
+                at,
+                category: ValueCategory::Value,
+            };
+        }
         if let Some((_, value)) = self
             .const_inputs
             .iter()
@@ -1485,17 +1532,21 @@ pub(super) fn takes_its_type(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
-        // ERR-13: the callee `ok` or `err` is the constructor, whatever
-        // else is in scope.
-        SyntaxKind::CallExpr => node
-            .children()
-            .next()
-            .filter(|callee| {
-                callee.kind() == SyntaxKind::NameExpr
-                    && child(callee, SyntaxKind::QualifiedName).is_none()
-            })
-            .and_then(|callee| name_token(&callee))
-            .is_some_and(|name| matches!(name.text(), "ok" | "err")),
+        SyntaxKind::CallExpr => result_constructor(node).is_some(),
         _ => false,
+    }
+}
+
+/// ERR-13: an unqualified `ok` or `err` call is always a result constructor.
+pub(super) fn result_constructor(call: &SyntaxNode) -> Option<bool> {
+    let callee = call.children().next()?;
+    if callee.kind() != SyntaxKind::NameExpr || child(&callee, SyntaxKind::QualifiedName).is_some()
+    {
+        return None;
+    }
+    match name_token(&callee)?.text() {
+        "ok" => Some(true),
+        "err" => Some(false),
+        _ => None,
     }
 }
