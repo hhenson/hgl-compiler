@@ -101,13 +101,16 @@ impl<'a> Typer<'a> {
                         expected_fn.value == actual_fn.value
                             && expected_fn.named_pack == actual_fn.named_pack
                             && expected_fn.reference == actual_fn.reference
-                            && expected_fn.result == actual_fn.result
+                            && Type::same_optional(
+                                expected_fn.result.as_ref(),
+                                actual_fn.result.as_ref(),
+                            )
                             && expected_fn.parameters.len() == actual_fn.parameters.len()
                             && expected_fn
                                 .parameters
                                 .iter()
                                 .zip(&actual_fn.parameters)
-                                .all(|(expected, actual)| expected.ty() == actual.ty())
+                                .all(|(expected, actual)| expected.ty().same_type(actual.ty()))
                     }
                     _ => false,
                 }
@@ -196,7 +199,7 @@ impl<'a> Typer<'a> {
         };
         let input = &assigned[position];
         if position == first_competitor
-            && result == input_pattern
+            && result.same_type(input_pattern)
             && input.forwarded.is_none()
             && input.pack.is_none()
             && let Some(index) = bare_parameter(input_pattern, generics)
@@ -270,7 +273,8 @@ impl<'a> Typer<'a> {
         let reported = self.diagnostics.len();
         let callback = self.function_argument(node, &template);
         if self.diagnostics.len() == reported
-            && matches!(&callback.ty, Type::Function(actual) if actual.result.as_ref() == Some(&value.ty))
+            && matches!(&callback.ty, Type::Function(actual)
+                if Type::same_optional(actual.result.as_ref(), Some(&value.ty)))
         {
             Some((hint, callback))
         } else {
@@ -298,7 +302,7 @@ impl<'a> Typer<'a> {
             _ => return actual,
         };
         if let Some((result, requested)) = result_fallback
-            && pattern == result
+            && pattern.same_type(result)
             && !matches!(requested, Type::Nullable(_))
             && matches!(actual, Type::Result { .. })
             && let Some(index) = bare_parameter(pattern, generics)

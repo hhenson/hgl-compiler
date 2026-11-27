@@ -1211,7 +1211,7 @@ impl Structs<'_> {
                 // The same field by another path is one field.
                 let listed = inherited
                     .iter()
-                    .any(|other| other.origin == field.origin && other.ty == field.ty);
+                    .any(|other| other.origin == field.origin && other.ty.same_type(&field.ty));
                 if !listed {
                     inherited.push(field);
                 }
@@ -2232,7 +2232,7 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
             },
         ) => type_may_be(value, other_value, found) && type_may_be(error, other_error, found),
         // Two scalars, or two types of different forms.
-        (given, applied) => given == applied,
+        (given, applied) => given.same_type(applied),
     }
 }
 
@@ -2264,7 +2264,7 @@ fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_
 /// another ([`ConstantValue::same`]). A generic parameter, an expression
 /// of one, and a constant whose value is not known may be anything.
 fn may_be_one(left: &Constant, right: &Constant) -> bool {
-    left.value.same(&right.value) != Some(false)
+    left.same_value(right) != Some(false)
 }
 
 /// Records that the parameter declared at `at` stands for `argument`.
@@ -2459,7 +2459,7 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
     let constants_agree = |left: &Constant, right: &Constant| {
         matches!(left.value, ConstantValue::Unknown)
             || matches!(right.value, ConstantValue::Unknown)
-            || left.value.same(&right.value).unwrap_or(matches!(
+            || left.same_value(right).unwrap_or(matches!(
                 agreement,
                 Agreement::Possible | Agreement::CandidateResult
             ))
@@ -2578,7 +2578,7 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
             },
         ) => agree(value, other_value) && agree(error, other_error),
         (left, right) => {
-            left == right
+            left.same_type(right)
                 || (matches!(agreement, Agreement::CandidateResult)
                     && (open_result_form(left) || open_result_form(right)))
         }

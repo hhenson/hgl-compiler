@@ -594,7 +594,7 @@ impl Type {
             } => {
                 let maximum_text = constant(maximum);
                 match minimum {
-                    Some(minimum) if minimum.value.same(&maximum.value) != Some(true) => {
+                    Some(minimum) if minimum.same_value(maximum) != Some(true) => {
                         format!(
                             "rolling_window<{}, {maximum_text}, {}>",
                             one(value),

@@ -74,7 +74,7 @@ impl Emitter<'_> {
                 // ERR-12: a binding a test has proved is not null is read
                 // as its payload's type there.
                 match &declared.ty {
-                    Type::Nullable(payload) if **payload == value.ty => format!("(*{name})"),
+                    Type::Nullable(payload) if payload.same_type(&value.ty) => format!("(*{name})"),
                     _ => name,
                 }
             }
@@ -537,7 +537,7 @@ impl Emitter<'_> {
         let value = self.temporal_read(&underlying.ty, &name, at);
         let value = self.apply_reader_chain(&form, &value);
         Some(match &form.ty {
-            Type::Nullable(payload) if **payload == *ty => format!("(*({value}))"),
+            Type::Nullable(payload) if payload.same_type(ty) => format!("(*({value}))"),
             _ => value,
         })
     }

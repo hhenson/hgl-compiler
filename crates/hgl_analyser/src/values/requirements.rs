@@ -416,7 +416,7 @@ impl<'a> Typer<'a> {
             among = Some(match among {
                 None => types,
                 Some(mut among) => {
-                    among.retain(|ty| types.contains(ty));
+                    among.retain(|ty| types.iter().any(|other| ty.same_type(other)));
                     among
                 }
             });
@@ -817,8 +817,7 @@ impl<'a> Typer<'a> {
             let failed = member_trials.iter().find_map(|members| {
                 let member_type = |pack, _: &str, key: &Constant| {
                     members.iter().find_map(|((at, stated), ty)| {
-                        (*at == pack && stated.value.same(&key.value) == Some(true))
-                            .then(|| ty.clone())
+                        (*at == pack && stated.same_value(key) == Some(true)).then(|| ty.clone())
                     })
                 };
                 let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
@@ -1051,9 +1050,7 @@ impl<'a> Typer<'a> {
                 keys.iter().any(|(pack, key)| {
                     *pack == member.pack
                         && match &member.key {
-                            StatedPackKey::One(stated) => {
-                                stated.value.same(&key.value) != Some(false)
-                            }
+                            StatedPackKey::One(stated) => stated.same_value(key) != Some(false),
                             StatedPackKey::Every(_) => true,
                         }
                 })
@@ -1386,7 +1383,7 @@ impl<'a> Typer<'a> {
         let constants_may_meet = |left: &Constant, right: &Constant| {
             matches!(left.value, ConstantValue::Unknown)
                 || matches!(right.value, ConstantValue::Unknown)
-                || left.value.same(&right.value) != Some(false)
+                || left.same_value(right) != Some(false)
         };
         let is_pack_type = |ty: &Type| {
             matches!(
@@ -2012,7 +2009,10 @@ impl<'a> Typer<'a> {
         // The formatter holds the whole argument and needs the text
         // itself. Use the selected tuple types when checking that fit.
         if !self.admits(&packs.project(&supplied.ty, &given).ok()?, ty)
-            || packs.project(signature.result.as_ref()?, &given).ok()? != result
+            || !packs
+                .project(signature.result.as_ref()?, &given)
+                .ok()?
+                .same_type(&result)
         {
             return None;
         }
@@ -2114,8 +2114,15 @@ impl<'a> Typer<'a> {
             let types: Vec<&Type> = operands.iter().map(|(_, ty)| ty).collect();
             let stated = self.requirements().into_iter().find(|requirement| {
                 requirement.operator == operator
-                    && requirement.operands.iter().eq(types.iter().copied())
-                    && self.asked_by(requirement) == Some(asked.clone())
+                    && requirement.operands.len() == types.len()
+                    && requirement
+                        .operands
+                        .iter()
+                        .zip(&types)
+                        .all(|(stated, given)| stated.same_type(given))
+                    && self
+                        .asked_by(requirement)
+                        .is_some_and(|result| Type::same_optional(result.as_ref(), asked.as_ref()))
             });
             if let Some(stated) = stated {
                 return Some(Answered::Stated(stated.index));
@@ -2451,7 +2458,7 @@ impl<'a> Typer<'a> {
                     // reports is taken back.
                     self.fits_place(&argument.node, operand, false)
                 } else {
-                    *operand == argument.value.ty
+                    operand.same_type(&argument.value.ty)
                 };
                 if !supplied {
                     break;
@@ -5304,7 +5311,7 @@ fn category_facts(
                     written.at.file == file
                         && written.at.span.start == left.span().start
                         && matches!(&written.ty, Type::PackMember { pack: written_pack, key: written_key, .. }
-                            if *written_pack == pack && written_key.value.same(&key.value) == Some(true))
+                            if *written_pack == pack && written_key.same_value(key) == Some(true))
                 }),
             };
             if !matches {

@@ -1416,7 +1416,7 @@ impl<'a> Reader<'a> {
         key_value(&index, &mut wanted)?;
         let mut read = String::new();
         for (key, value) in entries.into_iter().rev() {
-            if key.ty == index.ty {
+            if key.ty.same_type(&index.ty) {
                 read.clear();
                 key_value(&key, &mut read)?;
                 if read == wanted {
@@ -2069,7 +2069,7 @@ fn same_store_entry(
         return false;
     };
     *remaining = next;
-    if depth == 0 || first.ty != second.ty || first.category != second.category {
+    if depth == 0 || !first.ty.same_type(&second.ty) || first.category != second.category {
         return false;
     }
     let Some((first, first_owner)) = store_entry_root(program, first, remaining) else {

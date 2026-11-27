@@ -9,8 +9,9 @@
 //! list<pc::Quote, 3>   --read-->   List { element: Named { Quote of pricing.curves }, size: 3 }
 //! ```
 //!
-//! Two types are the same type when their [`Type`] values are equal. A
-//! struct, enum or native type is known by where it is declared, not by
+//! Rust equality compares type representations. [`Type::same_type`]
+//! compares the constants in those representations by their known values.
+//! A struct, enum or native type is known by where it is declared, not by
 //! how it is spelled where it is used (UNIT-4): `Quote` through an import
 //! and `pc::Quote` through an alias are one `Named` value.
 //!
@@ -22,6 +23,8 @@ use std::fmt;
 
 use hgl_diagnostics::Location;
 use hgl_parser::SyntaxKind;
+
+mod equality;
 
 /// The scalar types (TYPE-1, TYPE-2): each is written with a reserved
 /// word and has an identity of its own.
@@ -106,7 +109,7 @@ impl Scalar {
 
 /// How a trace is written (TST-7): "Within one eval all inputs and
 /// expectation use the same dense/timed style."
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TraceStyle {
     /// `[7, _, 9]`: one cell for each engine step from the run's start.
     Dense,
@@ -129,7 +132,7 @@ impl TraceStyle {
 /// What a named type is declared as. A type carries it so that what its
 /// delta is (TYPE-16) can be said from the type alone, wherever a
 /// generic parameter is replaced by it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NamedKind {
     /// A struct: its delta is a type of its own.
     Struct,
@@ -144,7 +147,7 @@ pub enum NamedKind {
 /// `Box<Type>` is a `Type` stored elsewhere and pointed to: a type that
 /// holds another, as `list<f64>` holds `f64`, cannot hold it directly,
 /// since its size would then have no end.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     /// `Type`: a type held as an ordinary compile-time value (TYPE-18).
     TypeValue,
@@ -262,7 +265,7 @@ pub enum Type {
 
 /// The signature a parameter taking a function expects (FN-17).
 /// It is part of source checking and has no runtime value representation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionType {
     /// True for a `const fn` template.
     pub value: bool,
@@ -280,7 +283,7 @@ pub struct FunctionType {
 
 /// An input of a static function (FN-17). A named callback keeps its
 /// declaration's modes, defaults and pack shape for reflection (GEN-17, FN-8).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FunctionParameter {
     /// A fixed input written in a template, or a parameter of an anonymous callback.
     Fixed {
@@ -328,7 +331,7 @@ impl FunctionParameter {
 }
 
 /// The named pack written in a function type, `fn(...{Ps})` (GEN-17).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReflectedPack {
     /// The generic parameter declaring this pack.
     pub at: Location,
@@ -579,7 +582,7 @@ impl Type {
 }
 
 /// One generic argument: a type, a constant, or an inferred absence of a result.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Argument {
     /// `i64` in `Box<i64>`.
     Type(Type),
@@ -595,25 +598,11 @@ pub enum Argument {
 pub struct Constant {
     /// The expression as written, for messages: each token as it
     /// stands, and one space wherever the source has whitespace or a
-    /// comment between two. `N + 1`. Nothing compares it: two constants
-    /// are compared by `value`.
+    /// comment between two. `N + 1`. Equality and hashing use `value`.
     pub text: String,
     /// What it comes to.
     pub value: ConstantValue,
 }
-
-// Two constants are the same when their values are known to be equal
-// (`ConstantValue::same`). One whose value is not known is the same as
-// nothing, itself included: a type that holds one is no type another
-// is known to be. A pass that asks whether two types may differ, and
-// not whether they are known to be one, asks `same` itself.
-impl PartialEq for Constant {
-    fn eq(&self, other: &Constant) -> bool {
-        self.value.same(&other.value) == Some(true)
-    }
-}
-
-impl Eq for Constant {}
 
 /// What a compile-time constant comes to (GEN-8, UNIT-13): a value of
 /// the type its place gives it, held as that value and not as it is
@@ -637,9 +626,8 @@ pub enum ConstantValue {
     },
     /// An `i64`.
     Int(i64),
-    /// An `f64`. Never a NaN: a constant that comes to one is
-    /// [`ConstantValue::Unevaluated`], since a NaN is equal to nothing,
-    /// itself included (NUM-5), and so names no one type.
+    /// An `f64`, including infinities and NaNs. Structural equality
+    /// compares bits. UNIT-13 treats all NaNs as one constant.
     Float(f64),
     /// A `bool`.
     Bool(bool),
@@ -723,9 +711,7 @@ pub enum ConstantValue {
     DeferredDefaultQuery(Location),
     /// Not valued: a constant whose value this compiler does not work
     /// out (an operation that overflows, a date moved by a tenor), or
-    /// what is no constant at all. It is equal to nothing and unequal to
-    /// nothing (`same` gives `None`), so no type that holds one is known
-    /// to be another type.
+    /// what is no constant at all. Semantic comparison gives `None`.
     Unevaluated,
     /// Not known, and nothing more to be said of it: a constant whose
     /// reading has been reported (ERR-9), or one nothing has said
@@ -737,7 +723,7 @@ pub enum ConstantValue {
 }
 
 /// An enum, as a constant's value names it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumOf {
     /// The position of its module in `Program::modules`, and its own in
     /// that module's declarations: what it is (UNIT-4).
@@ -748,7 +734,7 @@ pub struct EnumOf {
 }
 
 /// A member of an enum, as a constant: its enum and its name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MemberOf {
     /// The enum. `None` for `.member` read where its place's type was
     /// not yet known, which that place gives one.
@@ -1034,7 +1020,7 @@ impl Signature {
 }
 
 /// One parameter of a callable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Parameter {
     /// Its name.
     pub name: String,
@@ -1064,7 +1050,7 @@ pub struct Parameter {
 }
 
 /// The two packs (FN-8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pack {
     /// `...T`: the positional arguments the fixed parameters leave.
     Positional,

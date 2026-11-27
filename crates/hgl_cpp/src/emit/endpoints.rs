@@ -254,7 +254,7 @@ impl Family for Endpoints {
                     scope.acted = true;
                     let declared = &locals[*local];
                     let view = identifier(&declared.name);
-                    if declared.ty != value.ty {
+                    if !declared.ty.same_type(&value.ty) {
                         return Some(
                             emitter.missing(value.at, "a read of an input narrowed by a test"),
                         );
@@ -273,7 +273,9 @@ impl Family for Endpoints {
                         &identifier(&declared.name),
                     );
                     Some(match &declared.ty {
-                        Type::Nullable(payload) if **payload == value.ty => format!("(*{read})"),
+                        Type::Nullable(payload) if payload.same_type(&value.ty) => {
+                            format!("(*{read})")
+                        }
                         _ => read,
                     })
                 }

@@ -305,7 +305,12 @@ impl Emitter<'_> {
                 && given
                     .iter()
                     .find(|given| given.position == position)
-                    .is_none_or(|given| given.input.as_ref() == Some(&input.ty))
+                    .is_none_or(|given| {
+                        given
+                            .input
+                            .as_ref()
+                            .is_some_and(|ty| ty.same_type(&input.ty))
+                    })
         };
         let observes_failures = arguments.iter().enumerate().any(|(position, argument)| {
             reads_raw_input(position, argument) && watches_failure(&argument.value).is_some()

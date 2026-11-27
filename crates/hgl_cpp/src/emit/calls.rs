@@ -833,10 +833,19 @@ fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
             .map(|parameter| &parameter.ty)
             .collect();
         let gives = given(signature);
-        if read
-            .iter()
-            .any(|(other, result)| *other == takes && *result != gives)
-        {
+        if read.iter().any(|(other, result)| {
+            let same_inputs = other.len() == takes.len()
+                && other
+                    .iter()
+                    .zip(&takes)
+                    .all(|(left, right)| left.same_type(right));
+            let same_result = match (result, gives) {
+                (Some(left), Some(right)) => left.same_type(right),
+                (None, None) => true,
+                _ => false,
+            };
+            same_inputs && !same_result
+        }) {
             return true;
         }
         read.push((takes, gives));

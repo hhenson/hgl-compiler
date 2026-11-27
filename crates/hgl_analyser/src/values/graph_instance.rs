@@ -31,7 +31,7 @@ use crate::hir::{
 };
 use crate::program::{Program, Role};
 use crate::syntax::ungrouped;
-use crate::types::{Argument, Detail, Scalar, Signature, Type};
+use crate::types::{Argument, Constant, Detail, Scalar, Signature, Type};
 
 /// Source checks awaiting concrete types and categories in a graph instance.
 pub(crate) struct GraphDestinations {
@@ -280,7 +280,8 @@ impl GraphDestinations {
                 let expected = typer.locals[*local].ty.clone();
                 if self.list_assignments.contains(&value.at)
                     && let Type::List { element, size } = &expected
-                    && matches!(&value.ty, Type::List { size: given, .. } if given == size)
+                    && matches!(&value.ty, Type::List { size: given, .. }
+                        if Constant::same_optional_value(given.as_ref(), size.as_ref()))
                     && whole(element)
                     && let ExprKind::Sequence(entries) = &mut value.kind
                     && entries.iter().all(|entry| whole(&entry.ty))
@@ -521,7 +522,7 @@ impl GraphDestinations {
                             && matches!(**element, Type::Nullable(_))
                         {
                             entry.ty = (**element).clone();
-                        } else if whole(&entry.ty) && entry.ty != **element {
+                        } else if whole(&entry.ty) && !entry.ty.same_type(element) {
                             *entry =
                                 typer.fit(entry.clone(), element, "an element, as the first is,");
                         }
@@ -570,7 +571,7 @@ impl GraphDestinations {
     }
 
     fn fit(&self, typer: &mut Typer<'_>, value: &mut Expr, ty: &Type, place: &str, input: bool) {
-        if self.known(value) && value.ty != *ty {
+        if self.known(value) && !value.ty.same_type(ty) {
             *value = if input {
                 typer.fit_input(value.clone(), ty, place)
             } else {
@@ -643,7 +644,7 @@ impl GraphDestinations {
         if base_kind_pending {
             typer.check_index_base(received, base.at);
         }
-        if base_settled && received != &base.ty && index_collection(received) {
+        if base_settled && !received.same_type(&base.ty) && index_collection(received) {
             *base = typer.received(base.clone(), index_collection);
         }
         if base_kind_pending && whole(&index.ty) && matches!(base.ty, Type::Tuple(_)) {
@@ -652,7 +653,7 @@ impl GraphDestinations {
         if let Some((expected, place)) = index_operand(&base.ty)
             && whole(&index.ty)
             && (base_settled || self.known(index))
-            && index.ty != *expected
+            && !index.ty.same_type(expected)
         {
             *index = typer.fit(index.clone(), expected, place);
         }
@@ -685,13 +686,13 @@ impl GraphDestinations {
             if whole(&case.label.ty) && (selector_settled || self.known(&case.label)) {
                 case.label = typer.fit(case.label.clone(), &ty, "the selector");
                 if case.value.is_none()
-                    && case.label.ty == ty
+                    && case.label.ty.same_type(&ty)
                     && let ExprKind::EnumMember { member, .. } = case.label.kind
                 {
                     case.value = Some(hir::LabelValue::Member(member));
                 }
             }
-            if case.label.ty == ty
+            if case.label.ty.same_type(&ty)
                 && let Some(hir::LabelValue::Member(member)) = case.value
             {
                 // TYPE-7 gives each member of this enum a unique value.
@@ -770,7 +771,7 @@ impl GraphDestinations {
             {
                 let fitted = typer.fit(read, expected, &place);
                 resolve_contextual_tail(value, (fitted.kind, fitted.ty));
-            } else if completed && whole(&value.ty) && value.ty != *expected {
+            } else if completed && whole(&value.ty) && !value.ty.same_type(expected) {
                 // An earlier argument may decide a field's type only
                 // now, even when this sibling was already known.
                 *value = typer.fit(value.clone(), expected, &place);
@@ -962,7 +963,7 @@ fn covers_enum(typer: &Typer<'_>, selector: &Expr, cases: &[hir::Case]) -> bool 
         .iter()
         .filter_map(|case| match case.value {
             Some(hir::LabelValue::Member(member))
-                if case.label.ty == selector.ty && member < members =>
+                if case.label.ty.same_type(&selector.ty) && member < members =>
             {
                 Some(member)
             }

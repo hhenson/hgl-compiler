@@ -612,7 +612,7 @@ pub(crate) fn fit_operator_default(
 ) -> Expr {
     let null = matches!(value.kind, ExprKind::Literal(Value::Null));
     let expected = parameter_default_type(&parameter.ty, null);
-    if value.ty == *expected
+    if value.ty.same_type(expected)
         || names_parameter(expected)
         || !whole(expected)
         || names_parameter(&value.ty)

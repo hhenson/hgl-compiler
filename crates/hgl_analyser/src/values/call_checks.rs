@@ -404,7 +404,7 @@ impl<'a> Typer<'a> {
                     LocalKind::Var | LocalKind::State | LocalKind::Cache
                 )
             );
-            if assignable && whole(&taken) && whole(held) && *held != taken {
+            if assignable && whole(&taken) && whole(held) && !held.same_type(&taken) {
                 reports.push(error(
                     Category::Type,
                     codes::TYPE_MISMATCH,

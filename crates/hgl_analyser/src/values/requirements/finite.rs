@@ -183,9 +183,7 @@ impl FiniteSlot {
     fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Parameter(a), Self::Parameter(b)) => a == b,
-            (Self::Member(a, k), Self::Member(b, j)) => {
-                a == b && k.value.same(&j.value) == Some(true)
-            }
+            (Self::Member(a, k), Self::Member(b, j)) => a == b && k.same_value(j) == Some(true),
             _ => false,
         }
     }
@@ -214,7 +212,7 @@ impl FiniteDomain {
                         .any(|arg| equal_members(arg, &choice) == Some(true))
                     && !bound.iter().any(|arg| {
                         matches!(arg, Argument::Constant(other)
-                        if other.value.same(&value.value) == Some(true))
+                        if other.same_value(value) == Some(true))
                     })
                 {
                     bound.push(choice);

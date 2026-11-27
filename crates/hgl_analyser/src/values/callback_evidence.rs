@@ -158,7 +158,12 @@ impl CallbackEvidence {
                 .map(|generic| generic.at)
                 .collect();
             let mut record = |result: Type| {
-                if !open(&result) && !evidence.results.contains(&result) {
+                if !open(&result)
+                    && !evidence
+                        .results
+                        .iter()
+                        .any(|other| other.same_type(&result))
+                {
                     evidence.results.push(result);
                 }
             };
@@ -200,10 +205,10 @@ impl CallbackEvidence {
                             sides.next().and_then(|side| written_at(&side)),
                             sides.next().and_then(|side| written_at(&side)),
                         ) {
-                            if template.result.as_ref() == Some(left) {
+                            if Type::same_optional(template.result.as_ref(), Some(left)) {
                                 record(substitute_within(right, &partial));
                             }
-                            if template.result.as_ref() == Some(right) {
+                            if Type::same_optional(template.result.as_ref(), Some(right)) {
                                 record(substitute_within(left, &partial));
                             }
                             let left = substitute_within(left, &solved);
@@ -680,7 +685,7 @@ fn shared_bindings_agree(readings: &[Option<&MemberReading<'_>>]) -> bool {
 fn same_argument(one: &Argument, two: &Argument) -> Option<bool> {
     match (one, two) {
         (Argument::Type(one), Argument::Type(two)) => same_type(one, two),
-        (Argument::Constant(one), Argument::Constant(two)) => one.value.same(&two.value),
+        (Argument::Constant(one), Argument::Constant(two)) => one.same_value(two),
         _ => Some(one == two),
     }
 }

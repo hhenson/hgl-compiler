@@ -208,7 +208,7 @@ fn common_evidence(
     let mut entries = entries.map(|entry| bracket_evidence(&entry, pattern, actual));
     let first = entries.next().unwrap_or_else(|| Some(actual.clone()))?;
     entries
-        .all(|entry| entry.as_ref() == Some(&first))
+        .all(|entry| Type::same_optional(entry.as_ref(), Some(&first)))
         .then_some(first)
 }
 

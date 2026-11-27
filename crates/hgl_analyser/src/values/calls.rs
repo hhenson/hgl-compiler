@@ -1348,7 +1348,7 @@ impl<'a> Typer<'a> {
             *callee = Callee::Unread;
         }
         let common = other
-            .filter(|result| result == &ty)
+            .filter(|result| result.same_type(&ty))
             .unwrap_or(Type::Unknown);
         (kind, common)
     }
@@ -2340,7 +2340,7 @@ impl<'a> Typer<'a> {
             }
             if !matches!(ty, Type::Function(_))
                 && !self.lifted_window(&ty, listed, &argument.value, Takes::Parameters)
-                && argument.value.ty != ty
+                && !argument.value.ty.same_type(&ty)
             {
                 let place = format!("the parameter `{}`", parameter.name);
                 argument.value = self.fit_input(argument.value.clone(), &ty, &place);

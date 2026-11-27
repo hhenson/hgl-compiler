@@ -85,7 +85,7 @@ impl DefaultExpr {
             || matches!(
                 self.value.kind,
                 ExprKind::Sequence(_) | ExprKind::Tuple(_) | ExprKind::Pairs(_)
-            ) && self.value.ty != *expected
+            ) && !self.value.ty.same_type(expected)
                 && !expected.any_part(
                     &|ty| {
                         matches!(
@@ -1790,7 +1790,7 @@ pub enum Value {
 /// | `@09:30` | | yes | | | `time` |
 /// | `@09:30[Europe/London]` | | yes | | yes | `zoned_time` |
 /// | `@[Europe/London]` | | | | yes | `timezone` |
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Temporal {
     /// The calendar date, where one is written.
     pub date: Option<CalendarDate>,
@@ -1804,7 +1804,7 @@ pub struct Temporal {
 }
 
 /// A date of the Gregorian calendar (TYPE-2: years 1 to 9999).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CalendarDate {
     /// The year, 1 to 9999.
     pub year: u16,
@@ -1815,7 +1815,7 @@ pub struct CalendarDate {
 }
 
 /// A time of day, to the microsecond (TYPE-2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClockTime {
     /// The hour, 0 to 23.
     pub hour: u8,
@@ -1828,7 +1828,7 @@ pub struct ClockTime {
 }
 
 /// An operator with one operand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOperator {
     /// `-`.
     Negate,
@@ -1837,7 +1837,7 @@ pub enum UnaryOperator {
 }
 
 /// An operator with two operands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOperator {
     /// `+`.
     Add,

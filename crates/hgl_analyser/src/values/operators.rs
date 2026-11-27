@@ -2543,7 +2543,7 @@ fn with_operator_packs(
 pub(super) fn dictionary_fallback_type(argument: &Given, expected: &Type) -> bool {
     let actual = argument.ty();
     argument.by_place
-        || actual == expected
+        || actual.same_type(expected)
         || !whole(expected)
         || !whole(actual)
         || names_parameter(expected)

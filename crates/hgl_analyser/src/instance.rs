@@ -755,7 +755,7 @@ impl Program {
             // whether it was written as a literal or a generic constant.
             let actual = instance.project(&argument.value.ty);
             let expected = substitute_within(&parameter.ty, &map);
-            if actual != expected {
+            if !actual.same_type(&expected) {
                 let mut value = argument.value.clone();
                 value.ty = actual;
                 argument.value = crate::values::fit_required_configuration(

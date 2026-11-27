@@ -1132,14 +1132,15 @@ impl<'a> Typer<'a> {
         // other argument is given to one type, and they give one
         // result.
         let first = &selected[0];
-        let alike = selected.iter().zip(&taken).all(|(chosen, places)| {
-            chosen.taken.result == first.taken.result
-                && places
-                    .iter()
-                    .zip(&taken[0])
-                    .zip(&literal)
-                    .all(|((place, other), literal)| *literal || place == other)
-        });
+        let alike =
+            selected.iter().zip(&taken).all(|(chosen, places)| {
+                Type::same_optional(chosen.taken.result.as_ref(), first.taken.result.as_ref())
+                    && places.iter().zip(&taken[0]).zip(&literal).all(
+                        |((place, other), literal)| {
+                            *literal || Type::same_optional(place.as_ref(), other.as_ref())
+                        },
+                    )
+            });
         if !alike || !literal.contains(&true) {
             return;
         }
@@ -1521,7 +1522,7 @@ impl<'a> Typer<'a> {
         let result_fits = self.candidate_result_admits(wanted.place, signature.result.as_ref());
         // The operator's own requirement of its result.
         let among = match (&wanted.among, &signature.result) {
-            (Some(among), Some(result)) => among.contains(result),
+            (Some(among), Some(result)) => among.iter().any(|ty| ty.same_type(result)),
             (Some(_), None) => false,
             (None, _) => true,
         };
@@ -2336,8 +2337,7 @@ impl<'a> Typer<'a> {
                     // supply just those members, without a pack's arity.
                     let known = |pack, _: &str, key: &Constant| {
                         members.iter().find_map(|((at, given), ty)| {
-                            (*at == pack && given.value.same(&key.value) == Some(true))
-                                .then(|| ty.clone())
+                            (*at == pack && given.same_value(key) == Some(true)).then(|| ty.clone())
                         })
                     };
                     let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
@@ -2620,7 +2620,7 @@ impl<'a> Typer<'a> {
                     if !given.by_function {
                         given.retried = given.by_place
                             && parameter_type(&chosen.taken, &chosen.type_packs, place)
-                                .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
+                                .is_some_and(|ty| !ty.same_type(given.ty()) || !whole(given.ty()));
                     }
                 }
             }
@@ -2691,7 +2691,7 @@ impl<'a> Typer<'a> {
             return value;
         }
         if let Some(expected) = call.place.as_ref().map(in_place)
-            && expected != value.ty
+            && !expected.same_type(&value.ty)
         {
             return self.fit(
                 value,
@@ -3923,7 +3923,7 @@ fn enum_conversion_destination<'a>(one: &'a Type, two: &'a Type) -> Option<&'a T
         (destination, Type::Result { value, error })
         | (Type::Result { value, error }, destination)
             if **error == Type::Error
-                && destination == value.as_ref()
+                && destination.same_type(value)
                 && matches!(
                     destination,
                     Type::Named {
@@ -4561,7 +4561,7 @@ fn specificity(left: RankingType<'_>, right: RankingType<'_>) -> Specific {
         }
         // Two types with no variable in them: one type, where both
         // candidates admit the call.
-        (left, right) if left == right => Specific::Same,
+        (left, right) if left.same_type(right) => Specific::Same,
         // Of another shape. GEN-5: "Concrete types outrank variables".
         (left, right) => match (names_parameter(left), names_parameter(right)) {
             (false, true) => Specific::More,
@@ -4638,8 +4638,8 @@ fn callback_match(
                     .zip(widened.ordinary_parameters())
                     .zip(written.ordinary_parameters())
                     .all(|((plain, widened), written)| {
-                        plain.ty() == widened.ty()
-                            || matches!(widened.ty(), Type::Nullable(inner) if inner.as_ref() == plain.ty())
+                        plain.ty().same_type(widened.ty())
+                            || matches!(widened.ty(), Type::Nullable(inner) if inner.same_type(plain.ty()))
                                 && callback_input_from_arguments(chosen, given, written.ty())
                     })
     };
@@ -4659,7 +4659,7 @@ fn callback_input_from_arguments(chosen: &Chosen, given: &[Given], input: &Type)
         && given.iter().zip(&chosen.bound).any(|(argument, &place)| {
             !argument.by_function
                 && parameter_type(&chosen.taken, &chosen.type_packs, place)
-                    .is_some_and(|parameter| parameter == argument.ty())
+                    .is_some_and(|parameter| parameter.same_type(argument.ty()))
                 && parameter_type(chosen.declared, &chosen.type_packs, place)
                     .is_some_and(|parameter| parameter.any_part(&|part| part == input, &|_| false))
         })

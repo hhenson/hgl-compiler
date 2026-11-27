@@ -57,7 +57,7 @@ impl Family for Sources {
                     .temporal
                     .as_ref()
                     .and_then(|context| context.mixed_source_delta.as_ref())
-                    .map(|delta| usize::from(value.ty == *delta));
+                    .map(|delta| usize::from(value.ty.same_type(delta)));
                 let mut value = emitter.expression(scope, value);
                 if let Some(alternative) = alternative {
                     let payload_type = names::source_payload_type();
@@ -112,19 +112,20 @@ impl Emitter<'_> {
         let mut yielded: Vec<Type> = Vec::new();
         hgl_analyser::hir::walk_statement_nodes(&body.statements, &mut |node| {
             if let hgl_analyser::hir::Node::Statement(Stmt::Yield { value, .. }) = node
-                && !yielded.contains(&value.ty)
+                && !yielded.iter().any(|ty| ty.same_type(&value.ty))
             {
                 yielded.push(value.ty.clone());
             }
         });
         let delta = Type::delta(result.clone());
         let given = match yielded.as_slice() {
-            [only] if *only == delta => &delta,
+            [only] if only.same_type(&delta) => &delta,
             // "A result of `atomic<V>` takes a V", which is its delta.
             _ if matches!(result, Type::Atomic(_)) => &delta,
             _ => result,
         };
-        let mixed = delta != *result && yielded.contains(&delta) && yielded.len() > 1;
+        let mixed =
+            delta != *result && yielded.iter().any(|ty| ty.same_type(&delta)) && yielded.len() > 1;
         let payload = if mixed || given == result {
             self.payload_type(result, at)
         } else {

@@ -347,7 +347,7 @@ fn witness_shape(signature: &Signature) -> bool {
 fn common_output<'a>(left: &'a Signature, right: &'a Signature) -> Option<Option<&'a Type>> {
     match (&left.result, &right.result) {
         (None, None) => Some(None),
-        (Some(a), Some(b)) if a == b && whole(a) && !open(a) && !names_parameter(a) => {
+        (Some(a), Some(b)) if a.same_type(b) && whole(a) && !open(a) && !names_parameter(a) => {
             Some(Some(a))
         }
         _ => None,
@@ -391,7 +391,7 @@ fn witness_type(
         (Type::Parameter { .. }, ty) | (ty, Type::Parameter { .. }) if concrete(ty) => {
             Some(ty.clone())
         }
-        (left, right) if left == right && concrete(left) => Some(left.clone()),
+        (left, right) if left.same_type(right) && concrete(left) => Some(left.clone()),
         _ => None,
     }
 }

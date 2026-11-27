@@ -574,7 +574,7 @@ impl Emitter<'_> {
 /// out (`Type::omission_removed`) is no nullable, and is not widened to.
 pub(super) fn widened_from<'t>(given: &Type, expected: &'t Type) -> Option<&'t Type> {
     match expected.omission_removed() {
-        Type::Nullable(inner) if !matches!(given, Type::Nullable(_)) && **inner == *given => {
+        Type::Nullable(inner) if !matches!(given, Type::Nullable(_)) && inner.same_type(given) => {
             Some(inner)
         }
         _ => None,

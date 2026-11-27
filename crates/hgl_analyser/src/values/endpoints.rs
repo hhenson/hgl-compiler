@@ -569,7 +569,7 @@ impl<'a> Typer<'a> {
         // A child that holds another type is no endpoint of the one
         // written either (EXPR-5).
         if let ExprKind::ChildEndpoint { child, .. } = kind {
-            if whole(held) && whole(&child.ty) && child.ty != *held {
+            if whole(held) && whole(&child.ty) && !child.ty.same_type(held) {
                 self.diagnostics.emit(error(
                     Category::Type,
                     codes::TYPE_MISMATCH,
@@ -586,7 +586,7 @@ impl<'a> Typer<'a> {
         }
         if let ExprKind::PackedEndpoint { inputs, .. } = kind {
             for input in inputs {
-                if whole(held) && whole(&input.ty) && input.ty != *held {
+                if whole(held) && whole(&input.ty) && !input.ty.same_type(held) {
                     self.diagnostics.emit(error(
                         Category::Type,
                         codes::TYPE_MISMATCH,
@@ -614,7 +614,7 @@ impl<'a> Typer<'a> {
         let other: Vec<String> = inputs
             .iter()
             .map(|input| &self.locals[*input])
-            .filter(|input| whole(held) && whole(&input.ty) && input.ty != *held)
+            .filter(|input| whole(held) && whole(&input.ty) && !input.ty.same_type(held))
             .map(|input| format!("`{}` holds `{}`", input.name, input.ty))
             .collect();
         if !other.is_empty() {

@@ -322,7 +322,7 @@ impl Family for Keyed {
     ) -> Option<String> {
         schema(emitter, ty)?;
         let written = emitter.expression(scope, value);
-        if value.ty != *ty {
+        if !value.ty.same_type(ty) {
             return Some(written);
         }
         let whole = cpp_type(emitter.program, ty)?;

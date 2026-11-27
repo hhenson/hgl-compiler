@@ -94,7 +94,7 @@ impl Family for Nullables {
             // ERR-12: a captured connection keeps its declared schema
             // on the port even where the analyser refines a read.
             if let Type::Nullable(payload) = &declared.ty
-                && **payload == value.ty
+                && payload.same_type(&value.ty)
             {
                 let input = self.schema(emitter, &declared.ty)?;
                 let output = emitter.temporal_schema(&value.ty, value.at)?;

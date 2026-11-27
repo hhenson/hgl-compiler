@@ -510,7 +510,7 @@ impl Family for Lists {
         let cell = emitter.expression(scope, value);
         let library = super::names::testing("");
         let library = library.trim_end_matches("::");
-        if value.ty == *ty {
+        if value.ty.same_type(ty) {
             Some(format!(
                 "{library}::Cell<{written}>{{{library}::Whole<{written}>{{{cell}}}}}"
             ))

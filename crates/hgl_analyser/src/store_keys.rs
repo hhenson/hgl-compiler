@@ -79,7 +79,7 @@ pub(crate) fn key_types(
             first.insert(found.key.as_str(), found);
             continue;
         };
-        if earlier.ty == found.ty {
+        if earlier.ty.same_type(&found.ty) {
             continue;
         }
         let at = if found.at == earlier.at {

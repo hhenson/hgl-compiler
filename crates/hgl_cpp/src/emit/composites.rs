@@ -210,7 +210,7 @@ impl Emitter<'_> {
         left: &Expr,
         right: &Expr,
     ) -> Option<String> {
-        let nullable_of = |nullable: &Type, other: &Type| matches!(nullable, Type::Nullable(payload) if **payload == *other || *nullable == *other);
+        let nullable_of = |nullable: &Type, other: &Type| matches!(nullable, Type::Nullable(payload) if payload.same_type(other) || nullable.same_type(other));
         if !nullable_of(&left.ty, &right.ty) && !nullable_of(&right.ty, &left.ty) {
             return None;
         }

@@ -338,7 +338,7 @@ fn parameter_types<'a>(
                     (Some(Argument::Type(left)), Argument::Type(right))
                         if same_type(left, right) == Some(true) => {}
                     (Some(Argument::Constant(left)), Argument::Constant(right))
-                        if left.value.same(&right.value) == Some(true) => {}
+                        if left.same_value(right) == Some(true) => {}
                     (Some(Argument::NoResult), Argument::NoResult) => {}
                     (None, _) => *known = Some(next),
                     _ => return None,
@@ -505,7 +505,7 @@ fn mismatched_result(expected: &Type, actual: &Type) -> bool {
     // A repeated candidate variable is a known relationship even before its
     // type is chosen: `X` and a wrapper around that same `X` cannot agree.
     if let Type::Parameter { .. } = expected
-        && wrapper_payload(actual) == Some(expected)
+        && Type::same_optional(wrapper_payload(actual), Some(expected))
     {
         return true;
     }

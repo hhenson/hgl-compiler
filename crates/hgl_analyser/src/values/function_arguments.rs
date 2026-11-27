@@ -207,7 +207,10 @@ impl<'a> Typer<'a> {
                     .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
                     .collect();
                 let shape = substitute_within(&substitute_within(result, &map), &placeholders);
-                if !open(&shape) && shape != *result && !shapes.contains(&shape) {
+                if !open(&shape)
+                    && !shape.same_type(result)
+                    && !shapes.iter().any(|other: &Type| other.same_type(&shape))
+                {
                     shapes.push(shape);
                 }
             }
@@ -335,7 +338,7 @@ impl<'a> Typer<'a> {
         let result_shapes: Vec<_> = given.iter().flat_map(|read| &read.result.shapes).collect();
         let constrained = inputs
             .requested_result(node, template, &result_shapes)
-            .filter(|result| template.result.as_ref() != Some(*result))
+            .filter(|result| !Type::same_optional(template.result.as_ref(), Some(*result)))
             .map(|result| {
                 let mut template = template.clone();
                 template.result = Some(result.clone());
@@ -2063,7 +2066,7 @@ fn reflected_operands<'t>(
         .map(|((key, value), ty)| {
             let type_evidence = ty.is_some();
             let ty = ty.unwrap_or(&value.ty);
-            projected |= !type_evidence || *ty != value.ty;
+            projected |= !type_evidence || !ty.same_type(&value.ty);
             let mut argument = callback_operand(0, node, value.at, ty.clone());
             argument.key = key.clone();
             argument.type_evidence = type_evidence;

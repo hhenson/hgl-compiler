@@ -25,7 +25,7 @@ use crate::hir::{
     walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
-use crate::types::{Argument, Detail, Type};
+use crate::types::{Argument, Constant, Detail, Type};
 use crate::{codes, error};
 
 /// The immutable values available when classifying a direct anonymous call.
@@ -1202,7 +1202,9 @@ pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
                 element: inferred,
                 size: inferred_size,
             },
-        ) if *size == inferred_size => fill_type(current, *inferred),
+        ) if Constant::same_optional_value(size.as_ref(), inferred_size.as_ref()) => {
+            fill_type(current, *inferred)
+        }
         (Type::Tuple(current), Type::Tuple(inferred)) if current.len() == inferred.len() => {
             let mut changed = false;
             for (current, inferred) in current.iter_mut().zip(inferred) {

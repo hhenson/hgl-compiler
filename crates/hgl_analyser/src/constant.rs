@@ -542,7 +542,7 @@ fn fits(ty: &Type, expected: &Type) -> bool {
             // A list written out has no size in its type: its length is
             // held to the size its place expects by `fit`.
             let sizes = match (size, other_size) {
-                (Some(size), Some(other_size)) => size.value.same(&other_size.value) != Some(false),
+                (Some(size), Some(other_size)) => size.same_value(other_size) != Some(false),
                 _ => true,
             };
             sizes && fits(element, other)
@@ -570,7 +570,7 @@ fn fits(ty: &Type, expected: &Type) -> bool {
         // given a value: here it is not.
         (Type::Parameter { .. } | Type::PackMember { .. }, _)
         | (_, Type::Parameter { .. } | Type::PackMember { .. }) => true,
-        (left, right) => left == right,
+        (left, right) => left.same_type(right),
     }
 }
 
@@ -1454,7 +1454,7 @@ fn sequence(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result
         let first = types.first()?.clone()?;
         types
             .iter()
-            .all(|ty| ty.as_ref() == Some(&first))
+            .all(|ty| Type::same_optional(ty.as_ref(), Some(&first)))
             .then_some(first)
     });
     Ok(Typed {
@@ -2691,7 +2691,15 @@ impl ConstantValue {
                     at: other,
                     bindings: args,
                 },
-            ) => (at == other && bindings == args).then_some(true),
+            ) => (at == other
+                && bindings.len() == args.len()
+                && bindings
+                    .iter()
+                    .zip(args)
+                    .all(|((at, bound), (other_at, other))| {
+                        at == other_at && bound.same_argument(other)
+                    }))
+            .then_some(true),
             (V::InstanceTypeQuery { .. }, _) | (_, V::InstanceTypeQuery { .. }) => None,
             (V::Parameter { at, .. }, V::Parameter { at: other, .. }) => {
                 (at == other).then_some(true)
@@ -2764,7 +2772,7 @@ impl ConstantValue {
                 (Some(left), Some(right)) => Some(left == right),
                 // TYPE-18: the same symbolic type in a generic body remains
                 // the same for every instance, even before it has an identity.
-                _ if left == right
+                _ if left.same_type(right)
                     && !left.any_part(&|part| matches!(part, Type::Unknown), &|_| false) =>
                 {
                     Some(true)

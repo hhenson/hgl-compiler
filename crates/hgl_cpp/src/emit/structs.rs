@@ -397,7 +397,7 @@ impl Family for Structs {
             }
         };
         let made = emitter.expression(scope, value);
-        if value.ty == *ty {
+        if value.ty.same_type(ty) {
             Some(format!(
                 "{testing}::Cell<{written}>{{{testing}::Whole<{written}>{{{made}}}}}"
             ))
@@ -421,7 +421,7 @@ impl Family for Structs {
                 let Type::Atomic(payload) = &declared.ty else {
                     return None;
                 };
-                if **payload != value.ty {
+                if !payload.same_type(&value.ty) {
                     return None;
                 }
                 let declared = declared.ty.clone();

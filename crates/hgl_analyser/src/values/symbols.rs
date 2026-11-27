@@ -446,7 +446,10 @@ impl<'a> Typer<'a> {
             if admitted.is_empty() {
                 continue;
             }
-            if common.as_ref().is_some_and(|old| old != &ty) {
+            if common
+                .as_ref()
+                .is_some_and(|old: &Type| !old.same_type(&ty))
+            {
                 return None;
             }
             common = Some(ty);

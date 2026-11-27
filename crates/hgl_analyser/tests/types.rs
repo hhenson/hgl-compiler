@@ -640,27 +640,26 @@ fn a_generic_application_is_known_by_its_arguments() {
         other => panic!("{name} is {other:?}"),
     };
     let flags = types("flags");
-    assert_ne!(flags[0], flags[1]);
-    assert_eq!(flags[0], flags[2]);
+    assert!(!flags[0].same_type(&flags[1]));
+    assert!(flags[0].same_type(&flags[2]));
     let labels = types("labels");
-    assert_ne!(labels[0], labels[1]);
-    assert_eq!(labels[0], labels[2]);
+    assert!(!labels[0].same_type(&labels[1]));
+    assert!(labels[0].same_type(&labels[2]));
     let spaced = types("spaced");
-    assert_ne!(spaced[0], spaced[1]);
-    assert_eq!(spaced[0], spaced[2]);
+    assert!(!spaced[0].same_type(&spaced[1]));
+    assert!(spaced[0].same_type(&spaced[2]));
     assert_eq!(spaced[1].to_string(), "Label<\"bid  ask\">");
-    assert_eq!(spaced[3], spaced[4]);
+    assert!(spaced[3].same_type(&spaced[4]));
     assert_eq!(spaced[4].to_string(), "Sized<2 * 3>");
-    // A constant is shown as it is written, and compared by its value
-    // alone (`ConstantValue::same`). A call has none known here: it is
-    // the same as nothing, however alike two are written.
+    // Keep the expression's spelling for diagnostics. The unresolved
+    // calls supply no value with which to establish type identity.
     assert_eq!(spaced[5].to_string(), "Sized<limit( 1 )>");
-    assert_ne!(spaced[5], spaced[6]);
+    assert!(!spaced[5].same_type(&spaced[6]));
     let sizes = types("sizes");
-    assert_eq!(sizes[0], sizes[1]);
-    assert_ne!(sizes[0], sizes[2]);
-    assert_ne!(sizes[3], sizes[4]);
-    assert_ne!(sizes[3], sizes[5]);
+    assert!(sizes[0].same_type(&sizes[1]));
+    assert!(!sizes[0].same_type(&sizes[2]));
+    assert!(!sizes[3].same_type(&sizes[4]));
+    assert!(!sizes[3].same_type(&sizes[5]));
 }
 
 // ---- Ordinary value types ----

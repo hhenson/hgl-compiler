@@ -164,10 +164,10 @@ fn deferred_map_splits_dictionary(
         Type::Dict { value, .. } | Type::List { element: value, .. }
             if parameters
                 .iter()
-                .any(|parameter| parameter.ty() == value.as_ref())
+                .any(|parameter| parameter.ty().same_type(value))
                 && parameters
                     .iter()
-                    .all(|parameter| parameter.ty() != &argument.value.ty) =>
+                    .all(|parameter| !parameter.ty().same_type(&argument.value.ty)) =>
         {
             Some(matches!(argument.value.ty, Type::Dict { .. }))
         }
@@ -323,10 +323,10 @@ pub fn keyed_map_call(
                     KeyedMapInput::Configuration(source),
                     Some(arg.value.clone()),
                 )
-            } else if &arg.value.ty == ty {
+            } else if arg.value.ty.same_type(ty) {
                 (KeyedMapInput::Whole(source), None)
             } else if matches!(&arg.value.ty, Type::Dict { key: actual_key, value: member }
-                if actual_key == key && member.as_ref() == ty)
+                if actual_key.same_type(key) && member.same_type(ty))
             {
                 splits += 1;
                 (KeyedMapInput::Split(source), None)
@@ -525,7 +525,7 @@ fn field_arguments(
     let mut pending = vec![structure.clone()];
     let mut visited: HashMap<_, Vec<Vec<_>>> = HashMap::new();
     let mut budget = hgl_analyser::INSTANCES;
-    let mut found = None;
+    let mut found: Option<Vec<GenericArgument>> = None;
     while let Some(current) = pending.pop() {
         let Type::Named {
             module,
@@ -537,10 +537,13 @@ fn field_arguments(
             continue;
         };
         if (module, declaration) == (field.module, field.declaration) {
-            if found
-                .as_ref()
-                .is_some_and(|previous| previous != &arguments)
-            {
+            if found.as_ref().is_some_and(|previous| {
+                previous.len() != arguments.len()
+                    || previous
+                        .iter()
+                        .zip(&arguments)
+                        .any(|(old, new)| !old.same_argument(new))
+            }) {
                 return None;
             }
             found = Some(arguments);

@@ -287,7 +287,7 @@ fn common_projection(types: impl Iterator<Item = Type>) -> Option<Type> {
 
 /// Keep the shape and slots on which two possible result types agree.
 fn common_type(mut left: Type, right: Type) -> Type {
-    if left == right {
+    if left.same_type(&right) {
         return left;
     }
     let merge = |a: &mut Type, b| *a = common_type(std::mem::replace(a, Type::Unknown), b);
@@ -306,7 +306,7 @@ fn common_type(mut left: Type, right: Type) -> Type {
                 element: b,
                 size: y,
             },
-        ) if *x == y => merge(a, *b),
+        ) if Constant::same_optional_value(x.as_ref(), y.as_ref()) => merge(a, *b),
         (Type::Set(a), Type::Set(b))
         | (Type::Nullable(a), Type::Nullable(b))
         | (Type::Atomic(a), Type::Atomic(b))
@@ -334,13 +334,15 @@ fn common_type(mut left: Type, right: Type) -> Type {
             for (a, b) in x.iter_mut().zip(y) {
                 match (a, b) {
                     (Argument::Type(a), Argument::Type(b)) => merge(a, b),
-                    (Argument::Constant(a), Argument::Constant(b)) if *a != b => {
-                        *a = Constant {
-                            text: "_".into(),
-                            value: ConstantValue::Unknown,
-                        };
+                    (Argument::Constant(a), Argument::Constant(b)) => {
+                        if a.same_value(&b) != Some(true) {
+                            *a = Constant {
+                                text: "_".into(),
+                                value: ConstantValue::Unknown,
+                            };
+                        }
                     }
-                    (a, b) if *a == b => {}
+                    (Argument::NoResult, Argument::NoResult) => {}
                     _ => return Type::Unknown,
                 }
             }
