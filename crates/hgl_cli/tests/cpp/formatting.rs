@@ -252,6 +252,20 @@ fn module_helper_fallback_preserves_legacy_cross_module_source_folds() {
     }
 }
 
+/// FMT-3, UNIT-13: the older const-input reader's zero-argument
+/// sole-return helpers keep their accepted inputs and branch behavior.
+#[test]
+fn module_helper_extension_preserves_legacy_const_input_reads() {
+    let root = scratch("legacy-const-input-helper");
+    let file = write(
+        &root,
+        "legacy.hgl",
+        "module legacy.const_input\nconst fn pattern() -> str => if true { \"{}\" } else { convert<str>([1, 2]) }\nconst P: str = pattern()\nconst fn show(const p: str, value: i64) -> str => format(p, value)\ntest t { assert show(P, 1) == \"1\" }\n",
+    );
+    let emitted = emit_format_program(&file, &root.join("cpp"));
+    assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+}
+
 /// FMT-3/4/5 and UNIT-13: helper arguments and immutable locals yield
 /// compiled patterns in direct calls, concrete instances and lifted calls.
 #[test]
@@ -261,7 +275,7 @@ fn module_helper_patterns_run_on_the_sdk() {
         return;
     }
     let root = scratch("module-helper-patterns");
-    let file = write(
+    write(
         &root,
         "helpers.hgl",
         r#"module module_helper_patterns
@@ -272,6 +286,8 @@ const fn relay(s: str) -> str => pattern(pattern(s))
 const P: str = relay("{:.1f}")
 const Q: str = pattern("{:x}")
 const R: str = pattern("{") + pattern("}")
+const fn legacy_pattern() -> str => if true { "{}" } else { convert<str>([1, 2]) }
+const LEGACY: str = legacy_pattern()
 const fn direct(value: f64) -> str => format(P, value)
 const fn forwarded<T>(const p: str, value: T) -> str => format(p, value)
 fn lifted(value: f64) -> str => format(P, value)
@@ -281,18 +297,34 @@ test direct_patterns {
     assert format(R, [1, 2]) == "[1, 2]"
     assert forwarded(P, 1.5) == "1.5"
     assert forwarded(Q, 255) == "ff"
+    assert forwarded(LEGACY, 1.5) == "1.5"
 }
 test lifted_pattern { assert eval lifted(value: [1.5]) == ["1.5"] }
 "#,
     );
-    let report = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    write(
+        &root,
+        "a.hgl",
+        "module q695.a\nuse q695.z::{inner}\nexport const fn pattern(text: str) -> str => inner(text)\n",
+    );
+    write(
+        &root,
+        "b.hgl",
+        "module q695.b\nuse q695.a::{pattern}\nconst P: str = pattern(\"{:.1f}\")\nconst fn show(value: f64) -> str => format(P, value)\ntest later_body { assert show(1.5) == \"1.5\" }\n",
+    );
+    write(
+        &root,
+        "z.hgl",
+        "module q695.z\nexport const fn inner(text: str) -> str => text\n",
+    );
+    let report = hgl_in(&["test", &argument(&root), "--target", "cpp"], &[], &[]);
     assert!(
         report.status.success(),
         "{}{}",
         text(&report.stdout),
         text(&report.stderr)
     );
-    assert!(text(&report.stdout).contains("2 passed"));
+    assert!(text(&report.stdout).contains("3 passed"));
 }
 
 /// FN-1 and FMT-3: equivalent option values share a compiled body.

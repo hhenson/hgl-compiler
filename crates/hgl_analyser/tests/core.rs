@@ -1183,6 +1183,37 @@ fn formatting_helper_input_proofs_do_not_leak_to_another_input() {
     );
 }
 
+/// FMT-4, UNIT-13: an earlier helper may call a later module's helper.
+/// Defer the pattern until every typed body exists instead of indexing it early.
+#[test]
+fn formatting_helper_patterns_wait_for_later_module_bodies() {
+    let checked = check(&[
+        (
+            "a.hgl",
+            "module ordering.a\nuse ordering.z::{inner}\nexport const fn pattern(text: str) -> str => inner(text)\n",
+        ),
+        (
+            "b.hgl",
+            "module ordering.b\nuse ordering.a::{pattern}\nconst P: str = pattern(\"{:x}\")\nconst fn show(value: f64) -> str => format(P, value)\n",
+        ),
+        (
+            "z.hgl",
+            "module ordering.z\nexport const fn inner(text: str) -> str => text\n",
+        ),
+    ]);
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|f| (f.code.as_str(), f.rule))
+            .collect::<Vec<_>>(),
+        [("type/format.specifier", "FMT-4")],
+        "{}",
+        checked.report
+    );
+    assert!(checked.findings[0].at.starts_with("b.hgl:4:"));
+}
+
 /// FMT-5: an implicit conversion reaches the same instance and
 /// dependency checks as a written call (GEN-7, UNIT-13).
 #[test]

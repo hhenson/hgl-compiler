@@ -900,18 +900,19 @@ impl<'a> Reader<'a> {
                 form: Form::Named,
                 ..
             } if self.read_string_helpers && expression.ty == Type::Scalar(Scalar::Str) => {
-                // UNIT-13: only a module constant enables ordinary helper
-                // arguments and local declarations. FN-1's other const reads
-                // retain the existing zero-argument, sole-return boundary.
-                if self.reading.iter().any(|&((module, declaration), field)| {
+                // UNIT-13: extend only a module constant's helper, retaining
+                // the established zero-argument sole-return read first.
+                let module_helper = self.reading.iter().any(|&((module, declaration), field)| {
                     field.is_none()
                         && self.program.modules[module].declarations[declaration].kind
                             == crate::DeclarationKind::Constant
-                }) {
-                    return self.string_helper(callee, arguments, next, generics);
-                }
+                });
                 if !arguments.is_empty() {
-                    return Err(Unread);
+                    return if module_helper {
+                        self.string_helper(callee, arguments, next, generics)
+                    } else {
+                        Err(Unread)
+                    };
                 }
                 // Match the existing format reader's single-return string
                 // helpers. A general compile-time call is tracked separately.
@@ -940,7 +941,11 @@ impl<'a> Reader<'a> {
                     },
                 ] = body.statements.as_slice()
                 else {
-                    return Err(Unread);
+                    return if module_helper {
+                        self.string_helper(callee, arguments, next, generics)
+                    } else {
+                        Err(Unread)
+                    };
                 };
                 return self.read_declaration((module, declaration), None, returned, next, &[]);
             }
@@ -1253,7 +1258,11 @@ impl<'a> Reader<'a> {
         };
         let (body, value, locals) = match &owner.details[declaration] {
             Detail::Constant(ty) if !opaque_type(ty) => {
-                let value = owner.constants[declaration].as_ref().ok_or(Unread)?;
+                let value = owner
+                    .constants
+                    .get(declaration)
+                    .and_then(Option::as_ref)
+                    .ok_or(Unread)?;
                 (None, Some(&value.value), value.locals.as_slice())
             }
             Detail::Callable(signature)
@@ -1267,7 +1276,11 @@ impl<'a> Reader<'a> {
                             && !opaque_type(&p.ty)
                     }) =>
             {
-                let body = owner.bodies[declaration].as_ref().ok_or(Unread)?;
+                let body = owner
+                    .bodies
+                    .get(declaration)
+                    .and_then(Option::as_ref)
+                    .ok_or(Unread)?;
                 (Some(body), None, body.locals.as_slice())
             }
             _ => return Err(Unread),
