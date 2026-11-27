@@ -810,7 +810,7 @@ fn generic_instance_literals_run_on_the_sdk() {
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
