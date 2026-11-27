@@ -37,7 +37,8 @@ analyser: partial
   The result depends on reached captures, supplied callbacks, selectors and
   writes that determine the returned value (CTRL-13 to CTRL-15, EXPR-16).
   The check follows known fixed ranges in order. Comparisons and case labels
-  use the bounds of iteration names and their immutable aliases.
+  use the bounds of iteration names and their immutable aliases. Reached
+  initializers and loop bindings supply the category of later reads.
 
 transpiler: done
 

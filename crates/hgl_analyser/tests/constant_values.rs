@@ -1130,6 +1130,34 @@ fn a_local_list_size_uses_reached_fixed_range_values() {
     }
 }
 
+/// CTRL-13, CTRL-15 and TYPE-10: an initializer's reached category is
+/// what a later capture or loop binding reads at a fixed range step.
+#[test]
+fn a_local_list_size_uses_the_reached_category_of_an_initializer() {
+    let program = |body: &str, step: u32| {
+        format!(
+            "fn measured(input: i64) -> i64 {{\n\
+                 let width = (fn() -> i64 {{\n\
+                     for step in 3..<5 {{ {} }}\n\
+                     return 5\n\
+                 }})()\n\
+                 var held: list<i64, width>\n\
+                 return input\n\
+             }}\n",
+            body.replace("STEP", &step.to_string()),
+        )
+    };
+    for body in [
+        "let width = if step == STEP { input } else { 6 }\nreturn width",
+        "let width = if step == STEP { input } else { 6 }\nlet other = width\nreturn other",
+        "let items: list<i64, 1> = if step == STEP { [input] } else { [6] }\nfor item in items { return item }",
+    ] {
+        expect(&program(body, 9), &[]);
+        let line = 6 + body.lines().count();
+        expect(&program(body, 3), &[&format!("{line} list.size")]);
+    }
+}
+
 /// EXPR-3, CTRL-14 and TYPE-10: a reached write can supply a later
 /// return, including across passes of a loop or via a live case.
 #[test]

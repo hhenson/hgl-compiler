@@ -38,6 +38,48 @@ pub(super) struct ImmediateValues<'a> {
     range_aliases: Option<&'a HashMap<LocalId, LocalId>>,
 }
 
+/// Categories established along the reached paths of an immediate call.
+/// An absent local keeps the category given by the typing pass.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct ReachedLocals {
+    connections: HashSet<LocalId>,
+    ordinary: HashSet<LocalId>,
+}
+
+impl ReachedLocals {
+    /// A reached write, or a loop binding from a reached collection.
+    pub(super) fn set(&mut self, local: LocalId, category: ValueCategory) {
+        self.connections.remove(&local);
+        self.ordinary.remove(&local);
+        match category {
+            ValueCategory::Connection => {
+                self.connections.insert(local);
+            }
+            ValueCategory::Value => {
+                self.ordinary.insert(local);
+            }
+            ValueCategory::Unsettled => {}
+        }
+    }
+
+    /// A connection can arrive from either path. An ordinary override
+    /// must hold on every path that can reach the next read.
+    pub(super) fn join(&mut self, other: &Self) {
+        self.connections.extend(&other.connections);
+        self.ordinary.retain(|local| other.ordinary.contains(local));
+    }
+
+    fn category(&self, local: LocalId) -> Option<ValueCategory> {
+        if self.connections.contains(&local) {
+            Some(ValueCategory::Connection)
+        } else if self.ordinary.contains(&local) {
+            Some(ValueCategory::Value)
+        } else {
+            None
+        }
+    }
+}
+
 impl<'a> ImmediateValues<'a> {
     /// Both the written generic arguments and local bindings are lexical.
     pub(super) fn new(
@@ -235,16 +277,16 @@ impl<'a> Typer<'a> {
             .filter(|_| !self.type_query)
             .and_then(|body| body.immediate_values.as_deref())
             .map(|locals| ImmediateValues::new(self.program, &self.instance, locals));
-        self.category_with_live_locals(value, known, None)
+        self.category_with_reached_locals(value, known, None)
     }
 
     /// Classify an immediately invoked result with the reached writes in
     /// its discarded body. The additional categories belong to that call.
-    pub(super) fn category_with_live_locals(
+    pub(super) fn category_with_reached_locals(
         &self,
         value: &Expr,
         known: Option<ImmediateValues<'_>>,
-        live_locals: Option<&HashSet<LocalId>>,
+        reached: Option<&ReachedLocals>,
     ) -> ValueCategory {
         category_with_functions(
             self.program,
@@ -253,7 +295,7 @@ impl<'a> Typer<'a> {
             &self.pack_functions,
             &self.callback_captures,
             known,
-            live_locals,
+            reached,
         )
     }
 
@@ -498,7 +540,7 @@ fn category_with_functions(
     functions: &[(usize, Callee)],
     callback_captures: &[ValueCategory],
     evaluated: Option<ImmediateValues<'_>>,
-    live_locals: Option<&HashSet<LocalId>>,
+    reached: Option<&ReachedLocals>,
 ) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
     let category = |value: &Expr| {
@@ -509,15 +551,13 @@ fn category_with_functions(
             functions,
             callback_captures,
             evaluated,
-            live_locals,
+            reached,
         )
     };
     let local_category = |id| {
-        if live_locals.is_some_and(|live| live.contains(&id)) {
-            Connection
-        } else {
-            locals.get(id).map_or(Value, |local| local.category)
-        }
+        reached
+            .and_then(|reached| reached.category(id))
+            .unwrap_or_else(|| locals.get(id).map_or(Value, |local| local.category))
     };
     if let Some(known) = evaluated
         && let Some((operator, left, _)) = value.kind.binary()

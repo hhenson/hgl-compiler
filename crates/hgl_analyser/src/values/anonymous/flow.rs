@@ -1,15 +1,18 @@
 //! The category of a reached return in an immediate anonymous call.
 //! The call's typed body is discarded after this check (TIME-2, TYPE-10).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::super::{Typer, lifting::ImmediateValues};
+use super::super::Typer;
+use super::super::control::{bound_by_loop, iterates};
+use super::super::forms::received_type;
+use super::super::lifting::{ImmediateValues, ReachedLocals};
 use super::ImmediateBindings;
 use crate::hir::ValueCategory::{Connection, Value as Ordinary};
 use crate::hir::{
-    BinaryOperator, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, Value,
+    BinaryOperator, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, Value, ValueCategory,
     walk_statement_nodes,
 };
 use crate::program::LocalKind;
@@ -36,7 +39,7 @@ struct Flow<'a, 'p> {
     range_aliases: HashMap<LocalId, LocalId>,
     range_passes_left: u64,
     range_splits_left: usize,
-    live: HashSet<LocalId>,
+    reached: ReachedLocals,
 }
 
 pub(super) fn result_is_live(
@@ -70,7 +73,7 @@ pub(super) fn result_is_live(
         range_aliases,
         range_passes_left: RANGE_PASSES,
         range_splits_left: RANGE_SPLITS,
-        live: HashSet::new(),
+        reached: ReachedLocals::default(),
     };
     flow.statements(body, false) == Err(Return::Connection)
 }
@@ -81,10 +84,13 @@ impl Flow<'_, '_> {
             .with_ranges(&self.ranges, &self.range_aliases)
     }
 
-    fn reads_live(&self, value: &Expr) -> bool {
+    fn category(&self, value: &Expr) -> ValueCategory {
         self.typer
-            .category_with_live_locals(value, Some(self.known()), Some(&self.live))
-            == Connection
+            .category_with_reached_locals(value, Some(self.known()), Some(&self.reached))
+    }
+
+    fn reads_live(&self, value: &Expr) -> bool {
+        self.category(value) == Connection
     }
 
     // An error in this walk means control returned from the function.
@@ -109,20 +115,22 @@ impl Flow<'_, '_> {
                 }
                 | Stmt::Assign { local, value, .. } => {
                     self.expression(value, controlled)?;
-                    if controlled || self.reads_live(value) {
-                        self.live.insert(*local);
+                    let category = if controlled {
+                        Connection
                     } else {
-                        self.live.remove(local);
-                        if self.bindings.len() > self.enclosing_bindings
-                            && matches!(statement, Stmt::Declare { .. })
-                            && self.typer.locals[*local].kind == LocalKind::Let
-                            && !self.bindings.iter().any(|(id, _)| id == local)
-                            && let Some(value) = self.known().read(value)
-                        {
-                            // This immutable initializer can read the known
-                            // iteration name. It belongs only to this pass.
-                            self.bindings.push((*local, Rc::new(value)));
-                        }
+                        self.category(value)
+                    };
+                    self.reached.set(*local, category);
+                    if category == Ordinary
+                        && self.bindings.len() > self.enclosing_bindings
+                        && matches!(statement, Stmt::Declare { .. })
+                        && self.typer.locals[*local].kind == LocalKind::Let
+                        && !self.bindings.iter().any(|(id, _)| id == local)
+                        && let Some(value) = self.known().read(value)
+                    {
+                        // This immutable initializer can read the known
+                        // iteration name. It belongs only to this pass.
+                        self.bindings.push((*local, Rc::new(value)));
                     }
                 }
                 Stmt::AssignPlace { place, value, .. } => {
@@ -131,7 +139,7 @@ impl Flow<'_, '_> {
                     if let Some(local) = assigned_root(place)
                         && (controlled || self.reads_live(place) || self.reads_live(value))
                     {
-                        self.live.insert(local);
+                        self.reached.set(local, Connection);
                     }
                 }
                 Stmt::Expr(value) => self.expression(value, controlled)?,
@@ -175,6 +183,17 @@ impl Flow<'_, '_> {
                     {
                         self.range(*binding, sequence, range, body, controlled)?;
                     } else {
+                        let ty = received_type(&sequence.ty, iterates);
+                        if iterates(ty) && self.category(sequence) == Ordinary {
+                            // A reached ordinary collection keeps its bindings
+                            // ordinary, even if typing had considered a live
+                            // initializer arm. Connection bindings already
+                            // follow the admitted source loop's categories.
+                            let (categories, _) = bound_by_loop(Ordinary, ty, names.len());
+                            for (&local, category) in names.iter().zip(categories) {
+                                self.reached.set(local, category);
+                            }
+                        }
                         let passes = self.passes(sequence);
                         self.loop_passes(body, passes, passes.is_none(), |_| controlled)?;
                     }
@@ -442,11 +461,11 @@ impl Flow<'_, '_> {
         controlled: impl Fn(&Self) -> bool,
     ) -> Result<(), Return> {
         while remaining != Some(0) {
-            let before = self.live.clone();
+            let before = self.reached.clone();
             match self.statements(body, controlled(self)) {
                 Ok(()) => {}
                 Err(Return::Ordinary) if may_skip => {
-                    self.live = before;
+                    self.reached = before;
                     break;
                 }
                 Err(returned) => return Err(returned),
@@ -455,8 +474,8 @@ impl Flow<'_, '_> {
             if remaining == Some(0) {
                 break;
             }
-            self.live.extend(&before);
-            if self.live == before {
+            self.reached.join(&before);
+            if self.reached == before {
                 break;
             }
         }
@@ -470,17 +489,19 @@ impl Flow<'_, '_> {
         arms: impl IntoIterator<Item = A>,
         read: impl Fn(&mut Self, A) -> Result<(), Return>,
     ) -> Result<(), Return> {
-        let before = self.live.clone();
+        let before = self.reached.clone();
         let mut joined = None;
         for arm in arms {
-            self.live.clone_from(&before);
+            self.reached.clone_from(&before);
             match read(self, arm) {
-                Ok(()) => joined.get_or_insert_with(HashSet::new).extend(&self.live),
+                Ok(()) => joined
+                    .get_or_insert_with(|| self.reached.clone())
+                    .join(&self.reached),
                 Err(Return::Ordinary) => {}
                 Err(Return::Connection) => return Err(Return::Connection),
             }
         }
-        self.live = joined.ok_or(Return::Ordinary)?;
+        self.reached = joined.ok_or(Return::Ordinary)?;
         Ok(())
     }
 }
