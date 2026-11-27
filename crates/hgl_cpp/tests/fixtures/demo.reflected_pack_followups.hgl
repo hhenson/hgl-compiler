@@ -156,3 +156,21 @@ test candidate_input_name_is_not_public {
     # expect-error(name, "argument.unknown")
     assert invoke(choose, value: 2.0) == 42
 }
+
+# GEN-3, GEN-7, GEN-17: an ordinary parameter and two reflected keys
+# share one trial when the declaration explicitly equates their types.
+const other_key: str = "other"
+const fn two_reals(value: f64, other: f64) -> i64 => 2
+
+operator joint_kind<X, Y>(x: X, y: Y) -> i64
+impl const fn joint_kind(x: i64, y: i64) -> i64 => 1
+impl const fn joint_kind(x: f64, y: f64) -> i64 => 2
+
+const fn joint<T, ...P>(f: const fn(...{P}) -> i64, x: T, y: P[other_key]) -> i64
+    requires T == P[value_key] && P[value_key] == P[other_key] && T in {i64, f64}
+    => joint_kind(x, y)
+
+test correlated_member_instances {
+    assert joint(two_inputs, 4, 5) == 1
+    assert joint(two_reals, 4.0, 5.0) == 2
+}

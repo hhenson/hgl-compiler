@@ -15,9 +15,9 @@ transpiler: partial
 - A temporal `if` or `switch` wires only the selected child to run. It starts a new
   child on selection changes and leaves outside producers running.
 - A window result starts with the newly selected child's samples (hgraph 0.9.32).
-- Left: The proposed child lifetime for core mapping awaits #370. Child graph bodies
-  cannot read capabilities captured from the parent or compute ordinary values that may
-  fail (FN-9, ERR-5).
+- Left: The proposed mapping-child lifetime is tracked in #370. A selected child's
+  store read that determines wiring is reported (#541). An ordinary computation that
+  may fail while building the selected child is also reported (#896, FN-9, ERR-5).
 
 ## CTRL-3
 
@@ -32,19 +32,21 @@ transpiler: done
 
 ## CTRL-4
 
-analyser: partial
+analyser: done
 
 - A branch's locals do not escape
 - A `var` assigned under a temporal condition has a binding before the `if`, or every branch assigns it (with CTRL-14)
-- Left: several results kept as separate connections
+- Assignments to multiple outer connections are checked separately. Emission of
+  those bindings is tracked under CTRL-14.
 
 ## CTRL-5
 
-analyser: partial
+analyser: done
 
 - In a value function, a path that has returned takes no part in what is assigned or in the type of an `if`
 - In a graph a `return` with a value in a branch selected at runtime needs the continuation to return (CTRL-14)
-- Left: runtime bodies
+- In a hook, a return leaves the continuation and its assignment checks to the
+  paths that reach it. C++ continuation limits are tracked under CTRL-13 and CTRL-14.
 
 ## CTRL-6
 
@@ -54,14 +56,18 @@ analyser: partial
 - A repeated value is rejected (`switch.duplicate_label`), `case 1:` beside `case 0x1:` among them, and an enum's coverage by such labels stands for a `default`
 - A generic graph reads an implied enum label when its selector settles and checks repeats against that enum's resolved labels (TYPE-7, GEN-7).
 - Two labels are duplicates where `==` of the selector's type holds for them, as CTRL-6 has it; a selector is a `bool`, an `i64`, a `str` or an enum (CTRL-12), whose `==` is their sameness as constants (UNIT-13)
-- Left: a label whose value is not worked out, a generic value parameter's or one of a candidate of the program's own, whose repeat is not judged
+- Left: A label supplied by a generic value parameter can escape duplicate
+  checking when its instance is made (#982). Labels using module constants
+  computed by calls still depend on constant evaluation (#240).
 
 transpiler: partial
 
 - Value and temporal switches select by typed label value, with no fallthrough. An
   unmatched selector takes `default` if there is one, or fails.
-- Left: The failure lacks `switch.unmatched`. A case binding read after its switch and
-  equal labels discovered in an instance are reported.
+- Left: The unmatched failure lacks `switch.unmatched` in value code, hooks and both
+  forms of composition (#983). Reading a case binding after an ordinary or wiring-time
+  switch is reported (#984, UNIT-12). The target reports equal labels in a graph
+  instance, while a value instance can select the first equal label (#982).
 
 ## CTRL-7
 
@@ -74,23 +80,27 @@ transpiler: partial
 
 - A graph unrolls an ordinary collection or a local fixed-list connection. The current
   growing-list and dictionary forms use hgraph child graphs.
-- Left: Struct-field loops and replacing the dynamic forms with core mapping await #373
-  and #370. A set connection, a fixed-list expression that is not a local, an unresolved
-  list size and a dynamic loop key used as an ordinary value are reported.
+- The legacy dynamic list and dictionary loops run. A set connection or a dynamic loop
+  key used as an ordinary value is reported.
+- Left: Struct-field loops and rejection of changing membership await #373. The
+  corresponding Core mapping forms are tracked in #370. The target reports a nonlocal
+  fixed-list connection (#986) or a list size left unresolved by constant evaluation (#240).
 
 ## CTRL-8
 
 analyser: partial
 
 - Iteration over a `ref` parameter reads it, and is `ref.read` (FN-16)
-- Left: the traversal forms `elements`, `keys`, `values` and `items`
+- The Core `keys` operator on a dictionary supplies a set to ordinary hook traversal.
+- Left: Dedicated hook-scoped views remain pending. `elements`, `values` and `items`
+  have no callable binding in the pinned Core.
 
 transpiler: partial
 
 - Hooks loop over the supported whole list, set and dictionary reads, retaining list
   index order.
-- Left: Struct-field traversal awaits #373. Other sequence types and unsupported child
-  forms are reported.
+- A hook can traverse the ordinary value from a guarded whole-struct read
+  (CTRL-12).
 
 ## CTRL-9
 
@@ -100,37 +110,46 @@ parser: done
 
 ## CTRL-10
 
-analyser: partial
+analyser: done
 
-- In a value function: a block's value; a `bool` condition, reading a result or nullable where necessary (ERR-12, ERR-15); the type of an `if` whose value is used
-- Left: temporal bodies
+- In value functions and hooks: a block's value, the Boolean condition, required result
+  and nullable reads (ERR-12, ERR-15), and the type of a consumed `if`. A block with no
+  value rejects in a value position.
 
 transpiler: partial
 
-- Emits value blocks and `if` with typed values, including a nullable result for an
-  omitted `else`.
-- Left: A value expression that needs a statement-emitting block or a block that returns
-  can still be reported when there is no statement context. A block with no value cannot
-  supply an expression.
+- Emits value blocks and typed `if`, including a nullable result for an omitted `else`.
+  A block with a `let` and a value can be used as a call argument, a module initializer
+  or a parameter default.
+- Left: An early return inside a consumed conditional used as a call argument is
+  reported (#985).
 
 ## CTRL-11
 
-analyser: partial
+analyser: done
 
-- In a value function: what is assigned after an `if`, a `switch` and a loop; a `var` written `T?` is null from its declaration
-- Left: temporal bodies
+- In value functions and hooks, tracks assignment after conditionals and loops,
+  ignoring paths that return. An uninitialized `var` written `T?` starts as null.
 
 ## CTRL-12
 
 analyser: partial
 
 - In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector, and each label a constant of its type (CTRL-6)
-- Field iteration in value code and hooks awaits #373.
+- Value code and hooks traverse a known nominal struct in parent-first
+  declaration order. A one-name pattern binds the field name. A two-name
+  pattern also binds the field at its own type (CTRL-15). An explicitly
+  written value argument to an ordinary function can use the field name as
+  a constant string in each pass. Its declared type can come from a later
+  written or inferred type argument (GEN-8, GEN-13).
+- Left: Traversal over a generic parameter constrained to the struct
+  category still rejects at its declaration (#373, #751).
 
 transpiler: partial
 
 - Loops over ordinary lists, sets and dictionaries in value code and hooks.
-- Left: Struct fields await #373. Other loop sequences are reported.
+- An ordinary struct iterable is held once. Each field pass has its own
+  bindings and reads from that held value.
 
 ## CTRL-13
 
@@ -144,9 +163,10 @@ transpiler: partial
 
 - A graph selects an `if` during wiring for an ordinary condition or wires a runtime
   selector for a connection. A consumed branch can have no publication (CTRL-3).
-- Left: A consumed branch with an escaping `return`, a temporal `if` used as a value
-  that also assigns an outer `var`, and a value-producing branch without a return in its
-  generated continuation are reported.
+  A returning `if` bound directly by a `let` can give the graph's result or continue
+  with the other branch's value.
+- Left: A returning temporal `if` nested in another expression and a consumed temporal
+  `if` that also assigns an outer `var` are reported (#986).
 
 ## CTRL-14
 
@@ -161,11 +181,11 @@ analyser: done
 transpiler: partial
 
 - Rebinds a whole connection in wiring-time branches. A temporal branch selects one
-  assigned `var` or the result of its return and continuation.
-- Left: A temporal branch assigning multiple outer `var`s, a return inside an unrolled
-  loop or an outputless graph's temporal branch, and a branch that both supplies a value
-  and returns without a value on another path are reported. Ordinary `var` assignments
-  under a temporal selector remain source rejections.
+  assigned `var` or the result of its return and continuation. A return from a wiring-time
+  loop can skip its remaining passes. Ordinary `var` assignments under a temporal
+  selector and a bare return in a graph with a result reject in the analyser.
+- Left: A temporal branch assigning multiple outer `var`s and a return from a temporal
+  branch inside an unrolled loop or inside an outputless graph are reported (#986).
 
 ## CTRL-15
 
@@ -194,12 +214,20 @@ analyser: partial
 - A computed pack reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no entry (FN-19, GEN-7).
 - A pack-key condition with a resolved module constant or generic value parameter checks only the selected branch. A generic pack supplies its keys in the making instance. Ordinary `const` and runtime parameters cannot supply the key (FN-1, GEN-17).
 - An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-10, TYPE-14).
-- Left: A constant bound, generic argument or pack-key condition stays deferred when the reader cannot determine its constant value.
+- In an ordinary struct pass, a resolved constant condition checks its
+  selected branch. Type queries in that condition read the current field
+  bindings (TYPE-18). A switch label can read the constant field name.
+- Left: A module constant computed by a call can remain unresolved in a generic
+  value argument within a computed spread or in a pack-key condition (#240). Ordinary
+  graph ranges can unroll a bound supplied by such a constant.
+- Left: A nominal struct type or constructor with a field name as its
+  written generic value argument still rejects before the pass (#373).
 
 transpiler: partial
 
 - C++ emits the entries supplied by the selected branches of a computed pack.
 - C++ emits the selected branch of a resolved pack-key condition in a graph, node or value function.
+- C++ emits selected constant branches of each pass over an ordinary struct.
 
 ## SOURCE-1
 
@@ -211,15 +239,13 @@ analyser: done
 - Its body is read: its declarations and hooks as a node's, and its other statements as value code, with each `yield`'s value held to the result's type
 - An anonymous function has its own body (FN-14). Its `yield` is rejected with `yield.outside_source`, including where the enclosing function is a source. Only the source's own `yield` counts towards its source classification (FN-2).
 - It injects neither `scheduler` nor `alarm`, so `scheduled()` in it is `inject.no_scheduler` (TIME-9)
-- A source with no result arrow is rejected at its name with `source.result`.
+- A source with no result arrow is rejected at its name with the proposed code `source.result`.
 
-transpiler: partial
+transpiler: done
 
 - Emits source bodies as coroutines, with state, cache, and lifecycle hooks. Supplies
   clock, logger and store capabilities.
-- Left: Other injections, a `when` and a source with no result have defensive target
-  reports. The analyser rejects those forms. Removal of the no-result report
-  is tracked in #402.
+- Disallowed injections, `when` and a missing result arrow reject before emission.
 
 ## SOURCE-2
 

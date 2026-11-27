@@ -12,9 +12,186 @@ use crate::declared::names_parameter;
 use crate::formatting::{
     self, PATTERN_DECLARATIONS, PatternFault, PatternMemo, PatternText, Piece,
 };
-use crate::hir::{Argument, Expr, ExprKind, Form, TextCall, Value, ValueCategory};
+use crate::hir::{
+    self, Argument, Body, Callee, Expr, ExprKind, Form, TextCall, Value, ValueCategory,
+};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::{ConstantValue, DeclarationKind, Detail, Role, Scalar, Signature, Type, codes, error};
+
+/// FMT-3 and UNIT-13: retry only native module-constant patterns left
+/// unread while their ordinary helpers' typed bodies were unavailable.
+/// Do this before the usual const-demand and instance checks, so any
+/// newly selected text conversion still receives those checks.
+pub(super) fn retry_module_patterns(program: &mut crate::Program, diagnostics: &mut Diagnostics) {
+    let pending = std::mem::take(&mut *program.unplanned_module_patterns.borrow_mut());
+    if pending.is_empty() {
+        return;
+    }
+    let empty = Signature {
+        generics: Vec::new(),
+        parameters: Vec::new(),
+        result: None,
+        reference: false,
+    };
+    for index in 0..program.modules.len() {
+        let module = &program.modules[index];
+        let (bindings, written, calls) = tables(module);
+        let selecting = RefCell::new(Vec::new());
+        let found = Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        };
+        let mut retry = |body: &Body, owner: &crate::Declaration, signature: &Signature| {
+            let mut ready = std::collections::HashSet::new();
+            super::walk_body_calls(body, &mut |call| {
+                let ExprKind::Call {
+                    callee,
+                    arguments,
+                    text: None,
+                    ..
+                } = &call.kind
+                else {
+                    return;
+                };
+                let Some(signature) = formatting::value_signature(program, callee) else {
+                    return;
+                };
+                if let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                    && pending.contains_key(&pattern.value.at)
+                    && formatting::constant_pattern_in(program, &pattern.value, &[]).is_ok()
+                {
+                    ready.insert(pattern.value.at);
+                }
+            });
+            if ready.is_empty() {
+                return None;
+            }
+            let mut body = body.clone();
+            let mut typer = Typer::new(program, module, owner, signature, found, diagnostics);
+            fn visit(
+                value: &mut Expr,
+                typer: &mut Typer<'_>,
+                ready: &std::collections::HashSet<Location>,
+                pending: &std::collections::HashMap<Location, (bool, bool)>,
+            ) {
+                if let ExprKind::Call {
+                    callee,
+                    arguments,
+                    text: None,
+                    ..
+                } = &value.kind
+                    && let Some(signature) = formatting::value_signature(typer.program, callee)
+                    && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                    && ready.contains(&pattern.value.at)
+                    && let Some(&(graph, value_code)) = pending.get(&pattern.value.at)
+                {
+                    // Eval targets and nested value operands may have different
+                    // phases from their enclosing declaration (FMT-9, TST-3).
+                    typer.graph = graph;
+                    typer.value_code = value_code;
+                    typer.format_arguments(&mut value.kind);
+                }
+                let callee = match &mut value.kind {
+                    ExprKind::Call { callee, .. } => callee,
+                    ExprKind::StaticCallable(callee) => callee.as_mut(),
+                    _ => return,
+                };
+                if let Callee::Anonymous(function) = callee {
+                    hir::walk_statements_mut(&mut function.body.statements, &mut |value| {
+                        visit(value, typer, ready, pending)
+                    });
+                }
+            }
+            hir::walk_statements_mut(&mut body.statements, &mut |value| {
+                visit(value, &mut typer, &ready, &pending)
+            });
+            Some(body)
+        };
+        let mut bodies = Vec::new();
+        let mut constants = Vec::new();
+        let mut defaults = Vec::new();
+        for (position, owner) in module.declarations.iter().enumerate() {
+            let signature = match &module.details[position] {
+                Detail::Callable(signature) => signature.clone(),
+                Detail::Struct(read) => Signature::of_struct(read),
+                _ => empty.clone(),
+            };
+            if let Some(body) = &module.bodies[position]
+                && let Some(body) = retry(body, owner, &signature)
+            {
+                bodies.push((position, body));
+            }
+            if let Some(value) = &module.constants[position]
+                && let Some(body) = retry(&value.clone().into_body(), owner, &empty)
+            {
+                constants.push((position, hir::DefaultExpr::from_body(body)));
+            }
+            for (slot, value) in module.defaults[position].iter().enumerate() {
+                if let Some(value) = value
+                    && let Some(body) = retry(&value.clone().into_body(), owner, &signature)
+                {
+                    defaults.push((position, slot, hir::DefaultExpr::from_body(body)));
+                }
+            }
+        }
+        let mut tests = Vec::new();
+        for (position, test) in module.tests.iter().enumerate() {
+            let mut owner =
+                crate::Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
+            owner.test_owner = Some(position);
+            if let Some(body) = &module.test_bodies[position]
+                && let Some(body) = retry(body, &owner, &empty)
+            {
+                tests.push((position, body));
+            }
+        }
+        let store = module.store.first().and_then(|source| {
+            let owner = crate::Declaration::stand_in(
+                "store",
+                source.at,
+                source.file,
+                &source.syntax,
+                false,
+            );
+            retry(module.store_body.as_ref()?, &owner, &empty)
+        });
+        let run = module.run.as_ref().and_then(|source| {
+            let owner =
+                crate::Declaration::stand_in("run", source.at, source.file, &source.syntax, false);
+            let run = module.run_body.as_ref()?;
+            let body = Body {
+                locals: run.locals.clone(),
+                statements: vec![hir::Stmt::Expr(run.call.clone())],
+            };
+            let mut body = retry(&body, &owner, &empty)?;
+            let hir::Stmt::Expr(call) = body.statements.remove(0) else {
+                unreachable!()
+            };
+            Some(call)
+        });
+        let module = &mut program.modules[index];
+        for (position, body) in bodies {
+            module.bodies[position] = Some(body);
+        }
+        for (position, value) in constants {
+            module.constants[position] = Some(value);
+        }
+        for (position, slot, value) in defaults {
+            module.defaults[position][slot] = Some(value);
+        }
+        for (position, body) in tests {
+            module.test_bodies[position] = Some(body);
+        }
+        if let Some(body) = store {
+            module.store_body = Some(body);
+        }
+        if let Some(call) = run {
+            module.run_body.as_mut().expect("existing run").call = call;
+        }
+    }
+}
 
 impl Typer<'_> {
     /// Check the argument slots and each type's specifier (FMT-3).
@@ -39,7 +216,7 @@ impl Typer<'_> {
             return;
         }
         let text =
-            match formatting::constant_pattern_in(self.program, &pattern.value, &self.instance) {
+            match formatting::structural_pattern_in(self.program, &pattern.value, &self.instance) {
                 Err(PatternFault::Unread) => self
                     .node_at(pattern.value.at)
                     .ok_or(PatternFault::Unread)
@@ -52,10 +229,29 @@ impl Typer<'_> {
                     }),
                 known => known,
             };
+        // Preserve every established source fold and its limits before
+        // extending an unread module pattern through typed helpers.
+        let text = match text {
+            Err(PatternFault::Unread) => {
+                formatting::module_helper_pattern_in(self.program, &pattern.value, &self.instance)
+            }
+            known => known,
+        };
         let text = match text {
             Ok(text) => text,
             Err(PatternFault::Limit) => return,
             Err(PatternFault::Unread) => {
+                let mut module_constant = false;
+                pattern.value.walk(&mut |value| {
+                    module_constant |= matches!(value.kind, ExprKind::Constant { .. });
+                });
+                if module_constant && self.is_fixed(&pattern.value, &[]) {
+                    self.program
+                        .unplanned_module_patterns
+                        .borrow_mut()
+                        .entry(pattern.value.at)
+                        .or_insert((self.graph, self.value_code));
+                }
                 if (self.graph || self.value_code) && !self.is_fixed(&pattern.value, &[]) {
                     self.diagnostics.emit(error(
                         Category::Type,

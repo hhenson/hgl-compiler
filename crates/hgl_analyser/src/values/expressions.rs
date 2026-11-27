@@ -4,12 +4,13 @@
 //! pass ([`super`]); [`Typer::expression`] hands every other form to the
 //! module that reads it.
 
-use hgl_diagnostics::Category;
+use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, ValueUse, branch_is_null, branch_takes_its_type};
 use super::fit::{
-    accepts_float, hook_payload_type, is_integer_literal, not_null, nullable, open, whole,
+    accepts_float, fitted_input_pattern, hook_payload_type, is_integer_literal, not_null, nullable,
+    open, whole,
 };
 use super::node::RefRead;
 use super::results::proof_binding;
@@ -18,10 +19,25 @@ use crate::hir::{
     BinaryOperator, EndpointOperation, Expr, ExprKind, Hook, LocalId, UnaryOperator, Value,
     ValueCategory,
 };
-use crate::program::{Binding, LocalKind};
-use crate::syntax::{child, name_token, tokens, ungrouped};
+use crate::program::{Binding, DeclarationKind, LocalKind};
+use crate::syntax::{child, name_before_less_than, name_token, tokens, ungrouped};
 use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
+
+#[derive(Clone, Copy)]
+pub(super) enum ExpressionFit {
+    Value,
+    InputPattern,
+}
+
+impl ExpressionFit {
+    pub(super) fn input_type(self, supplied: &Expr, expected: &Type) -> Option<Type> {
+        match self {
+            Self::Value => None,
+            Self::InputPattern => fitted_input_pattern(supplied, expected),
+        }
+    }
+}
 
 impl<'a> Typer<'a> {
     // ---- Expressions ----
@@ -44,9 +60,26 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
     ) -> Expr {
+        self.expression_with_fit(node, expected, value_use, ExpressionFit::Value)
+    }
+
+    /// Check a public operator input pattern through its written literal
+    /// parts and through block and branch values. The candidate still
+    /// reads the operand in its own context.
+    pub(super) fn expression_for_input_pattern(&mut self, node: &SyntaxNode, ty: &Type) -> Expr {
+        self.read_literal_part(node, ty, ExpressionFit::InputPattern)
+    }
+
+    pub(super) fn expression_with_fit(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        value_use: ValueUse,
+        fit: ExpressionFit,
+    ) -> Expr {
         self.expressing += 1;
         let reported = self.diagnostics.len();
-        let mut value = self.expression_read(node, expected, value_use);
+        let mut value = self.expression_read(node, expected, value_use, fit);
         // A call with a settled type already has a result. Only an
         // unknown type needs the callee's signature to distinguish absence.
         if value_use == ValueUse::Required
@@ -87,6 +120,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         value_use: ValueUse,
+        fit: ExpressionFit,
     ) -> Expr {
         // TIME-9: a place that expects an endpoint is given one, and no
         // value: the argument of an `endpoint<T>` parameter.
@@ -113,12 +147,14 @@ impl<'a> Typer<'a> {
                 SyntaxKind::Literal
                     | SyntaxKind::TupleExpr
                     | SyntaxKind::SequenceExpr
+                    | SyntaxKind::KeyedExpr
+                    | SyntaxKind::SetExpr
                     | SyntaxKind::UnaryExpr
             ) || takes_its_type(node))
             && !written_null(node)
         {
             let lifted = Type::delta((**payload).clone());
-            return self.expression(node, Some(&lifted));
+            return self.read_literal_part(node, &lifted, fit);
         }
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
@@ -133,13 +169,30 @@ impl<'a> Typer<'a> {
             SyntaxKind::NameExpr => return self.name(node),
             // "Parentheses select grouping" (EXPR-1): the expression
             // inside, where it stands.
-            SyntaxKind::ParenExpr => match node.children().next() {
-                Some(inner) => return self.expression_in_flow(&inner, expected, value_use),
-                None => (ExprKind::Unread, Type::Unknown),
-            },
-            SyntaxKind::TupleExpr => self.tuple(node, expected),
-            SyntaxKind::SequenceExpr => self.sequence(node, expected),
-            SyntaxKind::ListComprehension => self.list_comprehension(node, expected),
+            SyntaxKind::ParenExpr => {
+                if let Some(inner) = node.children().next() {
+                    return self.expression_with_fit(&inner, expected, value_use, fit);
+                }
+                (ExprKind::Unread, Type::Unknown)
+            }
+            SyntaxKind::TupleExpr | SyntaxKind::SequencePair => self.tuple(node, expected, fit),
+            SyntaxKind::SequenceExpr => self.sequence(node, expected, fit),
+            SyntaxKind::SetExpr => {
+                let context =
+                    not_null(expected).filter(|ty| matches!(ty, Type::Set(_)) || open(ty));
+                let (kind, ty) = self.sequence(node, context, fit);
+                let ty = match ty {
+                    Type::List { element, .. } => {
+                        let set = Type::Set(element);
+                        self.check_collection_constants(node.children(), &set);
+                        set
+                    }
+                    other => other,
+                };
+                (kind, ty)
+            }
+            SyntaxKind::KeyedExpr => self.keyed_literal(node, not_null(expected), fit),
+            SyntaxKind::ListComprehension => self.list_comprehension(node, expected, fit),
             SyntaxKind::PackComprehension => {
                 self.check_pack_comprehension(node);
                 (ExprKind::Unread, Type::Unknown)
@@ -147,7 +200,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::PackKeyMembership => self.pack_key_membership(node),
             SyntaxKind::UnaryExpr => self.unary(node, expected),
             SyntaxKind::BinaryExpr => self.binary(node, expected),
-            SyntaxKind::CallExpr => self.call(node, expected, value_use.is_used()),
+            SyntaxKind::CallExpr => self.call(node, expected, value_use.is_used(), fit),
             SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
             SyntaxKind::DeltaConstructor => self.delta_constructor(node),
             SyntaxKind::UndecidedConstructor => {
@@ -186,7 +239,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::RunExpr if self.testing => self.eval(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {
-                let (value, outcome) = self.flow(node, expected, value_use);
+                let (value, outcome) = self.flow_with_fit(node, expected, value_use, fit);
                 // CTRL-10: "A block whose last statement is an
                 // expression has that expression's value and type; any
                 // other block has none."
@@ -444,11 +497,17 @@ impl<'a> Typer<'a> {
     }
 
     /// A name: a parameter, a local, a constant of a module, or a
-    /// generic value parameter. Any other, a function or a type or a
-    /// name left for the prelude, is for the pass that reads calls and
-    /// members.
+    /// generic value parameter. Calls and members resolve the names
+    /// they use as callees or type names before reading ordinary values.
     fn name(&mut self, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
+        if crate::syntax::is_keyed_field_name(node)
+            && let Some(reports) = self.module.contextual_type_reports.get(&at)
+        {
+            for report in reports {
+                self.diagnostics.emit(report.clone());
+            }
+        }
         let unread = Expr {
             kind: ExprKind::Unread,
             ty: Type::Unknown,
@@ -479,19 +538,37 @@ impl<'a> Typer<'a> {
         };
         // UNIT-13: "A constant is read by its name wherever an ordinary
         // value is." Its type is the one it is written with.
-        if let Some((module, &[declaration])) = self.declarations(&name)
-            && let Some(Detail::Constant(ty)) =
-                self.program.modules[module].details.get(declaration)
-        {
-            return Expr {
-                kind: ExprKind::Constant {
-                    module,
-                    declaration,
-                },
-                ty: ty.clone(),
-                at,
-                category: ValueCategory::Unsettled,
-            };
+        if let Some((module, &[declaration])) = self.declarations(&name) {
+            let owner = &self.program.modules[module];
+            if let Some(Detail::Constant(ty)) = owner.details.get(declaration) {
+                return Expr {
+                    kind: ExprKind::Constant {
+                        module,
+                        declaration,
+                    },
+                    ty: ty.clone(),
+                    at,
+                    category: ValueCategory::Unsettled,
+                };
+            }
+            let declared = &owner.declarations[declaration];
+            if matches!(
+                declared.kind,
+                DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::NativeType
+            ) {
+                // The resolver already reports the malformed generic application (GEN-14).
+                let rejected_application = declared.kind == DeclarationKind::Struct
+                    && child(&declared.syntax, SyntaxKind::GenericParams).is_some()
+                    && node
+                        .parent()
+                        .and_then(|parent| name_before_less_than(&parent))
+                        .as_ref()
+                        == Some(node);
+                if !rejected_application {
+                    self.reject_type_name_value(name.text(), at, declared.at);
+                }
+                return unread;
+            }
         }
         let Some(Binding::Local { at: declared, kind }) =
             self.bindings.get(&(self.file, name.span().start))
@@ -527,6 +604,9 @@ impl<'a> Typer<'a> {
             return unread;
         };
         let GenericKind::Value(ty) = &generic.kind else {
+            if generic.kind == GenericKind::Type {
+                self.reject_type_name_value(name.text(), at, *declared);
+            }
             return unread;
         };
         // GEN-7, GEN-13 and TYPE-10: a signature's list size is read as
@@ -559,6 +639,20 @@ impl<'a> Typer<'a> {
             at,
             category: ValueCategory::Unsettled,
         }
+    }
+
+    /// GEN-13: a type name does not denote an ordinary value.
+    fn reject_type_name_value(&mut self, name: &str, at: Location, declared: Location) {
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                at,
+                format!("`{name}` names a type and cannot be read as a value"),
+                "GEN-13",
+            )
+            .with_related(declared, "type declared here"),
+        );
     }
 
     /// A read of the local `local`, written at `node`. EXPR-3: "every
@@ -702,6 +796,19 @@ impl<'a> Typer<'a> {
             Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
         };
+        if let Some((_, Argument::Constant(value))) = self
+            .field_passes
+            .iter()
+            .find(|(binding, _)| *binding == self.locals[local].at)
+            && let Some(kind) = self.program.constant(&value.value, &ty, at)
+        {
+            return Expr {
+                kind,
+                ty,
+                at,
+                category: ValueCategory::Value,
+            };
+        }
         if let Some((_, value)) = self
             .const_inputs
             .iter()
@@ -821,40 +928,112 @@ impl<'a> Typer<'a> {
             })
     }
 
-    /// `[key: value, ...]` (EXPR-9): "`[a: b]` has one pair entry, not a
-    /// standalone pair value ... The use site and expected type
-    /// constrain element types, keys, ordering, uniqueness, and
-    /// placeholder admission; syntax alone does not select a
-    /// dictionary, timed trace, or sparse delta."
-    ///
-    /// So pairs are a dictionary where one is expected: each key is
-    /// read as its key type and each value as its value type. Where
-    /// nothing is expected, nothing says what they are
-    /// (`sequence.context_type`); where another type that is known is
-    /// expected, the place reports that this is none of it.
-    fn pairs(
+    fn keyed_literal(
         &mut self,
         node: &SyntaxNode,
+        expected: Option<&Type>,
+        fit: ExpressionFit,
+    ) -> (ExprKind, Type) {
+        let items: Vec<_> = node.children().collect();
+        let schema = match expected {
+            Some(Type::Named {
+                module,
+                declaration,
+                arguments,
+                kind: crate::types::NamedKind::Struct,
+                ..
+            }) if !items.is_empty() => Some((module, declaration, arguments)),
+            _ => None,
+        };
+        if let Some(reads) = &mut self.capture_key_reads {
+            reads.push((Location::new(self.file, node.span()), schema.is_some()));
+        }
+        if let Some((module, declaration, arguments)) = schema {
+            let declared = &self.program.modules[*module].declarations[*declaration];
+            if let Some(name) = tokens(&declared.syntax).find(|token| token.text() == declared.name)
+            {
+                return self.construct(
+                    &name,
+                    node,
+                    *module,
+                    *declaration,
+                    Some(arguments.clone()),
+                    true,
+                );
+            }
+            return (ExprKind::Unread, Type::Unknown);
+        }
+        if matches!(expected, Some(Type::Dict { .. })) {
+            return self.pairs(&items, expected, fit);
+        }
+        // An implied enum member, a null, or an empty nested collection can
+        // take its type from a sibling. Probe both columns in written order;
+        // commit the complete reads only once both types are available.
+        let mut known = [Vec::new(), Vec::new()];
+        let mut has_null = [false, false];
+        let mark = self.mark();
+        for pair in &items {
+            for (side, part) in pair.children().take(2).enumerate() {
+                has_null[side] |= branch_is_null(&part);
+                if !branch_takes_its_type(&part) {
+                    known[side].push(self.expression(&part, Some(&Type::Unknown)).ty);
+                }
+            }
+        }
+        self.take_back(mark, false);
+        let [key, value] = std::array::from_fn(|side| {
+            sequence_element(&known[side].iter().collect::<Vec<_>>(), has_null[side])
+        });
+        if (key.is_none() || value.is_none()) && !expected.is_some_and(open) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::SEQUENCE_CONTEXT,
+                self.at(node),
+                "this dictionary needs a key and value type from its entries or its context"
+                    .to_string(),
+                "EXPR-9",
+            ));
+        }
+        let ty = Type::Dict {
+            key: Box::new(key.unwrap_or(Type::Unknown)),
+            value: Box::new(value.unwrap_or(Type::Unknown)),
+        };
+        self.pairs(&items, Some(&ty), fit)
+    }
+
+    /// Read a literal component with the fit of the enclosing operand.
+    pub(super) fn read_literal_part(
+        &mut self,
+        node: &SyntaxNode,
+        ty: &Type,
+        fit: ExpressionFit,
+    ) -> Expr {
+        self.expression_with_fit(node, Some(ty), ValueUse::Required, fit)
+    }
+
+    /// Fit a literal component after it has been read.
+    pub(super) fn fit_literal_part(
+        &mut self,
+        value: Expr,
+        expected: &Type,
+        place: &str,
+        fit: ExpressionFit,
+    ) -> Expr {
+        let pattern_type = fit.input_type(&value, expected);
+        self.fit(value, pattern_type.as_ref().unwrap_or(expected), place)
+    }
+
+    /// Read and fit the two columns of a dictionary in written order.
+    fn pairs(
+        &mut self,
         items: &[SyntaxNode],
         expected: Option<&Type>,
-        unexpected: bool,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let sides = match expected {
             Some(Type::Dict { key, value }) => Some(((**key).clone(), (**value).clone())),
             _ => None,
         };
-        if sides.is_none() && unexpected {
-            self.diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::SEQUENCE_CONTEXT,
-                    self.at(node),
-                    "nothing here says what these pairs make: write the type".to_string(),
-                    "EXPR-9",
-                )
-                .with_note("pairs are a dictionary where one is expected: `let book: dict<str, f64> = [\"a\": 1.0]`"),
-            );
-        }
         let unknown = Type::Unknown;
         let (key_type, value_type) = match &sides {
             Some((key, value)) => (key, value),
@@ -866,18 +1045,26 @@ impl<'a> Typer<'a> {
             .filter_map(|pair| {
                 let mut parts = pair.children();
                 let (key, value) = (parts.next()?, parts.next()?);
-                let key = self.expression(&key, Some(key_type));
-                let value = self.expression(&value, Some(value_type));
+                let key = self.read_literal_part(&key, key_type, fit);
+                let value = self.read_literal_part(&value, value_type, fit);
                 Some(if sides.is_some() {
+                    let key_place = "a dictionary's key";
+                    let value_place = "a dictionary's value";
                     (
-                        self.fit(key, key_type, "a dictionary's key"),
-                        self.fit(value, value_type, "a dictionary's value"),
+                        self.fit_literal_part(key, key_type, key_place, fit),
+                        self.fit_literal_part(value, value_type, value_place, fit),
                     )
                 } else {
                     (key, value)
                 })
             })
             .collect();
+        if let Some(ty @ Type::Dict { .. }) = expected {
+            self.check_collection_constants(
+                items.iter().filter_map(|pair| pair.children().next()),
+                ty,
+            );
+        }
         let ty = match (expected, &sides) {
             (Some(expected), Some(_)) => expected.clone(),
             // A place whose type is known and is no dictionary is given
@@ -894,7 +1081,12 @@ impl<'a> Typer<'a> {
 
     /// `(a, b)`. An expected tuple of as many elements gives each its
     /// expected type.
-    fn tuple(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+    fn tuple(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        fit: ExpressionFit,
+    ) -> (ExprKind, Type) {
         let items: Vec<SyntaxNode> = node.children().collect();
         // True when nothing is expected of the tuple, which is not the
         // same as what is expected not being known.
@@ -908,9 +1100,9 @@ impl<'a> Typer<'a> {
             .enumerate()
             .map(|(index, item)| match expected {
                 Some(expected) => {
-                    let expected = &expected[index];
-                    let element = self.expression(item, Some(expected));
-                    self.fit(element, expected, "this element of the tuple")
+                    let ty = &expected[index];
+                    let element = self.read_literal_part(item, ty, fit);
+                    self.fit_literal_part(element, ty, "this element of the tuple", fit)
                 }
                 // Nothing is expected of the tuple, and so of its
                 // elements: `(null, 1)` gives its `null` no type.
@@ -936,9 +1128,14 @@ impl<'a> Typer<'a> {
     /// of the one type they have, `f64` when some are `i64` and some
     /// `f64` (NUM-1).
     ///
-    /// Pairs and `_` are for the passes that read dictionaries and test
-    /// traces.
-    fn sequence(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+    /// In a list, colon entries abbreviate tuples. A dictionary or trace
+    /// place reads them according to its own rules.
+    fn sequence(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        fit: ExpressionFit,
+    ) -> (ExprKind, Type) {
         // True when nothing is expected of the sequence, which is not
         // the same as what is expected not being known.
         let unexpected = expected.is_none();
@@ -983,8 +1180,10 @@ impl<'a> Typer<'a> {
         let pairs = items
             .iter()
             .any(|item| item.kind() == SyntaxKind::SequencePair);
-        if pairs || (items.is_empty() && matches!(expected, Some(Type::Dict { .. }))) {
-            return self.pairs(node, &items, expected, unexpected);
+        if matches!(expected, Some(Type::Dict { .. })) && (items.is_empty() || pairs)
+            || pairs && matches!(expected, Some(Type::Set(_)))
+        {
+            return self.pairs(&items, expected, fit);
         }
         let element = match expected {
             Some(Type::List { element, .. }) | Some(Type::Set(element)) => Some(&**element),
@@ -994,17 +1193,12 @@ impl<'a> Typer<'a> {
             let elements: Vec<Expr> = items
                 .iter()
                 .map(|item| {
-                    let value = self.expression(item, Some(element));
-                    self.fit(value, element, "an element")
+                    let value = self.read_literal_part(item, element, fit);
+                    self.fit_literal_part(value, element, "an element", fit)
                 })
                 .collect();
-            // EXPR-9: a duplicate constant member of a string set is
-            // a source error, including in a generic value argument.
-            if matches!(expected, Type::Set(_) if *element == Type::Scalar(Scalar::Str))
-                && let Err(fault) = self.read_constant(node, Some(expected))
-                && let Some(report) = fault.set_duplicate_report()
-            {
-                self.diagnostics.emit(report);
+            if matches!(expected, Type::Set(_)) {
+                self.check_collection_constants(items.iter().cloned(), expected);
             }
             // TYPE-10: "Size participates in identity." A list of a
             // size that is known has that many entries.
@@ -1413,17 +1607,21 @@ pub(super) fn takes_its_type(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
-        // ERR-13: the callee `ok` or `err` is the constructor, whatever
-        // else is in scope.
-        SyntaxKind::CallExpr => node
-            .children()
-            .next()
-            .filter(|callee| {
-                callee.kind() == SyntaxKind::NameExpr
-                    && child(callee, SyntaxKind::QualifiedName).is_none()
-            })
-            .and_then(|callee| name_token(&callee))
-            .is_some_and(|name| matches!(name.text(), "ok" | "err")),
+        SyntaxKind::CallExpr => result_constructor(node).is_some(),
         _ => false,
+    }
+}
+
+/// ERR-13: an unqualified `ok` or `err` call is always a result constructor.
+pub(super) fn result_constructor(call: &SyntaxNode) -> Option<bool> {
+    let callee = call.children().next()?;
+    if callee.kind() != SyntaxKind::NameExpr || child(&callee, SyntaxKind::QualifiedName).is_some()
+    {
+        return None;
+    }
+    match name_token(&callee)?.text() {
+        "ok" => Some(true),
+        "err" => Some(false),
+        _ => None,
     }
 }

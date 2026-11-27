@@ -942,7 +942,7 @@ fn contextual_field_tail(typer: &mut Typer<'_>, tail: &Expr, expected: &Type) ->
     // TYPE-7, TYPE-14 and EXPR-9: the leaves themselves are contextual.
     let contextual = match node.kind() {
         SyntaxKind::ImpliedMember => matches!(tail.kind, ExprKind::Unread),
-        SyntaxKind::SequenceExpr => node.children().next().is_none(),
+        _ if crate::syntax::is_empty_collection_literal(&node) => true,
         _ => matches!(tail.kind, ExprKind::Literal(Value::Null)),
     };
     contextual.then(|| {

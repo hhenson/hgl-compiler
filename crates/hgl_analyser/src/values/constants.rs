@@ -22,10 +22,10 @@ use crate::hir::{
     Body, Callee, DefaultExpr, Expr, ExprKind, TypePackArgument, Value, walk_statements_mut,
 };
 use crate::program::{Declaration, DeclarationKind, Program, Role};
-use crate::read::{default_of, parameters};
+use crate::read::{default_of, field_initializer, parameters};
 use crate::syntax::{child, name_token, pack_key_branches, tokens};
 use crate::types::{
-    Argument, CallArguments, Constant, ConstantValue, Detail, Field, FieldRef, GenericKind,
+    Argument, CallArguments, Constant, ConstantValue, Detail, FieldRef, GenericKind,
     GenericParameter, Parameter, Signature, StructType, Type,
 };
 use crate::{codes, error};
@@ -302,7 +302,18 @@ impl<'a> Typer<'a> {
                     _ => None,
                 })
         };
-        self.typed_in_scope(file, node, expected, &parameter, &[])
+        let instance = if self.field_passes.is_empty() {
+            &[][..]
+        } else {
+            self.instance.as_slice()
+        };
+        let arguments: Vec<_> = self
+            .field_passes
+            .iter()
+            .chain(instance)
+            .map(|(at, value)| (*at, value))
+            .collect();
+        self.typed_in_scope(file, node, expected, &parameter, &arguments)
     }
 
     fn typed_in_scope(
@@ -467,53 +478,41 @@ impl<'a> Typer<'a> {
         } else {
             return ConstantValue::Unknown;
         };
-        let read = self.read_in(expr_at.file, &node, expected);
-        match read {
+        let not_constant = |why: &str| {
+            place.map(|place| {
+                error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    expr_at,
+                    format!(
+                        "{place} is a generic value parameter, and this is no compile-time \
+                         constant: {why}"
+                    ),
+                    "GEN-8",
+                )
+            })
+        };
+        let report = match self.read_in(expr_at.file, &node, expected) {
             Ok(value)
                 if crate::constant::worked_out(&value)
                     && !crate::constant::has_deferred_type_query(&value) =>
             {
-                value
+                return value;
             }
-            Ok(_) => {
-                if let Some(place) = place {
-                    self.diagnostics.emit(error(
-                        Category::Type,
-                        codes::GENERIC_ARGUMENT_CONSTANT,
-                        expr_at,
-                        format!(
-                            "{place} is a generic value parameter, and this is no compile-time \
-                             constant: this compiler does not work out its value"
-                        ),
-                        "GEN-8",
-                    ));
-                }
-                ConstantValue::Unknown
-            }
-            Err(Fault::NotConstant) => {
-                if let Some(place) = place {
-                    self.diagnostics.emit(error(
-                        Category::Type,
-                        codes::GENERIC_ARGUMENT_CONSTANT,
-                        expr_at,
-                        format!(
-                            "{place} is a generic value parameter, and this is no compile-time \
-                             constant: it is known only when the program runs"
-                        ),
-                        "GEN-8",
-                    ));
-                }
-                ConstantValue::Unknown
-            }
-            Err(fault) => {
-                if let (Some(place), Some(expected)) = (place, expected)
-                    && let Some(report) = fault.report(expr_at, place, expected)
-                {
-                    self.diagnostics.emit(report);
-                }
-                ConstantValue::Unknown
-            }
+            Ok(_) => not_constant("this compiler does not work out its value"),
+            Err(Fault::NotConstant) => not_constant("it is known only when the program runs"),
+            Err(fault) => place
+                .zip(expected)
+                .and_then(|(place, ty)| fault.report(expr_at, place, ty)),
+        };
+        // A field-name argument can fail at the same source in several passes.
+        if let Some(report) = report
+            && (!self.module.field_name_arguments.contains(&expr_at)
+                || !self.diagnostics.as_slice().contains(&report))
+        {
+            self.diagnostics.emit(report);
         }
+        ConstantValue::Unknown
     }
 
     /// Resolves any deferred `type(...)` generic arguments inside `ty` in the
@@ -1048,17 +1047,126 @@ fn record_field_default_lambda_arguments(body: &mut Body, arguments: &[Argument]
     });
 }
 
-/// The member that writes the initializer, identified by its first token.
-fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNode> {
-    declaration
-        .children()
-        .filter(|member| member.kind() == SyntaxKind::StructMember)
-        .find(|member| {
-            tokens(member)
-                .next()
-                .is_some_and(|name| name.span().start == field.at.span.start)
-        })
-        .and_then(|member| default_of(&member))
+/// UNIT-7 and FN-4/17: resolve an excluded name against the paired
+/// callable role, in every branch of each written default. The generic,
+/// parameter and field default evaluators continue to execute their own arms.
+pub(super) fn check_default_names(
+    program: &Program,
+    module: &crate::program::Module,
+    index: usize,
+    found: Tables<'_>,
+    diagnostics: &mut Diagnostics,
+) {
+    let declaration = &module.declarations[index];
+    let written = &declaration.syntax;
+    let struct_signature;
+    let mut defaults = Vec::new();
+    let signature = match &module.details[index] {
+        Detail::Callable(signature) => {
+            defaults.extend(
+                signature
+                    .parameters
+                    .iter()
+                    .filter(|parameter| parameter.has_default)
+                    .filter_map(|parameter| {
+                        Some((default_at(written, parameter)?, Some(&parameter.ty)))
+                    }),
+            );
+            signature
+        }
+        Detail::Struct(read) => {
+            defaults.extend(
+                read.fields
+                    .iter()
+                    .filter(|field| field.has_default)
+                    .filter_map(|field| {
+                        let ty = field.ty.as_ref().or_else(|| {
+                            read.members
+                                .iter()
+                                .find(|member| member.name == field.name)
+                                .map(|member| &member.ty)
+                        });
+                        Some((field_initializer(written, field)?, ty))
+                    }),
+            );
+            struct_signature = Signature::of_struct(read);
+            &struct_signature
+        }
+        _ => return,
+    };
+    defaults.extend(signature.generics.iter().filter_map(|generic| {
+        let GenericKind::Value(ty) = &generic.kind else {
+            return None;
+        };
+        Some((generic_default(written, generic)?, Some(ty)))
+    }));
+    for (default, expected) in defaults {
+        let span = default.span();
+        let mut pending: Vec<_> = module
+            .paired_default_names
+            .keys()
+            .copied()
+            .filter(|at| {
+                at.file == declaration.at.file
+                    && span.start <= at.span.start
+                    && at.span.end <= span.end
+            })
+            .collect();
+        if pending.is_empty() {
+            continue;
+        }
+        let mut typer = Typer::bare(program, module, declaration, signature, found, diagnostics);
+        typer.lexical_default_dependencies = true;
+        typer.default_name_visits = Some(Vec::new());
+        let mark = typer.mark();
+        let before = typer.diagnostics.len();
+        typer.expression(&default, expected);
+        // Open pack expansion and cold branches need not elaborate all
+        // expressions. Visit still-unread call sites in source-tree order:
+        // a containing call first supplies a reference's FN-17 template.
+        // Keep only the namespace diagnostics from these speculative reads.
+        for site in default.descendants().skip(1).filter(|node| {
+            matches!(
+                node.kind(),
+                SyntaxKind::CallExpr
+                    | SyntaxKind::TypedConstructor
+                    | SyntaxKind::UndecidedConstructor
+                    | SyntaxKind::FnExpr
+            )
+        }) {
+            if let Some(visits) = &mut typer.default_name_visits {
+                for at in visits.drain(..) {
+                    pending.retain(|other| *other != at);
+                }
+            }
+            if pending.is_empty() {
+                break;
+            }
+            let range = site.span();
+            if pending
+                .iter()
+                .any(|at| range.start <= at.span.start && at.span.end <= range.end)
+            {
+                typer.expression(&site, None);
+            }
+        }
+        // The normal default reader owns all other diagnostics.
+        let selected: Vec<_> = typer.diagnostics.as_slice()[before..]
+            .iter()
+            .filter(|report| {
+                module.paired_default_names.values().any(|readings| {
+                    readings.type_errors.contains(report) || readings.value_error == **report
+                })
+            })
+            .cloned()
+            .collect();
+        typer.take_back(mark, false);
+        for report in selected {
+            if !typer.diagnostics.as_slice().contains(&report) {
+                typer.diagnostics.emit(report);
+            }
+        }
+    }
 }
 
 /// The default a declaration writes for its generic value parameter

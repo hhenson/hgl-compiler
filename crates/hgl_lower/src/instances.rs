@@ -595,15 +595,16 @@ fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
         module,
         declaration,
         generics,
+        type_packs,
         requirements,
     } = answer
     else {
         return matches!(answer, Answer::Unread).then(|| "unread".to_string());
     };
-    let generics = generics
-        .iter()
-        .map(|argument| canonical_argument(program, argument))
-        .collect::<Option<Vec<_>>>()?;
+    let Detail::Callable(signature) = &program.modules[*module].details[*declaration] else {
+        return None;
+    };
+    let generics = generic_key(program, signature, generics, type_packs)?;
     let requirements = requirements
         .iter()
         .map(|answer| answer_key(program, answer))
@@ -669,7 +670,7 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         let mut targets = Vec::new();
         walk_statements(&function.body.statements, &mut |expression| {
             if let Some(target) = called_or_supplied(expression)
-                && !matches!(target, Callee::Unread)
+                && !matches!(target, Callee::Unread | Callee::UnreadWithConnection)
             {
                 targets.push(function_key(program, target));
             }

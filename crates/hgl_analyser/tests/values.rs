@@ -2297,9 +2297,9 @@ fn an_operators_default_is_the_options_value_for_a_candidates_condition() {
     let checked = module(concat!(
         "enum Zero { ieee, nan, error }\n",
         "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
-        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> f64\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
         "    requires zero in {.ieee, .nan} => lhs\n",
-        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
         "    requires zero == .error => ok(lhs)\n",
         "const fn uses(a: f64, b: f64) {\n",
         "    let plain = ratio(a, b)\n",
@@ -2572,7 +2572,11 @@ fn equally_specific_generic_candidates_are_ambiguous() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:8:15 operator/operator.ambiguous GEN-5"]
+        [
+            "m.hgl:3:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:4:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:8:15 operator/operator.ambiguous GEN-5",
+        ]
     );
     assert_eq!(locals(&checked, "uses")[2..4], ["one: i64", "two: i64"]);
 }
@@ -4078,6 +4082,203 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
     );
 }
 
+/// TYPE-5 and EXPR-9 distinguish a known field from a dictionary's key
+/// expression. An ordinary sequence of pairs keeps every first element.
+#[test]
+fn braced_entries_take_their_names_from_a_known_schema() {
+    let checked = module(
+        r#"
+const fn size(value: Quote) -> i64 => value.bid
+const fn makes(bid: str) -> i64 {
+    let field: Quote = {bid: 6}
+    let table = {bid: 4}
+    let entries = [bid: 2, bid: 7]
+    size({bid: 1}) + field.bid + table[bid] + entries[1][1]
+}
+struct Quote { bid: i64 }
+"#,
+    );
+    assert_eq!(checked.summary(), NONE);
+    let bad = module(
+        r#"
+struct Quote { bid: i64 }
+operator choose<T>(row:T)->i64
+impl const fn choose(row: Quote)->i64=>row.bid
+const fn bad() {
+    let duplicate = {"a": 1, "a": 2}
+    let members = {1, 1}
+    let repeated: Quote = {bid: 1, bid: 2}
+    let missing: Quote = {other: 1}
+    let unknown = choose({bid: 1})
+}
+"#,
+    );
+    let codes: Vec<_> = bad
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "type/dict.duplicate_key",
+            "type/set.duplicate_member",
+            "name/argument.duplicate",
+            "type/argument.missing",
+            "name/argument.unknown",
+            "name/name.unknown",
+        ]
+    );
+}
+
+/// TYPE-5: the public operator parameter gives the brace a concrete schema.
+#[test]
+fn operator_braces_use_only_an_independently_known_schema() {
+    let checked = module(
+        r#"
+struct Point { x: i64 }
+operator read_x(p: Point) -> i64
+impl const fn read_x(p: Point) -> i64 => p.x
+const fn public_schema(x: str) -> i64 => read_x({x: 10})
+"#,
+    );
+    assert_eq!(checked.summary(), NONE);
+}
+
+/// TYPE-5, TYPE-10 and ERR-2: a tag passes on the public struct schema
+/// and a candidate still checks its own list extent.
+#[test]
+fn tagged_braces_keep_the_public_schema_and_the_candidate_extent() {
+    let checked = module(
+        r#"
+struct Point { x:i64 }
+operator quotes<T>(v:result<list<T>,error>)->i64
+impl const fn quotes(v:result<list<Point,2>,error>)->i64=>2
+operator fails<T>(v:result<bool,list<T>>)->i64
+impl const fn fails(v:result<bool,list<Point,2>>)->i64=>3
+const fn right()->i64=>quotes<Point>(ok([{x:4},{x:7}]))
+const fn wrong_extent()->i64=>fails<Point>(err([{x:4},{x:7},{x:9}]))
+const fn wrong_field()->i64=>quotes<Point>(ok([{x:"wrong"},{x:7}]))
+"#,
+    );
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        ["operator/operator.no_candidate", "type/type.mismatch"],
+        "{}",
+        checked.report
+    );
+}
+
+/// EXPR-9 and TYPE-5: a public `any` element lets a candidate read the
+/// nested collection, but only an independently known struct schema can
+/// change the interpretation of a braced field name.
+#[test]
+fn a_partial_brace_schema_keeps_its_known_and_unknown_positions() {
+    let checked = module(
+        r#"
+struct Point { x:i64 }
+struct Other { x:i64 }
+operator choose<T>(v:T)->i64
+impl const fn choose(v:dict<Point,list<i64,2>>)->i64=>1
+operator value<T>(v:T)->i64
+impl const fn value(v:dict<str,Point>)->i64=>2
+const fn good(x:str) {
+    let known = choose<dict<Point,any>>({{x:4}:[1,2]})
+    let explicit = value<dict<str,any>>({"p":Point(x:3)})
+    let schema = value<dict<str,Point>>({"p":{x:3}})
+}
+const fn wrong_type(x:str)->i64=>choose<dict<Other,any>>({{x:4}:[1,2]})
+const fn unknown(x:str)->i64=>value<dict<str,any>>({"p":{x:3}})
+const fn absent(x:str)->i64=>value({"p":{x:3}})
+"#,
+    );
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|report| report.code.as_str())
+        .collect();
+    assert_eq!(
+        codes, ["operator/operator.no_candidate"; 3],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-2 checks a later argument against a type the first argument could
+/// already determine. TYPE-5 uses a concrete schema when one is known.
+#[test]
+fn an_inferred_schema_respects_argument_order_and_dictionary_key_scope() {
+    let checked = module(
+        r#"
+struct Point { x: i64 }
+const fn first<T>(a: T, b: T) -> T => a
+const fn good(x: str) {
+    let from_first = first(Point(x: 1), {x: 2})
+    let explicit: Point = first({x: 3}, Point(x: 4))
+    let entries = first({x: 5}, {x: 6})
+}
+const fn later() -> i64 {
+    let point = first({x: 1}, Point(x: 2))
+    point.x
+}
+const fn wrong(x: str) { let d = first({x: 1}, Point(x: 2)) }
+"#,
+    );
+    assert_eq!(
+        locals(&checked, "good")[1..],
+        [
+            "from_first: Point",
+            "explicit: Point",
+            "entries: dict<str, i64>"
+        ]
+    );
+    let findings: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(findings, ["type/type.mismatch"]);
+}
+
+/// EXPR-9 and UNIT-13 compare known constants, including different
+/// spellings, while runtime keys still permit the last value to win.
+#[test]
+fn collections_reject_only_repeated_constants() {
+    let checked = module(
+        r#"
+const NAME: str = "bid"
+const FOUR: i64 = 4
+const fn collect(k: str, n: i64) {
+    let bad: dict<str, i64> = ["bid": 1, NAME: 9]
+    let ints: set<i64> = [4, FOUR]
+    let flags: set<bool> = [true, false, true]
+    let aliases: dict<duration, i64> = [1s: 1, 1000ms: 9]
+    let good: dict<str, i64> = [k: 1, "bid": 9]
+    let mixed: set<i64> = [n, FOUR]
+    let occurrences = [4, FOUR]
+}
+"#,
+    );
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/dict.duplicate_key",
+            "type/set.duplicate_member",
+            "type/set.duplicate_member",
+            "type/dict.duplicate_key"
+        ],
+    );
+}
+
 /// EXPR-9: "`[a: b]` has one pair entry, not a standalone pair value.
 /// Empty brackets have no entries. The use site and expected type
 /// constrain element types, keys, ordering, uniqueness, and placeholder
@@ -4092,7 +4293,7 @@ fn pairs_are_a_dictionary_where_one_is_expected() {
         "    let book: dict<str, f64> = [\"a\": 1.0, \"b\": 2]\n",
         "    let empty: dict<str, i64> = []\n",
         "    let nested: dict<str, list<i64>> = [\"a\": [1, 2], \"b\": []]\n",
-        // Nothing says what the pairs make.
+        // With no dictionary expected, these are tuples in a list.
         "    let loose = [\"a\": 1.0]\n",
         // A key, and a value, of another type; a place that takes no
         // dictionary.
@@ -4105,18 +4306,18 @@ fn pairs_are_a_dictionary_where_one_is_expected() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:17 type/sequence.context_type EXPR-9",
             "m.hgl:7:34 type/type.mismatch EXPR-5",
             "m.hgl:8:40 type/type.mismatch EXPR-5",
-            "m.hgl:9:29 type/type.mismatch EXPR-5",
+            "m.hgl:9:30 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
-        locals(&checked, "made")[..3],
+        locals(&checked, "made")[..4],
         [
             "book: dict<str, f64>",
             "empty: dict<str, i64>",
             "nested: dict<str, list<i64>>",
+            "loose: list<tuple<str, f64>>",
         ]
     );
     // `["x": 1.5]`: the pairs of the function's result.

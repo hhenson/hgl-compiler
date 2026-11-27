@@ -170,6 +170,95 @@ fn a_candidate_keeps_the_operator_pack_slot() {
     );
 }
 
+/// GEN-6: a public const parameter or callback keeps its mode.
+#[test]
+fn a_candidate_keeps_the_operators_parameter_modifiers() {
+    let checked = module(concat!(
+        "operator at(arg: i64, const n: i64) -> i64\n",
+        "impl const fn at(arg: i64, n: i64) -> i64 => arg + n\n",
+        "operator apply(f: const fn(i64) -> i64, x: i64) -> i64\n",
+        "impl fn apply(f: fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:28 operator/impl.parameter GEN-6",
+            "m.hgl:5:15 operator/impl.parameter GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-15: an operator cannot declare var. That syntax has one
+/// declaration error before any candidate configuration is considered.
+#[test]
+fn a_public_var_is_reported_only_on_the_operator() {
+    let checked = module(concat!(
+        "operator store_value(var target: i64, value: i64)\n",
+        "impl const fn store_value(target: i64, value: i64) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:22 function-kind/parameter.var FN-15"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a condition on an option does not restore a missing const
+/// modifier. The value and native candidates reject where declared.
+#[test]
+fn a_candidates_option_condition_does_not_replace_const() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        "native impl const fn ratio(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
+        "    requires zero in {.ieee, .nan}\n",
+        "impl const fn ratio(lhs: str, rhs: str, zero: Zero) -> str requires zero == .nan => lhs\n",
+        "impl const fn ratio(lhs: bool, rhs: bool, zero: Zero) -> bool requires .nan == zero => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:48 operator/impl.parameter GEN-6",
+            "m.hgl:6:41 operator/impl.parameter GEN-6",
+            "m.hgl:7:43 operator/impl.parameter GEN-6",
+            "m.hgl:8:41 operator/impl.parameter GEN-6",
+            "m.hgl:10:41 operator/impl.parameter GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a candidate can add const, take a public callback as const in
+/// value code, add var (FN-15), or take a public ordinary input as any.
+#[test]
+fn a_candidate_can_add_modifiers_or_take_any() {
+    let checked = module(concat!(
+        "operator at(arg: i64, n: i64) -> i64\n",
+        "impl const fn at(arg: i64, const n: i64) -> i64 => arg + n\n",
+        "operator apply(f: fn(i64) -> i64, x: i64) -> i64\n",
+        "impl const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "operator pick(arg: i64) -> i64\n",
+        "impl const fn pick(arg: any) -> i64 => 1\n",
+        "operator assign(target: i64, value: i64)\n",
+        "impl const fn assign(var target: i64, value: i64) { target = value }\n",
+        "const fn inc(value: i64) -> i64 => value + 1\n",
+        "const fn call() -> i64 {\n",
+        "    var target = at(2, 3)\n",
+        "    assign(target, apply(inc, target))\n",
+        "    return target + pick(3)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
 /// GEN-6: the candidate's declaration reports the result it contradicts
 /// even when a generic caller or an explicit argument could select it.
 #[test]

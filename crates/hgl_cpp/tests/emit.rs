@@ -2116,6 +2116,74 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
     );
 }
 
+/// EXPR-6 and ERR-12: a composed Boolean cannot guard the read of a
+/// nullable connection wired as an independent dependency.
+#[test]
+fn a_composed_nullable_guard_declines_the_independent_read() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            r#"module m
+fn both(x: i64?) -> bool => x != null && x > 3
+fn either(x: i64?) -> bool => x == null || x > 3
+fn chained(enabled: bool, x: i64?) -> bool => enabled && null != x && x > 3
+fn grouped_both(enabled: bool, x: i64?) -> bool => (enabled && x != null) && x > 3
+fn grouped_either(enabled: bool, x: i64?) -> bool => (enabled || x == null) || x > 3
+fn grouped_other(enabled: bool, x: i64?, y: i64?) -> bool => (enabled && x != null) && y > 3
+fn mixed(enabled: bool, x: i64?) -> bool => (enabled || x != null) && x > 3
+fn different(x: i64?, y: i64?) -> bool => x != null && y > 3
+fn unguarded(x: i64?) -> bool => x == null && x > 3
+fn composed_if(x: i64?) -> bool => if x != null { x > 3 } else { false }
+const fn scalar_both(x: i64?) -> bool => x != null && x > 3
+const fn scalar_either(x: i64?) -> bool => x == null || x > 3
+fn lifted_value(x: i64?) -> bool => scalar_either(x)
+
+test and_chain { assert eval both(x: [null, 5, 2]) == [false, true, false] }
+test or_chain { assert eval either(x: [null, 5, 2]) == [true, true, false] }
+test pack_chain { assert eval chained(x: [null, 5, 2], enabled: [true, true, true]) == [false, true, false] }
+test grouped_and { assert eval grouped_both(x: [null, 5], enabled: [true, true]) == [false, true] }
+test grouped_or { assert eval grouped_either(x: [null, 5], enabled: [false, false]) == [true, true] }
+test grouped_unrelated { assert eval grouped_other(x: [null, 5], y: [5, 2], enabled: [true, true]) == [false, false] }
+test mixed_connectives { assert eval mixed(x: [5, 2], enabled: [true, true]) == [true, false] }
+test unrelated { assert eval different(x: [null, 5], y: [5, 2]) == [false, false] }
+test wrong_polarity { assert eval unguarded(x: [5, 2]) == [false, false] }
+test temporal_if { assert eval composed_if(x: [null, 5, 2]) == [false, true, false] }
+test scalar { assert !scalar_both(null) && scalar_either(null) }
+test lifted_scalar { assert eval lifted_value(x: [null, 5, 2]) == [true, true, false] }
+"#,
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    for (test, operator) in [
+        ("and_chain", "&&"),
+        ("or_chain", "||"),
+        ("pack_chain", "&&"),
+        ("grouped_and", "&&"),
+        ("grouped_or", "||"),
+    ] {
+        let blocked = emitted
+            .blocked(test)
+            .expect("nullable graph guard is declined");
+        assert!(
+            blocked.ends_with(&format!(
+                "the cpp target does not write a nullable payload read guarded by a composed `{operator}` yet"
+            )),
+            "{blocked}"
+        );
+    }
+    for test in [
+        "unrelated",
+        "grouped_unrelated",
+        "mixed_connectives",
+        "wrong_polarity",
+        "temporal_if",
+        "scalar",
+        "lifted_scalar",
+    ] {
+        assert_eq!(emitted.blocked(test), None, "{test}");
+    }
+}
+
 /// TYPE-14: a connection of T is one of `T?` where one is taken, through
 /// hgraph's own widening of its port (`Port::as`): given to a node's input,
 /// returned as a graph's result, and given to a `ref` parameter of `T?`,
@@ -3181,8 +3249,9 @@ fn temporal_structs_and_nullables_are_written() {
 }
 
 /// Report temporal shapes still beyond the target: a struct whose field
-/// has a form the library does not read as a part (a set), a struct with
-/// generic value arguments, and a tuple with an atomic position.
+/// has a form the library does not read as a part (a set), a struct with an
+/// unsupported generic value argument kind (`str`), and a tuple with an
+/// atomic position.
 #[test]
 fn temporal_structs_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -3192,13 +3261,13 @@ fn temporal_structs_not_written_yet_are_reported() {
             "struct Listed {\n",
             "    values: set<i64>\n",
             "}\n",
-            "struct Box<const N: i64> {\n",
+            "struct Labeled<const tag: str> {\n",
             "    value: i64\n",
             "}\n",
             "fn listed(value: Listed) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn boxed(value: Box<2>) -> i64 {\n",
+            "fn labeled(value: Labeled<\"a\">) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
             "struct Plain {\n",
@@ -3212,15 +3281,16 @@ fn temporal_structs_not_written_yet_are_reported() {
     assert_eq!(
         emitted.reported,
         [
+            "m.hgl:5:8 the cpp target does not write a generic parameter of this kind of a struct yet",
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
-            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<2>` yet",
+            "m.hgl:11:12 the cpp target does not write a temporal value of `Labeled<\"a\">` yet",
             "m.hgl:17:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }
 
-/// Schema identity includes the applied type arguments (TYPE-3), and the
-/// same schema is usable by both sides of a trace (TYPE-9, CEVAL-3, CEVAL-4).
+/// Schema identity includes the applied type and value arguments (TYPE-3), and
+/// the same schema is usable by both sides of a trace (TYPE-9, CEVAL-3, CEVAL-4).
 #[test]
 fn concrete_generic_structs_use_applied_bundle_schemas() {
     let emitted = emit_with(
@@ -3242,6 +3312,16 @@ fn concrete_generic_structs_use_applied_bundle_schemas() {
         .expect("generated types header")
         .text;
     assert!(types.contains("::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>"));
+    assert!(types.contains("::hglrt::nominal_struct_name<\"Bucket\", ::hglrt::value_arg<N_p_>>"));
+    assert!(types.contains(
+        "::hglrt::nominal_struct_name<\"Mixed\", ::hglrt::type_arg_slot, ::hglrt::value_arg<N_p_>>"
+    ));
+    assert!(
+        types.contains("::hglrt::nominal_struct_name<\"InferredSized\", ::hglrt::value_arg<N_p_>>")
+    );
+    assert!(types.contains(
+        "::hglrt::nominal_struct_name<\"InferredRow\", ::hglrt::type_arg_slot, ::hglrt::value_arg<N_p_>>"
+    ));
 }
 
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
@@ -3734,8 +3814,10 @@ test tag {
         .expect("module implementation")
         .text;
     assert!(body.contains("::hglrt::type_tag{\"i64\"}"), "{body}");
-    // Cross-module same-named structs emit distinct declaration identities.
+    // Cross-module same-named structs emit distinct declaration identities
+    // alongside their canonical spelling for display (TYPE-18, FMT-5).
     assert!(body.contains("::hglrt::type_tag{\"declaration("), "{body}");
+    assert!(body.contains(", \"Quote\"}"), "{body}");
 }
 
 /// TYPE-18, Proposed: source connection checking awaits its diagnostic,

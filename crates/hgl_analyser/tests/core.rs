@@ -171,6 +171,162 @@ fn formatting_checks_deferred_const_inputs_at_the_caller() {
     }
 }
 
+/// FMT-3 and GEN-7: a named requirement admits the declaration, then the
+/// selected candidate's pattern demand reaches the outside making call.
+#[test]
+fn formatting_follows_a_named_requirements_selected_const_demand() {
+    let checked = with_core(concat!(
+        "operator variant<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn variant{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn variant{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn req<T>(const p: str, v: T) -> str requires variant(T) -> str => variant{pattern: p}(v)\n",
+        "test bad { assert req(\"{:x}\", 1.5) == \"\" }\n",
+        "test good { assert req(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+        "test literal { assert req(\"{:x}\", 7) == \"{:x}\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:19 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `req<f64>`")
+    );
+}
+
+/// FMT-3, FN-19 and GEN-7: an indexed pack leaves the operator unread
+/// until specialization, including its ordinary const option demand.
+#[test]
+fn formatting_follows_an_indexed_packs_selected_const_demand() {
+    let checked = with_core(concat!(
+        "operator lab<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn lab{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn lab{const pattern: str}(value: i64) -> str => format(pattern, value)\n",
+        "const fn top<...As>(const p: str, args: ...As) -> str => lab{pattern: p}(args[0])\n",
+        "test bad { assert top(\"{:x}\", 1.5) == \"\" }\n",
+        "test good { assert top(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+        "test integer { assert top(\"{:x}\", 15) == \"f\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:19 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `top<[f64]>`")
+    );
+}
+
+/// FMT-3 and GEN-7: conditional discovery does not read an ordinary
+/// const parameter when the selected candidate returns it at run time.
+#[test]
+fn selected_operator_patterns_can_remain_runtime_values() {
+    let checked = with_core(concat!(
+        "operator variant<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn variant{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn variant{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn req<T>(const p: str, v: T) -> str requires variant(T) -> str => variant{pattern: p}(v)\n",
+        "const fn packed<...As>(const p: str, args: ...As) -> str => variant{pattern: p}(args[0])\n",
+        "const fn identity(value: str) -> str => value\n",
+        "const P: str = identity(\"{:x}\")\n",
+        "test required { assert req(P, 7) == \"{:x}\" }\n",
+        "test indexed { assert packed(P, 7) == \"{:x}\" }\n",
+    ));
+    assert!(!checked.rejected, "{}", checked.report);
+}
+
+/// CAP-6 and TIME-8: a runtime-only selected use must not erase the
+/// separate store-key demand of the same ordinary const parameter.
+#[test]
+fn selected_runtime_patterns_preserve_fixed_store_key_checks() {
+    for call in ["keep{pattern: key}(value)", "keep{pattern: key}(values[0])"] {
+        let parameter = if call.contains("values[0]") {
+            "<...As>(store: GlobalState, const key: str, values: ...As)"
+        } else {
+            "<T>(store: GlobalState, const key: str, value: T) requires keep(T) -> str"
+        };
+        let source = format!(
+            "operator keep<T>{{const pattern: str = \"<{{}}>\"}}(value: T) -> str\n\
+             impl const fn keep{{const pattern: str}}(value: i64) -> str => pattern\n\
+             const fn save{parameter} {{\n\
+                 let ignored = {call}\n\
+                 put(store, key, 7)\n\
+             }}\n\
+             fn node(const key: str) {{\n\
+                 inject global_state\n\
+                 when {{}}\n\
+                 stop {{ save(global_state, key, 1) }}\n\
+             }}\n\
+             test bad {{ eval node(key: \"run.output\") }}\n\
+             test safe {{ eval node(key: \"user.key\") }}\n\
+             const fn grow(store: GlobalState, depth: i64, const key: str) {{\n\
+                 if depth == 0 {{ save(store, key, 1) }}\n\
+                 else {{ grow(store, depth - 1, key + \".output\") }}\n\
+             }}\n\
+             fn dynamic(const key: str) {{\n\
+                 inject global_state\n\
+                 when {{}}\n\
+                 stop {{ grow(global_state, 1, key) }}\n\
+             }}\n\
+             test changing {{ eval dynamic(key: \"run\") }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        assert_eq!(checked.findings[0].code, "injectable/store.reserved_key");
+        assert_eq!(checked.findings[0].at, "m.hgl:13:12");
+    }
+}
+
+/// GEN-13: a recovered store-only read retains its lower budget priority
+/// when another ordinary const input is actually read for formatting.
+#[test]
+fn recovered_store_inputs_do_not_spend_the_formatting_read_budget_first() {
+    let body = concat!(
+        "operator keep<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn keep{const pattern: str}(value: i64) -> str => pattern\n",
+        "operator shown<T>{const pattern: str}(value: T) -> str\n",
+        "impl const fn shown{const pattern: str}(value: i64) -> str => format(pattern, value)\n",
+        "impl const fn shown{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "const fn show<T>(const p: str, value: T) -> str requires T in {i64, f64} => shown{pattern:p}(value)\n",
+        "const fn save<T>(store: GlobalState, const key: str, const p: str, value: T) requires T in {i64, f64} && keep(T) -> str {\n",
+        "    let ignored = keep{pattern: key}(value)\n",
+        "    let message = show(p, value)\n",
+        "    put(store, key, 7)\n",
+        "}\n",
+        "fn node(const key: str) {\n",
+        "    inject global_state\n",
+        "    when {}\n",
+        "    stop { save(global_state, key, \"{:x}\", 1) }\n",
+        "}\n",
+    );
+    for reversed in [false, true] {
+        let body = if reversed {
+            body.replace(
+                "const key: str, const p: str",
+                "const p: str, const key: str",
+            )
+            .replace(
+                "save(global_state, key, \"{:x}\", 1)",
+                "save(global_state, \"{:x}\", key, 1)",
+            )
+        } else {
+            body.to_owned()
+        };
+        let source = format!(
+            "{body}test safe {{ eval node(key: \"{}\") }}\n",
+            "a".repeat(1 << 16),
+        );
+        let checked = with_core(&source);
+        assert!(!checked.rejected, "reversed={reversed}: {}", checked.report);
+    }
+}
+
 /// GEN-7: an independent const input rejects at its body call once.
 #[test]
 fn formatting_checks_independent_const_inputs_once() {
@@ -795,6 +951,267 @@ fn formatting_checks_a_pattern_returned_to_a_module_constant() {
         "{}",
         checked.report,
     );
+}
+
+/// FMT-3/4 and UNIT-13: ordinary module helpers keep lexical frames and
+/// actual inputs distinct, including when the pattern is forwarded.
+#[test]
+fn formatting_checks_module_helper_arguments_and_immutable_locals() {
+    for helper in [
+        "const fn pattern(s: str) -> str => s",
+        "const fn pattern(s: str) -> str { let first = s\nlet second = first\nreturn second }",
+        "const fn id(s: str) -> str => s\nconst fn pattern(s: str) -> str => id(id(s))",
+        "const GLOBAL: str = \"{:x}\"\nconst fn pattern(s: str) -> str { let GLOBAL = s\nreturn GLOBAL }",
+    ] {
+        let checked = with_core(&format!(
+            "{helper}\nconst P: str = pattern(\"{{:.1f}}\")\nconst Q: str = pattern(\"{{:x}}\")\n\
+             const fn good() -> str => format(P, 1.5)\n\
+             const fn relay<T>(const p: str, value: T) -> str => format(p, value)\n\
+             test bad {{ assert relay(Q, 1.5) == \"\" }}\n"
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [("type/format.specifier", "FMT-4")],
+            "{helper}: {}",
+            checked.report
+        );
+    }
+}
+
+/// FMT-3/4/9: late module patterns use the original source phase and
+/// diagnostics, rather than treating an entire test as graph code.
+#[test]
+fn formatting_checks_late_module_patterns_in_their_original_context() {
+    for (pattern, operand, code, rule) in [
+        ("{:x}", ", 1.5", "type/format.specifier", "FMT-4"),
+        ("{", "", "type/format.syntax", "FMT-3"),
+        ("{missing}", ", 1.5", "type/format.argument", "FMT-3"),
+        (
+            "{}",
+            ", convert<i64>(\"3\")",
+            "operator/operator.no_candidate",
+            "FMT-5",
+        ),
+        ("{engine_time}", "", "type/format.argument", "FMT-9"),
+    ] {
+        let checked = with_core(&format!(
+            "const fn pattern(s: str) -> str => s\nconst P: str = pattern(\"{pattern}\")\n\
+             test t {{ assert format(P{operand}) == \"\" }}\n"
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [(code, rule)],
+            "{pattern}: {}",
+            checked.report
+        );
+    }
+}
+
+/// UNIT-13 and ERR-9: written dead branches still take part in cycles.
+/// An unrelated failed constant must not hide an independent FMT-4 error.
+#[test]
+fn formatting_module_helpers_preserve_constant_dependency_failures() {
+    for (helper, unrelated, expected) in [
+        ("P", "", vec!["name/constant.cycle"]),
+        ("if false { P } else { s }", "", vec!["name/constant.cycle"]),
+        (
+            "s",
+            "const Z: i64 = if false { Z } else { 1 }\n",
+            vec!["name/constant.cycle", "type/format.specifier"],
+        ),
+    ] {
+        for forwarded in [false, true] {
+            let call = if forwarded {
+                "relay(P, 1.5)"
+            } else {
+                "format(P, 1.5)"
+            };
+            let checked = with_core(&format!(
+                "{unrelated}const fn pattern(s: str) -> str => {helper}\n\
+                 const P: str = pattern(\"{{:x}}\")\n\
+                 const fn relay<T>(const p: str, value: T) -> str => format(p, value)\n\
+                 test t {{ assert {call} == \"\" }}\n"
+            ));
+            assert_eq!(
+                checked
+                    .findings
+                    .iter()
+                    .map(|f| f.code.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{helper}, forwarded={forwarded}: {}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// FMT-3 remains partial: opaque, effectful and recursive helper bodies
+/// are not evaluated by the bounded module-pattern reader.
+#[test]
+fn formatting_leaves_unsupported_module_helpers_unread() {
+    for helper in [
+        "native const fn pattern(s: str) -> str",
+        "const fn pattern(s: str) -> str { write(\"effect\")\nreturn s }",
+        "const fn pattern(s: str) -> str => pattern(s)",
+    ] {
+        let checked = with_core(&format!(
+            "{helper}\nconst P: str = pattern(\"{{:x}}\")\n\
+             test t {{ assert format(P, 1.5) == \"\" }}\n"
+        ));
+        assert!(checked.findings.is_empty(), "{}", checked.report);
+    }
+}
+
+/// UNIT-13 and FN-1: the helper extension must not fold a non-helper
+/// expression and add a format error after its existing source failure.
+#[test]
+fn formatting_helper_fallback_preserves_non_helper_source_failures() {
+    for (source, code, rule) in [
+        (
+            "const P: str = if false { P } else { \"{:x}\" }\nconst fn show(value: f64) -> str => format(P, value)\n",
+            "name/constant.cycle",
+            "UNIT-13",
+        ),
+        (
+            "const fn show(value: f64) -> str => format(if true { \"{:x}\" } else { \"{}\" }, value)\n",
+            "type/argument.constant",
+            "FN-1",
+        ),
+    ] {
+        let checked = with_core(source);
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [(code, rule)],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// UNIT-13, FN-1: evidence for one helper constant cannot validate a
+/// different written root, including in a non-selected conditional arm.
+#[test]
+fn formatting_helper_fallback_proves_every_written_module_root() {
+    for cyclic in [false, true] {
+        for inline in [false, true] {
+            for condition in [false, true] {
+                let other = if cyclic {
+                    "const Q: str = if false { Q } else { \"\" }\n"
+                } else {
+                    "native const fn unknown() -> str\nconst Q: str = unknown()\n"
+                };
+                let conditional = format!("if {condition} {{ P }} else {{ Q }}");
+                let (definition, pattern) = if inline {
+                    (String::new(), conditional)
+                } else {
+                    (format!("const R: str = {conditional}\n"), "R".to_string())
+                };
+                let checked = with_core(&format!(
+                    "const fn pat(text: str) -> str => text\nconst P: str = pat(\"{{:x}}\")\n{other}{definition}const fn show(value: f64) -> str => format({pattern}, value)\n"
+                ));
+                let mut expected = Vec::new();
+                if cyclic {
+                    expected.push(("name/constant.cycle", "UNIT-13"));
+                }
+                if inline {
+                    expected.push(("type/argument.constant", "FN-1"));
+                }
+                assert_eq!(
+                    checked
+                        .findings
+                        .iter()
+                        .map(|f| (f.code.as_str(), f.rule))
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+    for forwarded in [false, true] {
+        let call = if forwarded {
+            "relay(P + Q, value)"
+        } else {
+            "format(P + Q, value)"
+        };
+        let checked = with_core(&format!(
+            "const fn pat(text: str) -> str => text\nconst P: str = pat(\"{{:x}}\")\nconst Q: str = if false {{ Q }} else {{ \"\" }}\nconst fn relay<T>(const p: str, value: T) -> str => format(p, value)\nconst fn show(value: f64) -> str => {call}\n"
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [("name/constant.cycle", "UNIT-13")],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// FMT-4, UNIT-13: an earlier input's helper proof must not impose
+/// new proof requirements on an independent later input.
+#[test]
+fn formatting_helper_input_proofs_do_not_leak_to_another_input() {
+    let checked = with_core(
+        "const fn pat(text: str) -> str => text\nconst P: str = pat(\"{}\")\nnative const fn opaque() -> str\nconst Q: str = if true { \"{:x}\" } else { opaque() }\nconst fn show(const a: str, const b: str, value: f64) -> str => format(a, 1) + format(b, value)\ntest t { assert show(P, Q, 1.5) == \"\" }\n",
+    );
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|f| (f.code.as_str(), f.rule))
+            .collect::<Vec<_>>(),
+        [("type/format.specifier", "FMT-4")],
+        "{}",
+        checked.report
+    );
+}
+
+/// FMT-4, UNIT-13: an earlier helper may call a later module's helper.
+/// Defer the pattern until every typed body exists instead of indexing it early.
+#[test]
+fn formatting_helper_patterns_wait_for_later_module_bodies() {
+    let checked = check(&[
+        (
+            "a.hgl",
+            "module ordering.a\nuse ordering.z::{inner}\nexport const fn pattern(text: str) -> str => inner(text)\n",
+        ),
+        (
+            "b.hgl",
+            "module ordering.b\nuse ordering.a::{pattern}\nconst P: str = pattern(\"{:x}\")\nconst fn show(value: f64) -> str => format(P, value)\n",
+        ),
+        (
+            "z.hgl",
+            "module ordering.z\nexport const fn inner(text: str) -> str => text\n",
+        ),
+    ]);
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|f| (f.code.as_str(), f.rule))
+            .collect::<Vec<_>>(),
+        [("type/format.specifier", "FMT-4")],
+        "{}",
+        checked.report
+    );
+    assert!(checked.findings[0].at.starts_with("b.hgl:4:"));
 }
 
 /// FMT-5: an implicit conversion reaches the same instance and

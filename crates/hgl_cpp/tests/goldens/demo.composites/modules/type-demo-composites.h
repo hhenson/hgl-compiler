@@ -1078,6 +1078,27 @@ struct std::hash<::hgl::demo::composites::m_::d_::Sided<side_p_>>
 {
     ::std::size_t operator()(const ::hgl::demo::composites::m_::d_::Sided<side_p_>& value) const { return ::hglrt::key_hash_of(value); }
 };
+// TYPE-9: `Sided` as hgraph's nominal bundle, its fields as `fields` names them.
+template <::hgl::demo::composites::m_::Side side_p_>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Sided<side_p_>>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", ::hglrt::nominal_struct_name<"Sided", ::hglrt::value_arg<side_p_>>, false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, ::hgraph::Field<"count", ::hglrt::bundle_value<::hgraph::Int>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Sided<side_p_>>::members;
+};
+template <::hgl::demo::composites::m_::Side side_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::Sided<side_p_>>
+{
+    static ::std::string name() { return ::hglrt::applied_struct_name<::hglrt::value_arg<side_p_>>("demo.composites::Sided"); }
+    static constexpr ::std::array<::std::string_view, 1> fields{"count"};
+    static constexpr bool delta = false;
+};
+template <::hgl::demo::composites::m_::Side side_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Sided<side_p_>>
+{
+    static ::std::string name() { return "delta<" + ::hglrt::applied_struct_name<::hglrt::value_arg<side_p_>>("demo.composites::Sided") + ">"; }
+    static constexpr ::std::array<::std::string_view, 1> fields{"count"};
+    static constexpr bool delta = true;
+};
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::Outcome>
 {

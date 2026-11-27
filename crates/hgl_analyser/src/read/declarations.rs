@@ -14,10 +14,10 @@ use crate::types::{
     Detail, Field, FunctionParameter, FunctionType, GenericKind, GenericParameter, Pack, Parameter,
     Signature, StructType, Type,
 };
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 use super::{
-    Id, Position, Reader, default_of, is_const, is_empty_sequence, is_null, is_type,
+    Id, Position, Reader, default_of, is_const, is_empty_collection, is_null, is_type,
     names_before_colon, type_child,
 };
 
@@ -516,12 +516,28 @@ impl Reader<'_> {
         };
         let mut parameters = Vec::new();
         let mut named_pack = None;
+        let mut positional_pack = false;
         let inputs = child(template, SyntaxKind::ParamList)
             .into_iter()
             .flat_map(|list| list.children())
             .filter(|input| input.kind() == SyntaxKind::FunctionTypeParam);
         for input in inputs {
-            if let Some(pack) = child(&input, SyntaxKind::PackType)
+            let pack = child(&input, SyntaxKind::PackType);
+            if pack.is_none()
+                && let Some(ellipsis) =
+                    tokens(&input).find(|token| token.kind() == SyntaxKind::Ellipsis)
+            {
+                self.diagnostics.emit(local_error(
+                    Category::Type,
+                    codes::local::PACK_FUNCTION_TYPE,
+                    self.at(ellipsis.span()),
+                    "a function type cannot take a positional pack".to_string(),
+                    "FN-17",
+                ));
+                positional_pack = true;
+                continue;
+            }
+            if let Some(pack) = pack
                 && child(&pack, SyntaxKind::PackFor).is_none()
             {
                 if let Some(reflected) = self.reflected_pack(&input, &pack) {
@@ -549,6 +565,10 @@ impl Reader<'_> {
             self.record(written.span(), ty)
         });
         let reference = annotation.is_some_and(|written| has_token(&written, SyntaxKind::KwRef));
+        if positional_pack {
+            // The rejected template has no known arity for later calls.
+            return Type::Unknown;
+        }
         Type::Function(Box::new(FunctionType {
             value,
             parameters,
@@ -591,7 +611,7 @@ impl Reader<'_> {
             // The default is the member's child that is no type.
             let written = member.children().find(|part| !is_type(part.kind()));
             let null_default = written.as_ref().is_some_and(is_null);
-            let empty_default = written.as_ref().is_some_and(is_empty_sequence);
+            let empty_default = written.as_ref().is_some_and(is_empty_collection);
             fields.push(Field {
                 name: name.text().to_string(),
                 at: self.at(name.span()),

@@ -90,11 +90,14 @@ analyser: partial
 - In a handler with manual validity, a leading `valid(input)` guards a read of
   that input on the right of `&&`. The reversed order reports `payload.unguarded`.
 
-transpiler: done
+transpiler: partial
 
 - Value code and hooks use short-circuit Boolean expressions in operand order, including
   guarding a payload read.
 - A Boolean call over connections wires every connected operand as an input (FN-6, FN-11).
+- The C++ target declines a composed Boolean guard followed by an independent read
+  of that same nullable connection, including chains grouped with the same connective
+  (ERR-12). A temporal `if` supplies separate branches.
 
 ## EXPR-7
 
@@ -104,7 +107,7 @@ analyser: partial
 - When a graph's deferred collection type settles, its bracket reads get the element type and take the implicit reads needed by the base, index or key (GEN-7, ERR-12, ERR-15).
 - A tuple that settles in an instance checks the same constant index and bounds. A checked position is recorded as its integer value.
 - A graph member read with a deferred base retains its member name until selection can check the field or property and its implicit reads (GEN-7, ERR-12, ERR-15).
-- An index whose base has a known type outside lists, tuples and dictionaries reports `type.mismatch`, including when that base settles in a graph instance (GEN-7). A set has no indexed place to assign (EXPR-3).
+- An index whose base has a known type outside lists, tuples and dictionaries reports `type.mismatch`, including when that base settles in a graph instance or through concrete generic instantiations (direct, forwarded, or wrapped in `T?`, `atomic<T>`, or `result<T, E>`) (GEN-7). A set has no indexed place to assign (EXPR-3).
 - A member or an element of a nullable's payload is read where a null test proves it present (ERR-12), and a result's payload through its tag (ERR-3)
 - A structural projection of a `ref` parameter in a hook, `xs[i]` or `quote.bid`, selects its child, an endpoint, and reads no payload; an atomic projection of one, `quote.bid` of `ref quote: atomic<Quote>`, reads its payload and is `ref.read` (FN-16)
 - Left: A bare type parameter can still be indexed without a requirement
@@ -122,7 +125,9 @@ transpiler: partial
 
 ## EXPR-8
 
-analyser: done
+analyser: partial
+
+- Nonempty tuples and grouping work. The ordinary empty tuple expression `()` and type `tuple<>` remain open in [#992](https://github.com/hhenson/hgl-compiler/issues/992).
 
 - A `_` stands in a trace of a test: in a sequence that is none it is `trace.placeholder`
 
@@ -130,19 +135,20 @@ analyser: done
 
 parser: done
 
-- Brackets delimit a sequence whose entries are all values or all pairs
+- Brackets delimit a sequence whose entries are all values or all pairs. Braces delimit a set when an entry is followed by a comma, or a keyed literal when followed by a colon. `{,}` and `{:}` are the two empty collection forms. `{}` and `{a}` remain blocks.
 
 analyser: partial
 
 - A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected
 - An inferred list with unfinished entries keeps its element type open until graph specialization can join them and widen eligible literals (EXPR-5, GEN-7).
-- Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
+- Bracketed colon entries in an ordinary list abbreviate ordered tuples, including repeated first elements. A dictionary context reads each key and value as its declared type.
+- Braces give a set or dictionary its kind. Their contents and the surrounding type determine the member, key and value types. An empty set or dictionary requires these types from its context.
+- A keyed brace can construct a known concrete struct with bare field names, with the same field defaults, validation and written evaluation order as a named construction. A dictionary evaluates bare keys as expressions.
 - A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
-- A written `set<str>` rejects a repeated constant string at the later member (`set.duplicate_member`, UNIT-13).
+- An inline operator argument uses a list reading before an admitted set reading (GEN-5). The public parameter can supply a set directly, including through a written type argument.
+- A dictionary key or set member already known to repeat when its source is checked reports at the later occurrence, with the first as a related location (`dict.duplicate_key`, `set.duplicate_member`, UNIT-13).
 - In a trace, timed pairs have explicit publications. `_` is admitted in a dense
   trace and rejected in a timed trace or ordinary sequence (EXPR-8, TST-7).
-- Left: Repeated constant dictionary keys and repeated constant non-string set
-  members can still pass source checking.
 
 transpiler: partial
 
@@ -235,6 +241,7 @@ parser: done
 analyser: done
 
 - Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent, which must agree with the destination after selection.
+- In an operator's public input pattern, a comprehension entry can keep a fixed list extent where the pattern omits it. The candidate still checks its own extent (TYPE-10, GEN-8).
 - A range in a forwarded body uses its enclosing instance's fitted bounds when the body is read again (GEN-7).
 - In composition, ordinary entries over a range make an ordinary list that a `const` parameter can take. A connection in a range's entries or the use of a fixed-list connection as the iterable makes a fixed list connection.
 

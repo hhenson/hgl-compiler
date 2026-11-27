@@ -13,6 +13,347 @@ use hgl_analyser::{Detail, GenericKind};
 /// No findings.
 const NONE: [&str; 0] = [];
 
+/// GEN-8 and EXPR-5: the first or a later written type argument fixes
+/// the corresponding public parameter of a function or operator call.
+#[test]
+fn written_generic_types_constrain_call_arguments() {
+    let checked = module(concat!(
+        "const fn first_fn<K, M>(key: K, mode: M) -> i64 => 1\n",
+        "const fn later_fn<M, K>(mode: M, key: K) -> i64 => 1\n",
+        "operator first_op<K, M>(key: K, mode: M) -> i64\n",
+        "impl const fn first_op(key: str, mode: bool) -> i64 => 1\n",
+        "operator later_op<M, K>(mode: M, key: K) -> i64\n",
+        "impl const fn later_op(mode: bool, key: str) -> i64 => 1\n",
+        "impl const fn later_op(mode: bool, key: f64) -> i64 => 2\n",
+        "const fn a() -> i64 => first_fn<i64?, bool>(\"a\", true)\n",
+        "const fn b() -> i64 => later_fn<bool, i64>(true, \"a\")\n",
+        "const fn c() -> i64 => first_op<i64?, bool>(\"a\", true)\n",
+        "const fn d() -> i64 => later_op<bool, i64>(true, key: \"a\")\n",
+        "const fn explicit() -> i64 => later_op<bool, str>(true, \"a\")\n",
+        "const fn inferred() -> i64 => later_op<bool>(true, \"a\")\n",
+        "const fn widened() -> i64 => later_op<bool, f64>(true, 7)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:45 type/type.mismatch EXPR-5",
+            "m.hgl:10:50 type/type.mismatch EXPR-5",
+            "m.hgl:11:45 type/type.mismatch EXPR-5",
+            "m.hgl:12:55 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
+/// GEN-8 also fixes a constant used in a public input's type (TYPE-10).
+/// A known public function template checks its own type under FN-17.
+#[test]
+fn written_generics_constrain_a_size_and_a_function_template() {
+    let checked = module(concat!(
+        "operator sized<const N: i64>(items: list<i64, N>) -> i64\n",
+        "impl const fn sized(items: list<i64, 2>) -> i64 => 2\n",
+        "const fn bad_size(items: list<i64, 2>) -> i64 => sized<3>(items)\n",
+        "const fn good_size(items: list<i64, 2>) -> i64 => sized<2>(items)\n",
+        "operator select<T>(f: const fn(T) -> i64) -> i64\n",
+        "impl const fn select(f: const fn(str) -> i64) -> i64 => f(\"a\")\n",
+        "const fn combine(text: str) -> i64 => 1\n",
+        "const fn bad_fn() -> i64 => select<i64>(combine)\n",
+        "const fn good_fn() -> i64 => select<str>(combine)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:59 type/type.mismatch EXPR-5",
+            "m.hgl:9:41 type/type.mismatch FN-17",
+        ]
+    );
+}
+
+/// EXPR-5: a contextual argument is checked with the written public
+/// generic in place and may still use the ordinary literal widening.
+#[test]
+fn a_written_generic_checks_a_contextual_argument() {
+    let checked = module(concat!(
+        "operator pick<T>(items: list<T>) -> i64\n",
+        "impl const fn pick(items: list<str>) -> i64 => 1\n",
+        "impl const fn pick(items: list<f64>) -> i64 => 2\n",
+        "const fn bad() -> i64 => pick<i64>([\"a\"])\n",
+        "const fn good() -> i64 => pick<f64>([1])\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:5:37 type/type.mismatch EXPR-5"]);
+}
+
+/// TYPE-10: a public unsized list takes a fixed list of the same
+/// element type after GEN-8 binds the generic it names.
+#[test]
+fn a_written_list_element_type_keeps_fixed_list_admission() {
+    let checked = module(concat!(
+        "operator pick<T>(items: list<T>) -> i64\n",
+        "impl const fn pick(items: list<i64, 2>) -> i64 => 1\n",
+        "impl const fn pick(items: list<str, 2>) -> i64 => 2\n",
+        "const fn good(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
+        "const fn bad(items: list<str, 2>) -> i64 => pick<i64>(items)\n",
+        "fn lifted(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
+        "const fn read_nullable(items: list<i64, 2>?) -> i64 => pick<i64>(items)\n",
+        "const fn read_result(items: result<list<i64, 2>, error>) -> i64 => pick<i64>(items)\n",
+        "operator optional<T>(items: list<T>?) -> i64\n",
+        "impl const fn optional(items: list<i64, 2>) -> i64 => 3\n",
+        "const fn pass_fixed(items: list<i64, 2>) -> i64 => optional<i64>(items)\n",
+        "operator nest<T>(rows: list<list<T>>) -> i64\n",
+        "impl const fn nest(rows: list<list<i64, 2>, 2>) -> i64 => 4\n",
+        "impl const fn nest(rows: list<list<str, 2>, 2>) -> i64 => 5\n",
+        "const fn nested(rows: list<list<i64, 2>, 2>) -> i64 => nest<i64>(rows)\n",
+        "const fn wrong_nested(rows: list<list<str, 2>, 2>) -> i64 => nest<i64>(rows)\n",
+        "operator full_result<T>(items: result<list<T>, error>) -> i64\n",
+        "impl const fn full_result(items: result<list<i64, 2>, error>) -> i64 => 6\n",
+        "const fn pass_result(items: result<list<i64, 2>, error>) -> i64 => full_result<i64>(items)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:55 type/type.mismatch EXPR-5",
+            "m.hgl:17:72 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
+/// TYPE-10: written operator input patterns preserve fixed list
+/// extents inside sequence, tuple and dictionary literals. The selected
+/// candidate still checks its own extents.
+#[test]
+fn written_operator_inputs_keep_extents_inside_literals() {
+    let checked = module(concat!(
+        "operator list_take<T>(items: list<list<T>>) -> i64\n",
+        "impl const fn list_take(items: list<list<i64, 2>, 2>) -> i64 => 1\n",
+        "operator tuple_take<T>(item: tuple<list<T>, bool>) -> i64\n",
+        "impl const fn tuple_take(item: tuple<list<i64, 2>, bool>) -> i64 => 2\n",
+        "operator dict_take<T>(items: dict<str, list<T>>) -> i64\n",
+        "impl const fn dict_take(items: dict<str, list<i64, 2>>) -> i64 => 3\n",
+        "operator sized<T, const N: i64>(item: tuple<list<T, N>, bool>) -> i64\n",
+        "impl const fn sized(item: tuple<list<i64, 2>, bool>) -> i64 => 4\n",
+        "const fn good(row: list<i64, 2>) {\n",
+        "    let a = list_take<i64>([row, row])\n",
+        "    let b = list_take([row, row])\n",
+        "    let c = tuple_take<i64>((row, true))\n",
+        "    let d = tuple_take((row, true))\n",
+        "    let e = dict_take<i64>([\"row\": row])\n",
+        "    let f = dict_take([\"row\": row])\n",
+        "    let g = sized<i64, 2>((row, true))\n",
+        "    let h = list_take<i64>([[13, 29], [13, 29]])\n",
+        "    let i = list_take<i64>({ [row, row] })\n",
+        "    let j = list_take<i64>([{ row }, { row }])\n",
+        "    let k = tuple_take<i64>(if true { (row, true) } else { (row, false) })\n",
+        "}\n",
+        "const fn wrong_item(row: list<str, 2>) -> i64 => dict_take<i64>([\"row\": row])\n",
+        "const fn wrong_size(row: list<i64, 3>) -> i64 => sized<i64, 2>((row, true))\n",
+        "const fn wrong_candidate_size(row: list<i64, 3>) -> i64 => tuple_take<i64>((row, true))\n",
+        "const fn nullable_row(row: list<i64, 2>?) {\n",
+        "    let a = list_take<i64>([row, row])\n",
+        "    let b = tuple_take<i64>((row, true))\n",
+        "    let c = dict_take<i64>([\"row\": row])\n",
+        "}\n",
+        "const fn result_row(row: result<list<i64, 2>, error>) {\n",
+        "    let a = list_take<i64>([row, row])\n",
+        "    let b = tuple_take<i64>((row, true))\n",
+        "    let c = dict_take<i64>([\"row\": row])\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:73 type/type.mismatch EXPR-5",
+            "m.hgl:24:65 type/type.mismatch EXPR-5",
+            "m.hgl:25:60 operator/operator.no_candidate GEN-5",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// TYPE-10 and ERR-2: an inline result tag preserves a compatible list
+/// extent during the public input check. Ordinary assignments and the
+/// candidate's own input still require their concrete types.
+#[test]
+fn written_operator_inputs_keep_extents_inside_result_tags() {
+    let checked = module(concat!(
+        "operator success<T>(value: result<list<T>, error>) -> i64\n",
+        "impl const fn success(value: result<list<i64, 2>, error>) -> i64 => 1\n",
+        "operator failure<T>(value: result<bool, list<T>>) -> i64\n",
+        "impl const fn failure(value: result<bool, list<i64, 2>>) -> i64 => 2\n",
+        "operator nested<T>(value: tuple<str, result<list<T>, error>>) -> i64\n",
+        "impl const fn nested(value: tuple<str, result<list<i64, 2>, error>>) -> i64 => 3\n",
+        "const fn good(row: list<i64, 2>) {\n",
+        "    let a = success<i64>(ok(row))\n",
+        "    let b = failure<i64>(err(row))\n",
+        "    let c = nested<i64>((\"slot\", ok(row)))\n",
+        "    let d = success(ok(row))\n",
+        "    let e = failure(err(row))\n",
+        "}\n",
+        "const fn wrong_element(row: list<str, 2>) -> i64 => success<i64>(ok(row))\n",
+        "const fn wrong_candidate_size(row: list<i64, 3>) -> i64 => failure<i64>(err(row))\n",
+        "const fn ordinary(row: list<i64, 2>) -> result<list<i64>, error> => ok(row)\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/type.mismatch",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// ERR-14, TYPE-10 and GEN-8: a result input can read a temporal child
+/// whole and retain the fixed extent of its list payload.
+#[test]
+fn written_operator_inputs_keep_checked_child_result_extents() {
+    let checked = module(concat!(
+        "operator pick<T>(row: result<list<T>, error>) -> i64\n",
+        "impl const fn pick(row: result<list<i64, 2>, error>) -> i64 => 1\n",
+        "fn direct(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pick<i64>(rows[index]) }\n",
+        "}\n",
+        "fn aliased(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when {\n",
+        "        let row = rows[index]\n",
+        "        return pick<i64>(row)\n",
+        "    }\n",
+        "}\n",
+        "fn annotated(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when {\n",
+        "        let row: result<list<i64, 2>, error> = rows[index]\n",
+        "        return pick<i64>(row)\n",
+        "    }\n",
+        "}\n",
+        "fn inferred(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pick(rows[index]) }\n",
+        "}\n",
+        "fn wrong(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pick<str>(rows[index]) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:23:29 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// ERR-14 and TYPE-10 also apply to a checked child inside a compound
+/// operand where GEN-8 fixes the element type of a public result pattern.
+#[test]
+fn written_operator_inputs_keep_compound_checked_child_results() {
+    let checked = module(concat!(
+        "operator pair<T>(v: tuple<i64, result<list<T>, error>>) -> i64\n",
+        "impl const fn pair(v: tuple<i64, result<list<i64, 3>, error>>) -> i64 => 1\n",
+        "operator sequence<T>(v: list<result<list<T>, error>>) -> i64\n",
+        "impl const fn sequence(v: list<result<list<i64, 3>, error>, 2>) -> i64 => 2\n",
+        "fn good(rows: list<list<i64, 3>, 2>, index: i64) -> i64 {\n",
+        "    when {\n",
+        "        let row = rows[index]\n",
+        "        let explicit = pair<i64>((3, rows[index]))\n",
+        "        let inferred = pair((3, rows[index]))\n",
+        "        let alias = pair<i64>((3, row))\n",
+        "        let entries = sequence<i64>([rows[index], row])\n",
+        "        return explicit + inferred + alias + entries\n",
+        "    }\n",
+        "}\n",
+        "fn wrong_type(rows: list<list<i64, 3>, 2>, index: i64) -> i64 {\n",
+        "    when { return pair<str>((3, rows[index])) }\n",
+        "}\n",
+        "fn wrong_size(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pair<i64>((3, rows[index])) }\n",
+        "}\n",
+        "const fn unwrapped(row: list<i64, 3>) -> i64 => pair<i64>((3, row))\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/type.mismatch",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// EXPR-17 and TYPE-10: when an operator supplies a public pattern,
+/// the comprehension fits each entry without losing its fixed extent.
+#[test]
+fn written_operator_inputs_keep_extents_inside_comprehensions() {
+    let checked = module(concat!(
+        "operator success<T>(v: result<list<list<T>>, error>) -> i64\n",
+        "impl const fn success(v: result<list<list<i64, 2>>, error>) -> i64 => 1\n",
+        "operator failure<T>(v: result<bool, list<list<T>>>) -> i64\n",
+        "impl const fn failure(v: result<bool, list<list<i64, 2>>>) -> i64 => 2\n",
+        "operator pair<T>(v: tuple<str, list<list<T>>>) -> i64\n",
+        "impl const fn pair(v: tuple<str, list<list<i64, 2>>>) -> i64 => 3\n",
+        "const fn good(row: list<i64, 2>, flag: bool) {\n",
+        "    let a = success<i64>(ok([for i in 0..<2: row]))\n",
+        "    let b = success(ok([for i in 0..<2: row]))\n",
+        "    let c = failure<i64>(err([for i in 0..<2: { row }]))\n",
+        "    let d = failure(err([for i in 0..<2: row]))\n",
+        "    let e = pair<i64>((\"slot\", [for i in 0..<2: if flag { row } else { row }]))\n",
+        "    let f = pair((\"slot\", [for i in 0..<2: row]))\n",
+        "}\n",
+        "const fn wrong_element(row: list<str, 2>) -> i64 => success<i64>(ok([for i in 0..<2: row]))\n",
+        "const fn wrong_size(row: list<i64, 3>) -> i64 => failure<i64>(err([for i in 0..<2: row]))\n",
+        "const fn ordinary(row: list<i64, 2>) -> list<list<i64>> => [for i in 0..<2: row]\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/type.mismatch",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// TYPE-11 and FN-12: a matching window can be read as a list. Writing
+/// a generic type argument leaves that admission to candidate selection.
+#[test]
+fn written_operator_inputs_keep_window_lifting_available() {
+    let checked = module(concat!(
+        "operator first<T>(items: list<T>) -> i64\n",
+        "impl const fn first(items: list<i64>) -> i64 => items[0]\n",
+        "fn written(items: rolling_window<i64, 3, 2>) -> i64 => first<i64>(items)\n",
+        "fn inferred(items: rolling_window<i64, 3, 2>) -> i64 => first(items)\n",
+        "fn wrong(items: rolling_window<i64, 3, 2>) -> i64 => first<str>(items)\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "operator/operator.no_candidate",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The message of each finding, in order.
 fn messages(checked: &Checked) -> Vec<&str> {
     checked

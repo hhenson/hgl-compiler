@@ -149,7 +149,26 @@ test configuration_defaults_keep_their_values {
 # consumers in an operator chain that has no literal in its generic body.
 const fn membership_chain<V>(a: V, b: V, c: V) -> V requires V in {i64, f64} => a + b * c
 
+# GEN-3, GEN-7: T may be U or f64. Each admitted T is numeric.
+const fn dependent_chain<T, U>(a: T, b: T, c: T, example: U) -> T
+    requires T in {U, f64} && U in {i64, f64} => membership_chain(a, b, c) + a
+
 test literal_free_membership_results_keep_their_consumers {
+    assert dependent_chain(3, 2, 4, 9) == 14
+    assert dependent_chain(1.5, 2.0, 0.5, 9) == 4.0
+    assert dependent_chain(1.5, 2.0, 0.5, 9.0) == 4.0
     assert membership_chain(3, 2, 4) == 11
     assert membership_chain(1.5, 2.0, 0.5) == 2.5
+}
+
+# GEN-3, GEN-7: the call omits U, which ties the choices of T and V.
+const fn projected_pair<A, B>(x: A, y: B) -> i64 requires A == B || A == f64 => 1
+const fn projected_chain<T, U, V>(t: T, u: U, v: V) -> i64
+    requires V in {i64, f64} && U in {V, f64} && T in {U, f64}
+    => projected_pair(t, v)
+
+test omitted_parameter_preserves_each_admitted_pair {
+    assert projected_chain(1, 2, 3) == 1
+    assert projected_chain(1.0, 2, 3) == 1
+    assert projected_chain(1.0, 2.0, 3.0) == 1
 }

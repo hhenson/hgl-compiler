@@ -7,6 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
+use super::expressions::ExpressionFit;
 use super::fit::{not_null, nullable, open, whole};
 use super::{BOOL, CapturedOutput, Fact, Typer};
 use crate::hir::{ErrorPart, Expr, ExprKind, ValueCategory};
@@ -81,6 +82,7 @@ impl<'a> Typer<'a> {
         name: &SyntaxToken,
         list: &SyntaxNode,
         expected: Option<&Type>,
+        fit: ExpressionFit,
     ) -> Option<(ExprKind, Type)> {
         if crate::RESULT_FORMS.contains(&name.text())
             && let Some(unread) = self.unread_pack_call(list)
@@ -88,8 +90,8 @@ impl<'a> Typer<'a> {
             return Some(unread);
         }
         Some(match name.text() {
-            "ok" => self.tagged(true, name, list, expected),
-            "err" => self.tagged(false, name, list, expected),
+            "ok" => self.tagged(true, name, list, expected, fit),
+            "err" => self.tagged(false, name, list, expected, fit),
             "is_ok" => self.tag_test(true, name, list),
             "is_err" => self.tag_test(false, name, list),
             "capture" => {
@@ -162,6 +164,7 @@ impl<'a> Typer<'a> {
         name: &SyntaxToken,
         list: &SyntaxNode,
         expected: Option<&Type>,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let argument = self.one_argument(name, list, "ERR-2");
         // The result the place expects: of `result<T, E>?`, the result.
@@ -201,8 +204,8 @@ impl<'a> Typer<'a> {
         };
         let (side, what) = tagged_side(success, value, error);
         let payload = if complete {
-            let payload = self.expression(&argument, Some(side));
-            self.fit(payload, side, what)
+            let payload = self.read_literal_part(&argument, side, fit);
+            self.fit_literal_part(payload, side, what, fit)
         } else {
             // GEN-2 and ERR-2: keep the payload in the scope that read it
             // when another constructor field can still settle this result.

@@ -24,16 +24,16 @@
 //! (UNIT-11) and read as [`Type::Unknown`]; so is one already reported.
 //! Nothing further is reported about an unknown type (ERR-9).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
-use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::constant::Constants;
 use crate::program::{Binding, DependentPack, Module, OperatorRef, Program};
 use crate::syntax::{test_statements, tokens};
-use crate::types::{CallArguments, DeltaInput, Detail, GenericParameter, Type, WrittenType};
+use crate::types::{CallArguments, DeltaInput, Detail, Field, GenericParameter, Type, WrittenType};
 
 use self::declarations::{Evidence, Kinds, declaration_kinds};
 
@@ -87,7 +87,9 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
             reader.enter(module.files[*file].file);
             reader.scan(node);
         }
+        let paired_default_names = std::mem::take(&mut reader.paired_default_names);
         let calls = std::mem::take(&mut reader.calls);
+        let field_name_arguments = std::mem::take(&mut reader.field_name_arguments);
         let dependent_packs = std::mem::take(&mut reader.dependent_packs);
         let delta_inputs = std::mem::take(&mut reader.delta_inputs);
         let mut written = reader.written;
@@ -106,6 +108,8 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.written = written;
         module.delta_inputs = delta_inputs;
         module.call_arguments = calls;
+        module.field_name_arguments = field_name_arguments;
+        module.paired_default_names = paired_default_names;
     }
 }
 
@@ -255,6 +259,9 @@ struct Reader<'a> {
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
+    /// Written call arguments whose constant value depends on a loop binding.
+    field_name_arguments: HashSet<Location>,
+    paired_default_names: HashMap<Location, crate::program::PairedDefaultName>,
     /// What each name of the program resolved to, by the file and
     /// offset of its use: a constant a type names may be declared in
     /// another module, and is read there (UNIT-13).
@@ -304,6 +311,8 @@ impl<'a> Reader<'a> {
             delta_inputs: Vec::new(),
             dependent_packs: HashMap::new(),
             calls: Vec::new(),
+            field_name_arguments: HashSet::new(),
+            paired_default_names: HashMap::new(),
             everywhere: program
                 .modules
                 .iter()
@@ -361,9 +370,21 @@ pub(crate) fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
         .find_map(|element| element.into_node())
 }
 
-/// True when an expression is the empty collection `[]`, in parentheses
-/// or not (EXPR-9: "Empty brackets have no entries").
-fn is_empty_sequence(expression: &SyntaxNode) -> bool {
+/// The member that writes the initializer, identified by its first token.
+pub(crate) fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNode> {
+    declaration
+        .children()
+        .filter(|member| member.kind() == SyntaxKind::StructMember)
+        .find(|member| {
+            tokens(member)
+                .next()
+                .is_some_and(|name| name.span().start == field.at.span.start)
+        })
+        .and_then(|member| default_of(&member))
+}
+
+/// EXPR-9: an empty collection literal, optionally grouped in parentheses.
+fn is_empty_collection(expression: &SyntaxNode) -> bool {
     let mut node = expression.clone();
     // The parser bounds how deep parentheses nest; so does this.
     for _ in 0..128 {
@@ -375,7 +396,7 @@ fn is_empty_sequence(expression: &SyntaxNode) -> bool {
             None => return false,
         }
     }
-    node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+    crate::syntax::is_empty_collection_literal(&node)
 }
 
 /// True when an expression is the literal `null`, in parentheses or

@@ -557,10 +557,17 @@ analyser: partial
   different type than an earlier use is `store.key_type` (TIME-8).
 - Left: a helper outside the cycle that also formats its key is checked
   in source for each key an instance of the cycle gives it (#877).
-- Left: two forms the text fixes are judged as cycles, so their key fails
-  at the operation: one key handed round through two `const` parameters
-  of a function, and a cycle that only an operator candidate no instance
-  selects would close (#885).
+- A key forwarded to multiple aliased `const` parameters remains fixed.
+  Store-cycle classification follows the candidates each type instance
+  selects, with symbolic keys; an unselected candidate closes no cycle.
+- Fixed-key proofs belong to each call route. An unused entry with other
+  types or distinct aliases does not delay an independent fixed call.
+- Entry aliases include repeated reads of a named constant, a fixed field,
+  list or tuple position, or a primitive expression computed before the
+  cycle. Equal source-known strings share that entry symmetrically across
+  literals, direct aliases and primitive expressions. Distinct projections
+  stay distinct; computing a key again on a recursive edge still leaves its
+  check to the operation.
 
 transpiler: partial
 
@@ -659,7 +666,8 @@ transpiler: partial
 - Replays scalar publications, whole or delta collection entries, and window arrivals as
   their forms require.
 - Replays a supported nested dictionary.
-- Replays supported concrete struct applications with generic type arguments.
+- Replays supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-11.
 
 ## CEVAL-4
@@ -668,7 +676,8 @@ transpiler: partial
 
 - Records independent timestamp and delta pairs, including an empty recording. A cycle
   that only ages a window adds no entry.
-- Records supported concrete struct applications with generic type arguments.
+- Records supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-16.
 
 ## CEVAL-5
@@ -774,8 +783,11 @@ analyser: partial
 - A `"run.output"` key the text fixes is rejected (`store.reserved_key`),
   including where a call supplies a fixed `const` argument or generic
   value (CAP-6).
-- Left: a helper outside a cycle that also formats its key (CAP-6, #877);
-  two forms judged as cycles fail at the operation (CAP-6, #885).
+- Fixed aliased parameters and acyclic selected-candidate routes reject
+  in source, or at the build when a computation supplies the key (CAP-6).
+- Forwarding follows concrete instances: revisiting one declaration with
+  different types on a finite route still checks the computed key at build.
+- Left: a helper outside a cycle that also formats its key (CAP-6, #877).
 
 transpiler: partial
 
@@ -977,7 +989,9 @@ analyser: partial
 - The current compile-time pattern reader builds up to 64 KiB of text per result. The C++ target declines calls whose patterns exceed that support limit (#695).
 - The analyser checks demanded const inputs and concrete argument conversions after selecting the value candidate. GEN-7 reports failures that depend on the instance at its outside call. Lowering uses the same concrete values to select the checked body.
 - A pattern reached through forwarded calls is checked in the instance the entries make, and a failure is reported at the call outside every generic body that makes it, with the code of the same direct call (GEN-7, #706).
-- Left: patterns made by general constant function evaluation (#695).
+- The same conditional demand reaches calls through a named operator requirement and an indexed pack entry (#710, #755). A selected candidate that only returns the pattern at run time does not require its compile-time value.
+- Module constants produced by nongeneric string helpers with explicit arguments or immutable local declarations followed by a returned expression are checked after typed helper bodies are available. Every written module-constant root, including dependencies in dead branches, is proved independently (UNIT-13). Existing typed/source folds and their limit outcomes retain priority over the helper fallback. The same values reach forwarded concrete instances.
+- Left: patterns made by general constant function evaluation (#695); effects, mutation, loops, recursive or generic helpers and helper defaults remain outside the bounded reader.
 
 ## FMT-4
 
@@ -1001,17 +1015,17 @@ analyser: partial
 - Core declares a native value candidate for `convert<str>(Type)`.
 
 - A user type uses its selected `convert<str>` and rejects if there is no candidate.
-- Core HGL candidates admit growing/fixed list, set and dictionary text and their delta text when each written member has its FMT-5 text. Missing member conversions reject at the call.
+- Core HGL candidates admit growing/fixed list, set, dictionary and tuple text, and list, set and dictionary delta text, when each written member has its FMT-5 text. A member without an infallible text conversion rejects at the call, including inside a nested tuple. Formatting and named requirements retain a selected tuple conversion's type pack.
 - A nullable field checks the text conversion of its payload type. The target writes that text when present and `null` when absent.
-- Left: tuple and struct text candidates (#751).
+- Left: struct text candidates (#751).
 
 transpiler: partial
 
 - A Type value converts to its canonical diagnostic spelling, including fixed collection sizes, generic arguments and nullable suffixes (TYPE-18).
 - Enum arguments display their declared enum name, independently of their qualified identity key. Left: generic-type diagnostics retain source-form duration/float arguments while Type values normalize them (#909).
-- Value defaults are written in Core's scalar forms. Ordinary Core HGL candidates assemble growing lists, fixed lists, sets and dictionaries in traversal order, select each member's conversion, quote and escape strings and render absent members as `null`.
+- Value defaults are written in Core's scalar forms. Ordinary Core HGL candidates assemble growing lists, fixed lists, sets, dictionaries and tuples in traversal order, select each member's conversion, quote and escape strings and render absent members as `null`. Tuple text preserves the singleton comma (EXPR-8).
 - Collection delta text is assembled by Core HGL bodies using the concrete Type-query constructor prefix (TYPE-16/18), omitting empty/null properties and preserving non-null sizes, iteration order, quoted strings and selected nested/member conversions. Ordinary HGL calls and loops lower these bodies.
-- Left: tuple and struct text candidates (#751).
+- Left: struct text candidates (#751).
 
 ## FMT-6
 

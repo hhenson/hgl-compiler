@@ -187,6 +187,7 @@ impl Emitter<'_> {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => {
                 return self.missing(at, "this call");
             }

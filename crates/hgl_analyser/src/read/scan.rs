@@ -1,14 +1,15 @@
 //! Finds written types in syntax trees and distinguishes constructor uses.
 
-use hgl_diagnostics::Location;
+use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::Span;
 
 use crate::program::{Binding, DeclarationKind, LocalKind, Role};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{CallArguments, DeltaInput, Type};
+use crate::{codes, error};
 
-use super::declarations::{Kind, is_configuration_parameter};
+use super::declarations::{Form, Kind, generic_forms, is_configuration_parameter};
 use super::{Id, Position, Reader, is_const, is_type, names_before_colon, parameters};
 
 impl Reader<'_> {
@@ -71,14 +72,7 @@ impl Reader<'_> {
                     }
                 }
                 SyntaxKind::DeltaConstructor => self.delta_constructor(&node),
-                SyntaxKind::Instantiation => {
-                    // GEN-8: `add<i64, _>` requests candidates. What the
-                    // arguments are checked against is for the pass that
-                    // selects them.
-                    if let Some(list) = child(&node, SyntaxKind::GenericArgs) {
-                        self.arguments(&list, Position::OPEN, None, None, false);
-                    }
-                }
+                SyntaxKind::Instantiation => self.instantiation(&node),
                 SyntaxKind::ConstraintRelation
                     if node
                         .children()
@@ -100,6 +94,68 @@ impl Reader<'_> {
                 _ => {}
             }
         }
+    }
+
+    /// GEN-8: an instance request names a callable. Check its written
+    /// slots without selecting a role or filling an open argument.
+    fn instantiation(&mut self, node: &SyntaxNode) {
+        let Some(list) = child(node, SyntaxKind::GenericArgs) else {
+            return;
+        };
+        let Some(name) = name_token(node) else {
+            return;
+        };
+        let at = self.at(name.span());
+        let target = self.callable_named(node);
+        if target.is_none()
+            && matches!(
+                self.bindings.get(&(self.file, name.span().start)).copied(),
+                Some(Binding::Declarations { .. })
+            )
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_INVALID_APPLICATION,
+                at,
+                format!(
+                    "`{}` does not name a callable for this request",
+                    name.text()
+                ),
+                "GEN-8",
+            ));
+        }
+
+        // Each role of a pair may declare a different list of parameters.
+        let target = target.filter(|_| !self.callable_has_pair(node));
+        if let Some((module, index)) = target {
+            let declaration = &self.program.modules[module].declarations[index];
+            let forms = generic_forms(&declaration.syntax);
+            let given = list
+                .children()
+                .filter(|argument| argument.kind() != SyntaxKind::Error)
+                .count();
+            if given > forms.len()
+                && !forms
+                    .iter()
+                    .any(|(_, _, form)| matches!(form, Form::Pack(..)))
+            {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::GENERIC_ARGUMENT_COUNT,
+                        at,
+                        format!(
+                            "the generic argument count for `{}` is {given}, above its limit of {}",
+                            declaration.name,
+                            forms.len(),
+                        ),
+                        "GEN-8",
+                    )
+                    .with_related(declaration.at, "declared here"),
+                );
+            }
+        }
+        self.arguments(&list, Position::OPEN, target, None, false);
     }
 
     /// TIME-8 admits a capability type listed directly in the type set
@@ -377,7 +433,7 @@ impl Reader<'_> {
     /// The function or operator the name `node` uses is bound to: the
     /// first of a pair (FN-4). A contextual Type argument of a pair is
     /// deferred until the expression reader selects a role.
-    fn callable_named(&self, node: &SyntaxNode) -> Option<Id> {
+    pub(super) fn callable_named(&self, node: &SyntaxNode) -> Option<Id> {
         let name = name_token(node)?;
         let Some(Binding::Declarations {
             module,

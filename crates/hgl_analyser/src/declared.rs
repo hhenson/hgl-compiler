@@ -331,7 +331,7 @@ struct Introduced {
     /// is declared with, or the last a struct on the way down gives it
     /// (TYPE-4).
     null_default: bool,
-    /// True when that default is the empty collection `[]` (TYPE-6).
+    /// True when the default is an empty collection literal (TYPE-6, EXPR-9).
     empty_default: bool,
     /// Where the field that gives that default is written: the
     /// declaration, or the last `name = value` on the way down.
@@ -927,6 +927,34 @@ impl Structs<'_> {
 
     fn declaration(&self, id: Id) -> &Declaration {
         &self.program.modules[id.0].declarations[id.1]
+    }
+
+    /// TYPE-6: a recursive collection can start empty when the literal
+    /// constructs the field's own kind, including an inherited default.
+    fn has_empty_collection_default(&self, field: &Introduced) -> bool {
+        if !field.empty_default {
+            return false;
+        }
+        let Some((owner, index)) = field.default_of else {
+            return false;
+        };
+        let Some(initializer) = self.struct_type(owner).and_then(|declaration| {
+            crate::read::field_initializer(
+                &self.declaration(owner).syntax,
+                declaration.fields.get(index)?,
+            )
+        }) else {
+            return false;
+        };
+        let mut payload = &field.ty;
+        while let Type::Atomic(inner) | Type::Nullable(inner) = payload {
+            payload = inner;
+        }
+        match crate::syntax::ungrouped(initializer).kind() {
+            SyntaxKind::SetExpr => matches!(payload, Type::Set(_)),
+            SyntaxKind::KeyedExpr => matches!(payload, Type::Dict { .. }),
+            _ => true, // Empty brackets take their kind from the field.
+        }
     }
 
     /// What was read of the struct `id`.
@@ -1947,7 +1975,9 @@ impl Structs<'_> {
             for field in fields.all.iter().filter(|field| field.origin == *origin) {
                 // A null default that a struct below has replaced is
                 // reported as that.
-                let ends = !field.has_default || field.null_default || field.empty_default;
+                let ends = !field.has_default
+                    || field.null_default
+                    || self.has_empty_collection_default(field);
                 if ends || field.declared_null {
                     continue;
                 }
@@ -2325,6 +2355,19 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
     agree_as(left, right, Agreement::Known)
 }
 
+/// TYPE-10: an unsized list in an input pattern can match a fixed list
+/// at the same position. This comparison keeps every supplied extent
+/// and otherwise checks the known parts as type agreement does.
+pub(crate) fn agree_with_input_pattern(given: &Type, pattern: &Type) -> bool {
+    agree_as(given, pattern, Agreement::InputPattern)
+}
+
+/// TYPE-5, EXPR-9: keep the public parts of a braced operand's type,
+/// while a public `any` within a collection leaves that position open.
+pub(crate) fn agrees_with_brace_schema(candidate: &Type, public: &Type) -> bool {
+    agree_as(candidate, public, Agreement::BraceInput)
+}
+
 /// Whether two types are one: `Some(true)` where they are known to be,
 /// `Some(false)` where they are known to differ, and `None` where a
 /// constant in either is not known, `FBox<X>` beside `FBox<2.0>` with `X`
@@ -2400,6 +2443,8 @@ fn opened(ty: &Type) -> Type {
 #[derive(Clone, Copy)]
 enum Agreement {
     Known,
+    InputPattern,
+    BraceInput,
     Possible,
     CandidateResult,
 }
@@ -2414,10 +2459,10 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
     let constants_agree = |left: &Constant, right: &Constant| {
         matches!(left.value, ConstantValue::Unknown)
             || matches!(right.value, ConstantValue::Unknown)
-            || left
-                .value
-                .same(&right.value)
-                .unwrap_or(!matches!(agreement, Agreement::Known))
+            || left.value.same(&right.value).unwrap_or(matches!(
+                agreement,
+                Agreement::Possible | Agreement::CandidateResult
+            ))
     };
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
@@ -2430,6 +2475,7 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
     };
     match (left, right) {
         (Type::Unknown, _) | (_, Type::Unknown) => true,
+        (_, Type::Scalar(Scalar::Any)) if matches!(agreement, Agreement::BraceInput) => true,
         (
             Type::Named {
                 module,
@@ -2451,7 +2497,14 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
                     .iter()
                     .zip(other_arguments)
                     .all(|pair| match pair {
-                        (Argument::Type(left), Argument::Type(right)) => agree(left, right),
+                        (Argument::Type(left), Argument::Type(right)) => {
+                            // A known nominal schema has invariant generic arguments.
+                            if matches!(agreement, Agreement::BraceInput) {
+                                agree_with_input_pattern(left, right)
+                            } else {
+                                agree(left, right)
+                            }
+                        }
                         (Argument::Constant(left), Argument::Constant(right)) => {
                             constants_agree(left, right)
                         }
@@ -2474,6 +2527,9 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
                 }
                 (Some(size), None) if matches!(agreement, Agreement::CandidateResult) => {
                     size.value.key().is_none()
+                }
+                (Some(size), None) if matches!(agreement, Agreement::InputPattern | Agreement::BraceInput) => {
+                    !matches!(size.value, ConstantValue::Unbounded)
                 }
                 (size, other_size) => size == other_size,
             };

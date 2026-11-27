@@ -33,7 +33,7 @@
 //! it was found, and never again where it is used (ERR-9).
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
@@ -45,7 +45,7 @@ use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
 };
 use crate::types::{Argument, CallArguments, Detail, Scalar, Signature, Type};
-use anonymous::Anonymous;
+use anonymous::{Anonymous, ImmediateBindings};
 use control::label;
 use dependent_packs::MemberFault;
 use endpoints::endpoint_argument;
@@ -74,11 +74,13 @@ mod capabilities;
 // The read of a collection's child, and the endpoint a child is (TIME-1).
 mod children;
 // The values a body reads as compile-time constants (UNIT-8, UNIT-13, GEN-8).
+mod collection_constants;
 mod constants;
 // Blocks, `if`, `while`, `for` and `switch` (CTRL-5, CTRL-10 to CTRL-15).
+mod braces;
+mod callback_evidence;
 mod control;
 // A delta as a type of its own: its properties and its construction (TYPE-16).
-mod callback_evidence;
 mod deltas;
 mod dependent_packs;
 pub(crate) use dependent_packs::PackTypes;
@@ -214,6 +216,7 @@ pub(crate) fn check(
         let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
         let mut deferred_type_fits = Vec::new();
         let mut callback_phase_bodies = Vec::new();
+        let mut deferred_list_sizes = Vec::new();
         for (position, declaration) in module.declarations.iter().enumerate() {
             let mut check_return = None;
             let deferred_fit = Cell::new(false);
@@ -272,6 +275,9 @@ pub(crate) fn check(
                     if typer.unsettled_callback_pair {
                         callback_phase_bodies.push((index, position));
                         typer.check_open_pair_reports(found, reported);
+                    }
+                    if typer.unsettled_list_size {
+                        deferred_list_sizes.push((index, position));
                     }
                     check_return = pending;
                     body
@@ -352,6 +358,9 @@ pub(crate) fn check(
         let mut defaults = Vec::with_capacity(module.declarations.len());
         selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
+            if !module.paired_default_names.is_empty() {
+                constants::check_default_names(program, module, position, found, diagnostics);
+            }
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))
                     if signature
@@ -428,10 +437,12 @@ pub(crate) fn check(
         program.modules[index].graph_return_checks = graph_return_checks;
         program.deferred_type_fits.extend(deferred_type_fits);
         program.callback_phase_bodies.extend(callback_phase_bodies);
+        program.deferred_list_sizes.extend(deferred_list_sizes);
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
+    format_calls::retry_module_patterns(program, diagnostics);
     (
         program.const_demands,
         program.runtime_store_keys,
@@ -705,21 +716,23 @@ pub(crate) fn reread_instance_body(
     typer.pack_functions = inputs.functions.to_vec();
     let selected = RefCell::new(Vec::new());
     typer.selected_pack_branches = Some(&selected);
-    let body = if owner.phases[declaration] == Some(Phase::Graph)
-        && program
-            .callback_phase_bodies
-            .contains(&(module, declaration))
-    {
-        typer.mark_open_instance_captures();
-        let before = typer.diagnostics.len();
-        let (body, _) = typer.graph();
-        if typer.unsettled_callback_pair {
-            typer.check_open_pair_reports(found, before);
-        }
-        body
-    } else {
-        typer.body_at_phase(owner.phases[declaration])
-    }?;
+    // FN-17, GEN-17: a concrete pack may reveal a pair that the source
+    // reading could not visit. Use this instance's actual callback bindings.
+    let body =
+        if owner.phases[declaration] == Some(Phase::Graph) && typer.mark_open_instance_captures() {
+            let before = typer.diagnostics.len();
+            let (body, _) = typer.graph();
+            if typer.unsettled_callback_pair {
+                typer.check_open_pair_reports(found, before);
+                // Keep selected pack arms from the same reading as the returned body.
+                selected.borrow_mut().clear();
+                typer.independent_callback_body(found)
+            } else {
+                body
+            }
+        } else {
+            typer.body_at_phase(owner.phases[declaration])
+        }?;
     Some((body, selected.into_inner()))
 }
 
@@ -822,6 +835,9 @@ struct Typer<'a> {
     signature: &'a Signature,
     /// Absent while reading the enclosing declaration itself.
     anonymous: Option<Anonymous>,
+    /// Known immutable graph bindings needed by direct anonymous calls.
+    /// Initialized only for a graph that writes such a call.
+    graph_immediate_values: OnceCell<Option<ImmediateBindings>>,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// Locations where the instance has no type for a written generic.
@@ -839,6 +855,8 @@ struct Typer<'a> {
     pair_phases: Option<calls::PairPhases>,
     /// An open callback can change a committed named-pair selection (FN-4).
     unsettled_callback_pair: bool,
+    /// A local size needs the concrete graph body to decide its category.
+    unsettled_list_size: bool,
     /// Hypothetical capture categories used only to check an open graph declaration.
     callback_captures: Vec<ValueCategory>,
     /// Nesting depth of `anonymous_pair_category` role probes; lets nested
@@ -1021,10 +1039,17 @@ struct Typer<'a> {
     pack_inputs: Option<PackInputs<'a>>,
     /// UNIT-8 reads dependency edges from both arms of a parameter default.
     lexical_default_dependencies: bool,
+    /// UNIT-7 names visited in a committed reading during the lexical default audit.
+    default_name_visits: Option<Vec<Location>>,
+    /// For a possible capability capture, whether a braced literal was read
+    /// with a struct schema. Tentative argument readings are rolled back.
+    capture_key_reads: Option<Vec<(Location, bool)>>,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
     pack_passes: Vec<(String, hir::PackKey)>,
+    /// CTRL-16 field names in the currently expanded struct loop passes.
+    field_passes: Vec<(Location, Argument)>,
     /// Packs bound by `let`. Only their individual entries reach lowering.
     bound_packs: HashMap<LocalId, forwarded_packs::BoundPack>,
     /// The generic value parameters of the declaration being read that
@@ -1144,6 +1169,7 @@ impl<'a> Typer<'a> {
             declaration,
             signature,
             anonymous: None,
+            graph_immediate_values: OnceCell::new(),
             bindings: tables.bindings,
             written: tables.written,
             absent_type_uses: None,
@@ -1153,6 +1179,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             pair_phases: None,
             unsettled_callback_pair: false,
+            unsettled_list_size: false,
             callback_captures: Vec::new(),
             probing_pair_role: 0,
             probe_saw_temporal: false,
@@ -1212,8 +1239,11 @@ impl<'a> Typer<'a> {
             const_inputs: Vec::new(),
             pack_inputs: None,
             lexical_default_dependencies: false,
+            default_name_visits: None,
+            capture_key_reads: None,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
+            field_passes: Vec::new(),
             bound_packs: HashMap::new(),
             bound: Vec::new(),
             diagnostics,
@@ -1361,6 +1391,7 @@ impl<'a> Typer<'a> {
     fn mark(&self) -> Mark {
         Mark {
             diagnostics: self.diagnostics.len(),
+            warnings: self.diagnostics.warning_mark(),
             locals: self.locals.len(),
             assigned: self.assigned.clone(),
             returned: self.returned,
@@ -1370,13 +1401,20 @@ impl<'a> Typer<'a> {
             type_queries: self.type_query_locations.len(),
             nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
+            immediate_calls: self
+                .anonymous
+                .as_ref()
+                .map_or(0, |scope| scope.immediate_calls.len()),
             unsettled_callback_pair: self.unsettled_callback_pair,
+            unsettled_list_size: self.unsettled_list_size,
             selected_pack_branches: self
                 .selected_pack_branches
                 .map_or(0, |selected| selected.borrow().len()),
             resolved_written: self
                 .resolved_written
                 .map_or(0, |target| target.borrow().len()),
+            default_name_visits: self.default_name_visits.as_ref().map_or(0, Vec::len),
+            capture_key_reads: self.capture_key_reads.as_ref().map_or(0, Vec::len),
             probe_saw_temporal: self.probe_saw_temporal,
         }
     }
@@ -1391,14 +1429,22 @@ impl<'a> Typer<'a> {
     /// first to learn something and then where it stands, must leave
     /// one reading's worth of each.
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
+        if let Some(reads) = &mut self.capture_key_reads {
+            reads.truncate(mark.capture_key_reads);
+        }
+        if let Some(visits) = &mut self.default_name_visits {
+            visits.truncate(mark.default_name_visits);
+        }
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
+        self.unsettled_list_size = mark.unsettled_list_size;
         if let Some(selected) = self.selected_pack_branches {
             selected.borrow_mut().truncate(mark.selected_pack_branches);
         }
         if let Some(deferred) = self.deferred_type_fit {
             deferred.set(mark.deferred_type_fit);
         }
+        self.diagnostics.restore_warnings(mark.warnings);
         let clean = self.diagnostics.len() == mark.diagnostics;
         // A construct's spent allowance is reported once, and the report
         // stands though the reading it was spent in is taken back.
@@ -1413,7 +1459,17 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
-        while self.type_query_locations.len() > mark.type_queries {
+        self.restore_type_queries(mark.type_queries);
+        if let Some(target) = self.resolved_written {
+            target.borrow_mut().truncate(mark.resolved_written);
+        }
+        self.restore_read(mark, keep_flow);
+        clean
+    }
+
+    /// Restore the TYPE-18 query entries that preceded a lexical reread.
+    fn restore_type_queries(&mut self, saved: usize) {
+        while self.type_query_locations.len() > saved {
             if let Some((at, previous)) = self.type_query_locations.pop() {
                 match previous {
                     Some(old) => {
@@ -1423,11 +1479,6 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        if let Some(target) = self.resolved_written {
-            target.borrow_mut().truncate(mark.resolved_written);
-        }
-        self.restore_read(mark, keep_flow);
-        clean
     }
 
     /// Restores the surrounding scope after an anonymous function's
@@ -1436,6 +1487,9 @@ impl<'a> Typer<'a> {
         // A call the reading put to be selected for each instance goes
         // with it: the reading that stands puts its own.
         self.selecting.borrow_mut().truncate(mark.selecting);
+        if let Some(scope) = self.anonymous.as_mut() {
+            scope.immediate_calls.truncate(mark.immediate_calls);
+        }
         // A reading that declared nothing has nothing of its own in the
         // tables of locals, and they are not walked: a reading taken
         // back costs what was read, not what the function holds.
@@ -1450,6 +1504,20 @@ impl<'a> Typer<'a> {
             self.bound_children.retain(|local, _| *local < mark.locals);
             self.bound_packs.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
+            if let Some(known) = self
+                .anonymous
+                .as_mut()
+                .and_then(|scope| scope.immediate_values.as_mut())
+            {
+                known.retain(|(local, _)| *local < mark.locals);
+            }
+            if let Some(known) = self
+                .graph_immediate_values
+                .get_mut()
+                .and_then(Option::as_mut)
+            {
+                known.retain(|(local, _)| *local < mark.locals);
+            }
         }
         self.present.truncate(mark.present);
         if keep_flow {
@@ -1550,6 +1618,8 @@ const BOOL: Type = Type::Scalar(Scalar::Bool);
 
 /// What a reading may change, at one moment: see [`Typer::take_back`].
 struct Mark {
+    /// Pending warnings from successful argument readings.
+    warnings: usize,
     /// How many diagnostics there are.
     diagnostics: usize,
     /// How many locals there are.
@@ -1570,11 +1640,16 @@ struct Mark {
     nested_query_selects: bool,
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
+    /// Number of direct-call bodies kept by the enclosing immediate read.
+    immediate_calls: usize,
     unsettled_callback_pair: bool,
+    unsettled_list_size: bool,
     /// Number of selected pack branches before a tentative read (CTRL-16).
     selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.
     resolved_written: usize,
+    default_name_visits: usize,
+    capture_key_reads: usize,
     /// Whether the active role probe already observed a temporal pair call.
     probe_saw_temporal: bool,
 }

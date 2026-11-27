@@ -861,3 +861,39 @@ fn wrong_local(f: const fn(i64) -> i64, t: i64) -> i64 {
         );
     }
 }
+
+/// FN-4, GEN-3: the role is open, but a consumer at its written site
+/// makes the same generic instance for either result.
+#[test]
+fn open_pairs_keep_their_common_result_for_independent_calls() {
+    let mut expression = "f(1)".to_string();
+    for _ in 0..24 {
+        expression = format!("same({expression})");
+    }
+    let source = format!(
+        r#"module stable
+struct Number<T> requires T == i64 {{ value: i64 }}
+const fn check_type<T>(x: T) -> i64 => Number<T>(value: 17).value
+const fn fixed(x: str) -> str => x
+fn fixed(x: str) -> str => x
+const fn same<T>(x: T) -> T => x
+fn same<U>(x: U) -> U => x
+fn fixed_result(f: const fn(i64) -> str, t: i64) -> i64 => t + check_type(fixed(f(1)))
+fn inferred_result(f: const fn(i64) -> str, t: i64) -> i64 => t + check_type({expression})
+"#
+    );
+    let checked = check(&[("stable.hgl", &source)]);
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    for (finding, line) in checked.findings.iter().zip([8, 9]) {
+        assert_eq!(
+            finding.code, "constraint/requires.unmet",
+            "{}",
+            checked.report
+        );
+        assert!(
+            finding.at.starts_with(&format!("stable.hgl:{line}:")),
+            "{}",
+            checked.report
+        );
+    }
+}

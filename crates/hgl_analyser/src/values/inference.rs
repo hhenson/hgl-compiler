@@ -417,9 +417,97 @@ impl<'a> Typer<'a> {
         named
     }
 
+    /// GEN-8/13: keep the source of a dependent written constant until
+    /// the call supplies its parameter type. A field name is read in the
+    /// current pass; an operator reference also checks its public options.
+    pub(super) fn dependent_written_values(
+        &self,
+        written: Option<&CallArguments>,
+        signature: &Signature,
+        declared: &Declaration,
+    ) -> Vec<(usize, SyntaxNode)> {
+        let Some(written) = written else {
+            return Vec::new();
+        };
+        let operator = declared.kind == DeclarationKind::Operator;
+        signature
+            .generics
+            .iter()
+            .zip(&written.arguments)
+            .enumerate()
+            .filter_map(|(index, (generic, (at, argument)))| {
+                let (GenericKind::Value(ty), Argument::Constant(value)) = (&generic.kind, argument)
+                else {
+                    return None;
+                };
+                if (!operator && !self.module.field_name_arguments.contains(at))
+                    || !names_parameter(ty)
+                    || matches!(value.value, ConstantValue::Unknown)
+                {
+                    return None;
+                }
+                self.node_at(*at).map(|node| (index, node))
+            })
+            .collect()
+    }
+
+    /// GEN-7/8: when a written constant's place still names one of the
+    /// caller's type parameters, its type must fit throughout the caller's
+    /// declared domain. The declaration constant reader leaves those places
+    /// open until the ordinary call knows which caller bound is in scope.
+    fn field_constant_in_place(
+        &mut self,
+        node: &SyntaxNode,
+        expected: &Type,
+        place: &str,
+    ) -> ConstantValue {
+        let at = self.at(node);
+        let value = self.resolve_deferred_constant(at, Some(expected), Some(place));
+        if !names_parameter(expected) || matches!(value, ConstantValue::Unknown) {
+            return value;
+        }
+        let Some(actual) = self
+            .typed_in(at.file, node, None)
+            .ok()
+            .and_then(|read| read.ty().cloned())
+        else {
+            return value;
+        };
+        if self.admits(expected, &actual) {
+            return value;
+        }
+        let domains = self.finite_domains();
+        let choices: Vec<_> = domains
+            .memberships()
+            .into_iter()
+            .filter(|(parameter, _)| mentions(expected, &[*parameter]))
+            .collect();
+        let trials = domains.ordinary_trials(&choices);
+        if !trials.is_empty()
+            && trials.len() <= crate::INSTANCES
+            && trials.iter().all(|trial| {
+                let map: Vec<_> = trial.iter().map(|(at, argument)| (*at, argument)).collect();
+                let ty = substitute_within(expected, &map);
+                if names_parameter(&ty) {
+                    return self.admits(&ty, &actual);
+                }
+                self.read_constant(node, Some(&ty))
+                    .is_ok_and(|read| crate::constant::worked_out(&read))
+            })
+        {
+            return value;
+        }
+        if let Some(report) = Fault::Mismatch(Some(Box::new(actual))).report(at, place, expected)
+            && !self.diagnostics.as_slice().contains(&report)
+        {
+            self.diagnostics.emit(report);
+        }
+        ConstantValue::Unknown
+    }
+
     /// What the generic value parameters of a function are at a call,
-    /// once its arguments are read: each one the call gives by name,
-    /// `named`, is held to its parameter's type, and each one nothing
+    /// once its arguments are read: supplied constants that need a body
+    /// context are held to their parameters' types, and each one nothing
     /// says anything of takes its default.
     ///
     /// GEN-13: a generic value parameter has an ordinary type, which
@@ -460,6 +548,19 @@ impl<'a> Typer<'a> {
             };
             let place = format!("the generic value parameter `{}`", generics[*index].name);
             let expected = type_of(*index, found);
+            let at = self.at(node);
+            if self.module.field_name_arguments.contains(&at) {
+                // CTRL-12, GEN-8: a written field-dependent constant now has
+                // its final place, even if its type parameter came later.
+                if whole(&expected)
+                    && let Some(Argument::Constant(constant)) = &mut found[*index]
+                    && !matches!(constant.value, ConstantValue::Unknown)
+                {
+                    let place = format!("`{}` of `{}`", generics[*index].name, callee.text());
+                    constant.value = self.field_constant_in_place(node, &expected, &place);
+                }
+                continue;
+            }
             let expected = if whole(&expected) {
                 let value = self.expression(node, Some(&expected));
                 self.fit(value, &expected, &place);
@@ -678,10 +779,13 @@ impl<'a> Typer<'a> {
         if !given
             .arguments
             .iter()
-            .zip(&signature.generics)
-            .any(|((_, argument), generic)| {
-                *argument == Argument::Type(Type::TypeValue)
-                    && !matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+            .enumerate()
+            .any(|(index, (at, argument))| {
+                self.module.paired_default_names.contains_key(at)
+                    || *argument == Argument::Type(Type::TypeValue)
+                        && signature.generics.get(index).is_some_and(|generic| {
+                            !matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+                        })
             })
         {
             return None;
@@ -694,6 +798,38 @@ impl<'a> Typer<'a> {
             .collect();
         let mut given = given.clone();
         for (index, (at, argument)) in given.arguments.iter_mut().enumerate() {
+            if let Some(readings) = self.module.paired_default_names.get(at) {
+                let kind = signature.generics.get(index).or_else(|| {
+                    signature
+                        .generics
+                        .last()
+                        .filter(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+                });
+                let Some(generic) = kind else { continue };
+                if let Some(visits) = &mut self.default_name_visits {
+                    visits.push(*at);
+                }
+                let value_slot = matches!(generic.kind, GenericKind::Value(_))
+                    || generic.kind == GenericKind::Plain
+                        && matches!(argument, Argument::Type(Type::Unknown | Type::TypeValue));
+                let reports = if value_slot {
+                    std::slice::from_ref(&readings.value_error)
+                } else {
+                    &readings.type_errors
+                };
+                for report in reports {
+                    if !self.diagnostics.as_slice().contains(report) {
+                        self.diagnostics.emit(report.clone());
+                    }
+                }
+                if value_slot {
+                    *argument = Argument::Constant(Constant {
+                        text: generic.name.clone(),
+                        value: ConstantValue::Unknown,
+                    });
+                }
+                continue;
+            }
             if *argument != Argument::Type(Type::TypeValue) {
                 continue;
             }
@@ -843,10 +979,12 @@ impl<'a> Typer<'a> {
                 // A parameter whose kind its signature does not settle
                 // is what the call gives it (GEN-13).
                 _ => {
-                    // GEN-8, TYPE-18: resolve any `type(...)` constant deferred
-                    // from `read` now that locals and signatures are in scope.
+                    // GEN-8, TYPE-18 and CTRL-12: the declaration reader
+                    // cannot resolve a type query or the current field name.
+                    let field_argument = self.module.field_name_arguments.contains(at);
                     if let Argument::Constant(constant) = argument
-                        && crate::constant::has_deferred_type_query(&constant.value)
+                        && (field_argument
+                            || crate::constant::has_deferred_type_query(&constant.value))
                     {
                         let unknown = Argument::Type(Type::Unknown);
                         let expected = match &generic.kind {
@@ -863,13 +1001,18 @@ impl<'a> Typer<'a> {
                             }
                             _ => None,
                         };
-                        let place = format!("the generic parameter `{}`", generic.name);
-                        let value = self.resolve_deferred_value(
-                            *at,
-                            &constant.value,
-                            expected.as_ref(),
-                            Some(&place),
-                        );
+                        let value = if field_argument {
+                            let place = format!("`{}` of `{callee}`", generic.name);
+                            self.resolve_deferred_constant(*at, expected.as_ref(), Some(&place))
+                        } else {
+                            let place = format!("the generic parameter `{}`", generic.name);
+                            self.resolve_deferred_value(
+                                *at,
+                                &constant.value,
+                                expected.as_ref(),
+                                Some(&place),
+                            )
+                        };
                         found[position] = Some(Argument::Constant(Constant {
                             text: constant.text.clone(),
                             value,
@@ -1134,7 +1277,26 @@ impl<'a> Typer<'a> {
                 }
                 _ => None,
             };
-            if takes_its_type(node) || !(mentions(pattern, &unfound) || widenable.is_some()) {
+            // TYPE-5: field names cannot decide a generic schema. A later
+            // argument may supply it; an earlier inferred struct is already
+            // the literal's expected type and cannot be widened by labels.
+            let keyed = ungrouped(node.clone());
+            let waits_for_schema = keyed.kind() == SyntaxKind::KeyedExpr
+                && (widenable.is_some()
+                    || keyed
+                        .children()
+                        .filter_map(|entry| entry.children().next())
+                        .any(|key| {
+                            crate::syntax::keyed_field_name(&key).is_some()
+                                && self
+                                    .module
+                                    .contextual_type_reports
+                                    .contains_key(&self.at(&key))
+                        }));
+            if takes_its_type(node)
+                || waits_for_schema
+                || !(mentions(pattern, &unfound) || widenable.is_some())
+            {
                 continue;
             }
             // What the argument's type says: a parameter not yet found,
@@ -1262,6 +1424,16 @@ impl<'a> Typer<'a> {
                 .map(|(generic, _)| generic.at)
                 .collect();
             if takes_its_type(node) || !mentions(pattern, &unfound) || !self.may_reread() {
+                continue;
+            }
+            if self.module.field_name_arguments.contains(&self.at(node)) {
+                // A bare value generic can have type-position syntax. Read
+                // its constant type in the field pass that supplies it.
+                if let Ok(value) = self.typed_in(self.file, node, None)
+                    && let Some(ty) = value.ty()
+                {
+                    infer(pattern, ty, generics, &mut found);
+                }
                 continue;
             }
             let mark = self.mark();
@@ -1684,8 +1856,7 @@ impl<'a> Typer<'a> {
 /// Whether an argument has no complete type without its expected place.
 fn needs_argument_place(node: &SyntaxNode) -> bool {
     let node = ungrouped(node.clone());
-    takes_its_type(&node)
-        || node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+    takes_its_type(&node) || crate::syntax::is_empty_collection_literal(&node)
 }
 
 /// CTRL-10: a constructor supplies a block's tail with its field type.
@@ -1700,7 +1871,7 @@ fn field_needs_argument_place(node: &SyntaxNode) -> bool {
     }
     written_null(&tail)
         || tail.kind() == SyntaxKind::ImpliedMember
-        || (tail.kind() == SyntaxKind::SequenceExpr && tail.children().next().is_none())
+        || crate::syntax::is_empty_collection_literal(&tail)
 }
 
 /// Explicit arguments to ordinary generics and to the positional type

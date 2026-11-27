@@ -512,3 +512,257 @@ fn side_effect(value: i64, const key: str) -> i64 {
 test a_value_argument_acts_before_the_operation_fails {
     assert eval side_effect(value: [5], key: "run") == [5]
 }
+
+# TIME-8, CAP-6: false declaration cycles must not delay these build checks.
+const fn paired_sa(store: GlobalState, depth: i64, flag: bool, const k: str) {
+    put(store, k, 1)
+    if depth > 0 { paired_sb(store, depth - 1, flag, k, k) }
+}
+const fn paired_sb(store: GlobalState, depth: i64, flag: bool, const p: str, const q: str) {
+    if flag { paired_sa(store, depth, flag, p) } else { paired_sa(store, depth, flag, q) }
+}
+fn pair_node(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { paired_sa(global_state, 1, true, key) }
+}
+operator resolved_w<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn resolved_w(store: GlobalState, const key: str, value: i64) { resolved_relay(store, key + "put", 1.5) }
+impl const fn resolved_w(store: GlobalState, const key: str, value: f64) { put(store, key, value) }
+const fn resolved_relay<T>(store: GlobalState, const key: str, value: T) requires T in {i64, f64} { resolved_w(store, key, value) }
+fn choice_node(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { resolved_w(global_state, key, 1) }
+}
+# TIME-8/CAP-6: computation fixes these keys at the build, before start.
+test pair_rejects_before_start {
+    assert raises("store.reserved_key") { eval pair_node(key: supply("run.output"), divisor: 0) }
+}
+test pair_accepts_safe_computed_key {
+    eval pair_node(key: supply("user.key"), divisor: 1)
+}
+test choice_rejects_before_start {
+    assert raises("store.reserved_key") { eval choice_node(key: supply("run.out"), divisor: 0) }
+}
+test choice_accepts_other_computed_key {
+    eval choice_node(key: supply("run.output"), divisor: 1)
+}
+
+# TIME-8, CAP-6: exported changing routes still check each operation.
+export const fn changing_export(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { changing_export(store, depth - 1, "run.output") }
+}
+fn changing_export_node(const depth: i64, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { changing_export(global_state, depth, "safe") }
+}
+test exported_changing_route_rejects_after_start {
+    assert raises("numeric.division_by_zero") { eval changing_export_node(depth: 1, divisor: 0) }
+    assert raises("store.reserved_key") { eval changing_export_node(depth: 1, divisor: 1) }
+}
+test exported_changing_route_accepts_a_safe_step {
+    eval changing_export_node(depth: 0, divisor: 1)
+}
+
+# TIME-8, CAP-6: a reached float route does not fix an unvisited integer cycle.
+operator partial_store<S,T>(store:S, const key:str, value:T) requires S in {GlobalState}
+impl const fn partial_store(store:GlobalState, const key:str, value:i64) {
+    put(store, key, value)
+    partial_relay(store, key + "put", 1.5)
+    partial_store(store, "run.output", 1)
+}
+impl const fn partial_store(store:GlobalState, const key:str, value:f64) { put(store,key,value) }
+const fn partial_relay<T>(store:GlobalState, const key:str, value:T) requires T in {i64,f64} { partial_store(store,key,value) }
+fn partial_store_node() {
+    inject global_state
+    when {}
+    stop { partial_relay(global_state,"safe",1.5) }
+}
+test an_unselected_member_keeps_its_changing_key {
+    eval partial_store_node()
+}
+
+# TIME-8, CAP-6: revisiting a declaration with other types is no cycle.
+fn forwarded_choice_node(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { resolved_relay(global_state, key, 1) }
+}
+test an_extra_forwarding_hop_still_rejects_before_start {
+    assert raises("store.reserved_key") { eval forwarded_choice_node(key: supply("run.out"), divisor: 0) }
+}
+test an_extra_forwarding_hop_accepts_its_benign_key {
+    eval forwarded_choice_node(key: supply("run.output"), divisor: 1)
+}
+
+# TIME-8, CAP-6: this computed fixed key fails before the start hook.
+operator isolated_dispatch<S,T>(s: S, depth: i64, const label: str, tag: T) requires S in {GlobalState}
+impl const fn isolated_dispatch(s: GlobalState, depth: i64, const label: str, tag: f64) { put(s, label, tag) }
+impl const fn isolated_dispatch(s: GlobalState, depth: i64, const label: str, tag: i64) {
+    put(s, label, tag)
+    if depth > 0 { isolated_via(s, depth - 1, label + "put", tag) }
+}
+const fn isolated_via<T>(s: GlobalState, depth: i64, const label: str, tag: T) requires T in {f64, i64} {
+    isolated_dispatch(s, depth, label, tag)
+}
+fn isolated_stable(const label: str, const d: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { isolated_via(global_state, 2, label, 3.5) }
+}
+fn unused_moving(const label: str, const d: i64, const n: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { isolated_via(global_state, n, label, 7) }
+}
+test isolated_stable_rejects_before_start {
+    assert raises("store.reserved_key") { eval isolated_stable(supply("run.output"), 0) }
+}
+test isolated_stable_accepts_a_benign_key {
+    eval isolated_stable(supply("audit.isolated.f64"), 1)
+}
+
+# TIME-8, CAP-6: this computed fixed key fails before the start hook.
+const fn isolated_copy(s: GlobalState, n: i64, flag: bool, const key: str) {
+    put(s, key, n)
+    if n > 0 { isolated_choose(s, n - 1, flag, key, key) }
+}
+const fn isolated_choose(s: GlobalState, n: i64, flag: bool, const left: str, const right: str) {
+    if flag { isolated_copy(s, n, flag, right) } else { isolated_copy(s, n, flag, left) }
+}
+fn isolated_alias(const key: str, const divisor: i64, const flag: bool) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { isolated_copy(global_state, 3, flag, key) }
+}
+fn unused_alias_entry(const p: str, const q: str) {
+    inject global_state
+    when {}
+    stop { isolated_choose(global_state, 1, false, p, q) }
+}
+test isolated_alias_rejects_before_start {
+    assert raises("store.reserved_key") { eval isolated_alias(supply("run.output"), 0, false) }
+}
+test isolated_alias_accepts_a_benign_key {
+    eval isolated_alias(supply("audit.isolated.alias"), 1, false)
+}
+
+# TIME-8, CAP-6: stable expressions evaluated before a cycle remain fixed.
+const fn entry_rotate(s: GlobalState, n: i64, const left: str, const right: str) {
+    put(s, left, n)
+    if n > 0 { entry_rotate(s, n - 1, right, left) }
+}
+const fn entry_same(s: GlobalState, n: i64, const key: str) {
+    entry_rotate(s, n, key, key)
+}
+struct EntryKeys { name: str }
+fn entry_expression(const key: str, const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_same(global_state, depth, key + "put") }
+}
+test entry_expression_rejects_before_start {
+    assert raises("store.reserved_key") { eval entry_expression(supply("run.out"), 0, 0) }
+}
+test entry_expression_rejects_with_start_enabled {
+    assert raises("store.reserved_key") { eval entry_expression(supply("run.out"), 1, 2) }
+}
+test entry_expression_accepts_benign {
+    eval entry_expression(supply("tenant."), 1, 3)
+}
+fn entry_field(const key: EntryKeys, const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_rotate(global_state, depth, key.name, key.name) }
+}
+test entry_field_rejects_before_start {
+    assert raises("store.reserved_key") { eval entry_field(EntryKeys(name: supply("run.output")), 0, 0) }
+}
+test entry_field_rejects_with_start_enabled {
+    assert raises("store.reserved_key") { eval entry_field(EntryKeys(name: supply("run.output")), 1, 2) }
+}
+test entry_field_accepts_benign {
+    eval entry_field(EntryKeys(name: supply("tenant.key")), 1, 3)
+}
+fn entry_list(const key: list<str, 2>, const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_rotate(global_state, depth, key[1], key[1]) }
+}
+test entry_list_rejects_before_start {
+    assert raises("store.reserved_key") { eval entry_list(["unused", supply("run.output")], 0, 0) }
+}
+test entry_list_rejects_with_start_enabled {
+    assert raises("store.reserved_key") { eval entry_list(["unused", supply("run.output")], 1, 2) }
+}
+test entry_list_accepts_benign {
+    eval entry_list(["unused", supply("tenant.key")], 1, 3)
+}
+fn entry_tuple(const key: tuple<str, str>, const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_rotate(global_state, depth, key[1], key[1]) }
+}
+test entry_tuple_rejects_before_start {
+    assert raises("store.reserved_key") { eval entry_tuple(("unused", supply("run.output")), 0, 0) }
+}
+test entry_tuple_rejects_with_start_enabled {
+    assert raises("store.reserved_key") { eval entry_tuple(("unused", supply("run.output")), 1, 2) }
+}
+test entry_tuple_accepts_benign {
+    eval entry_tuple(("unused", supply("tenant.key")), 1, 3)
+}
+
+# TIME-8, CAP-6: distinct constants can swap; a freshly supplied named
+# constant on the back edge still changes the key instead of forwarding it.
+const entry_reserved: str = "run.output"
+const entry_alias: str = entry_reserved
+const entry_safe: str = "tenant.entry"
+const fn entry_swap_last(s: GlobalState, n: i64, const left: str, const right: str) {
+    if n == 0 { put(s, left, n) }
+    else { entry_swap_last(s, n - 1, right, left) }
+}
+const fn entry_fresh(s: GlobalState, n: i64, const key: str) {
+    if n == 0 { put(s, key, n) }
+    else { entry_fresh(s, n - 1, entry_alias) }
+}
+fn entry_distinct(const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_swap_last(global_state, depth, entry_safe, entry_reserved) }
+}
+fn entry_replaced(const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_fresh(global_state, depth, entry_safe) }
+}
+test entry_distinct_leaves_start_first {
+    assert raises("numeric.division_by_zero") { eval entry_distinct(0, 1) }
+}
+test entry_distinct_accepts_an_early_stop { eval entry_distinct(1, 0) }
+test entry_distinct_checks_the_reached_key {
+    assert raises("store.reserved_key") { eval entry_distinct(1, 1) }
+}
+test entry_replaced_leaves_start_first {
+    assert raises("numeric.division_by_zero") { eval entry_replaced(0, 1) }
+}
+test entry_replaced_accepts_an_early_stop { eval entry_replaced(1, 0) }
+test entry_replaced_checks_the_reached_key {
+    assert raises("store.reserved_key") { eval entry_replaced(1, 1) }
+}

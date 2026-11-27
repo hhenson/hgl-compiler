@@ -1,5 +1,5 @@
-//! GEN-6 declaration checks for a candidate's result and its operator's
-//! requirements. The signature pass runs these before bodies are typed.
+//! GEN-6 declaration checks for a candidate's parameter modifiers, result
+//! and its operator's requirements. The signature pass runs these before bodies are typed.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -25,8 +25,14 @@ use crate::{codes, error};
 use super::inference::{infer, pack_bounds, type_pack};
 use super::requirements::declared_requirement;
 
-/// Report contradictions that follow from the candidate's declared types.
-pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Diagnostics) {
+mod ties;
+
+/// Report contradictions and ties that follow from the candidates' declarations.
+pub(crate) fn check_candidate_contracts(
+    program: &Program,
+    diagnostics: &mut Diagnostics,
+    tests: bool,
+) {
     let uses: HashMap<_, _> = program
         .modules
         .iter()
@@ -61,6 +67,19 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
                 || declaration_has_error(candidate, diagnostics)
                 || declaration_has_error(declared, diagnostics)
             {
+                continue;
+            }
+            if let Some((parameter, given, mode)) = missing_modifier(public, signature) {
+                diagnostics.emit(
+                    error(
+                        Category::Operator,
+                        codes::IMPL_PARAMETER,
+                        given.at,
+                        format!("parameter `{}` must keep the operator's {mode}", given.name),
+                        "GEN-6",
+                    )
+                    .with_related(parameter.at, "the operator's parameter"),
+                );
                 continue;
             }
             let Some(mut parameters) = parameter_types(public, signature, role) else {
@@ -139,6 +158,33 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             }
         }
     }
+    ties::check(program, diagnostics, tests);
+}
+
+/// GEN-6 and FN-15: a candidate preserves const. Only the candidate
+/// can mark a parameter var, so a public var has its own declaration error.
+fn missing_modifier<'a>(
+    public: &'a Signature,
+    candidate: &'a Signature,
+) -> Option<(&'a Parameter, &'a Parameter, &'static str)> {
+    public
+        .parameters
+        .iter()
+        .zip(public.candidate_parameters(candidate))
+        .find_map(|(parameter, slot)| {
+            let given = &candidate.parameters[slot?];
+            let mode = if parameter.constant && !given.constant {
+                "`const` modifier"
+            } else if matches!(
+                (&parameter.ty, &given.ty),
+                (Type::Function(expected), Type::Function(given)) if expected.value && !given.value
+            ) {
+                "`const fn` parameter mode"
+            } else {
+                return None;
+            };
+            Some((parameter, given, mode))
+        })
 }
 
 /// GEN-6: a candidate declares the operator's result, when this

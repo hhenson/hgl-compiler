@@ -1,0 +1,37 @@
+module demo.tuple_text_requirements
+
+# GEN-10 and GEN-16: required calls and forwarded witnesses retain the
+# selected tuple converter's member types.
+const fn label<T>(value: T) -> str requires convert(T) -> str => convert<str>(value)
+const fn relay<T>(value: T) -> str requires convert(T) -> str => label(value)
+
+test required_tuple_text {
+    assert label((1, false, 8)) == "(1, false, 8)"
+    assert label(("item", 2, true)) == "(\"item\", 2, true)"
+    assert relay((3, true, 9)) == "(3, true, 9)"
+    assert relay(((4, false, 2), true)) == "((4, false, 2), true)"
+}
+
+struct Cents { n: i64 }
+impl const fn convert(value: Cents) -> result<str, error> => ok("fallible")
+struct Price { n: i64 }
+impl const fn convert(value: Price) -> str => "price"
+
+# FMT-5: a member's conversion must give plain text at any depth.
+# expect-error(operator, "operator.no_candidate")
+const fn flat_fallible() -> str => format("{}", (Cents(n: 3), 0))
+# expect-error(operator, "operator.no_candidate")
+const fn nested_fallible() -> str => format("{}", ((Cents(n: 3), 0), true))
+# expect-error(operator, "operator.no_candidate")
+const fn direct_nested_fallible() -> str => convert<str>(((Cents(n: 3), 0), true))
+
+test nested_infallible_text {
+    let value = ((Price(n: 3), 0), true)
+    assert convert<str>(value) == "((price, 0), true)"
+    assert format("{}", value) == "((price, 0), true)"
+}
+
+# ERR-15: an explicit ordinary call can still read a fallible result.
+test explicit_fallible_text {
+    assert convert<str>(Cents(n: 3)) == "fallible"
+}

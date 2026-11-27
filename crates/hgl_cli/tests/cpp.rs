@@ -810,7 +810,7 @@ fn generic_instance_literals_run_on_the_sdk() {
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -898,7 +898,12 @@ fn value_code_runs_on_the_sdk() {
         "src/demo.values.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.values.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let collections = write(
+        &root,
+        "src/demo.collections.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.collections.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &collections, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -907,7 +912,7 @@ fn value_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 19 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1025,6 +1030,28 @@ fn nested_forms_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 18 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// CTRL-12/15/16: ordinary struct fields are heterogeneous and ordered.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordinary_struct_fields_iterate_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("struct-iteration");
+    let file = write(
+        &root,
+        "demo.struct_iteration.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.struct_iteration.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2619,7 +2646,7 @@ fn graph_list_literals_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -3283,6 +3310,89 @@ test bounded_reflection_uses_the_anonymous_parameters {
     );
 }
 
+/// An option uses the selected candidate's callable template (FN-17,
+/// GEN-6) by name, by position, or in braces even with a configuration
+/// parameter of the same name on another candidate (EXPR-10).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_only_callable_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate-only-callable-options");
+    let file = write(
+        &root,
+        "demo.candidate_callable_options.hgl",
+        r#"module demo.candidate_callable_options
+
+const fn plus_two(value: i64) -> i64 => value + 2
+const fn wrong_result(value: i64) -> bool => value > 0
+
+operator bump<T>(value: T) -> i64
+impl const fn bump(value: i64) -> i64 => value + 3
+impl const fn bump(value: str) -> i64 => 11
+
+operator transform<T>(value: T) -> i64
+impl const fn transform(value: i64, mapper: const fn(i64) -> i64) -> i64 => mapper(value)
+impl const fn transform(value: str, mapper: i64) -> i64 => mapper
+
+operator route<T>(item: T) -> i64
+impl const fn route(item: i64, action: const fn(i64) -> i64) -> i64 => action(item)
+impl const fn route{action: i64}(item: str) -> i64 => action + 100
+
+const fn pass_on(action: const fn(i64) -> i64) -> i64 {
+    return route{action: action}(8) + route(7, action)
+}
+
+test options {
+    assert transform(5, mapper: plus_two) == 7
+    assert transform{mapper: plus_two}(5) == 7
+    assert transform(5, mapper: bump) == 8
+    assert transform(5, mapper: fn(value) => value + 4) == 9
+    assert transform("value", mapper: 4) == 4
+    assert transform(5, plus_two) == 7
+    assert transform("value", 5) == 5
+    assert route(8, action: plus_two) == 10
+    assert route{action: plus_two}(8) == 10
+    assert route(7, plus_two) == 9
+    assert route{action: 7}("value") == 107
+    assert pass_on(plus_two) == 19
+    let plus_two = 5
+    assert transform("value", mapper: plus_two) == 5
+    assert route{action: plus_two}("value") == 105
+}
+
+const fn wrong_callback_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return transform(5, mapper: wrong_result)
+}
+
+const fn wrong_option_kind() -> i64 {
+    # expect-error(operator, "operator.no_candidate")
+    return transform("value", mapper: plus_two)
+}
+
+const fn wrong_braced_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return route{action: wrong_result}(8)
+}
+
+const fn wrong_positional_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return route(8, wrong_result)
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 4 passed, 0 failed\n")
+            && stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: a finite chain of static wrappers and a recursive call that
 /// forwards the same target both specialize and run.
 #[test]
@@ -3362,7 +3472,7 @@ fn reflected_pack_followups_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -3419,7 +3529,7 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 8 passed, 0 failed, 0 not run\n"
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
@@ -4184,7 +4294,115 @@ fn concrete_generic_struct_traces_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// A failing trace comparison of concrete generic structs with inferred fixed
+/// list sizes (value-only and mixed) and Boolean value parameters compiles and
+/// renders their generic arguments accurately (GEN-13, TYPE-3, TYPE-9, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_inferred_size_and_bool_trace_failure_displays_arguments() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-inferred-size-display");
+    let file = write(
+        &root,
+        "src/demo.inferred-size-display.hgl",
+        concat!(
+            "module demo.inferred_size_display\n",
+            "struct Sized<N> { items: list<i64, N> }\n",
+            "struct Row<T, N> { items: list<T, N> }\n",
+            "struct Flagged<const B: bool> { value: i64 }\n",
+            "fn copy_sized(p: Sized<2>) -> Sized<2> => p\n",
+            "fn copy_row(p: Row<i64, 2>) -> Row<i64, 2> => p\n",
+            "fn copy_true(p: Flagged<true>) -> Flagged<true> => p\n",
+            "fn copy_false(p: Flagged<false>) -> Flagged<false> => p\n",
+            "test sized_mismatch {\n",
+            "    assert eval copy_sized(p: [1s: Sized<2>(items: [19, 31])]) == [1s: Sized<2>(items: [19, 32])]\n",
+            "}\n",
+            "test row_mismatch {\n",
+            "    assert eval copy_row(p: [1s: Row<i64, 2>(items: [19, 31])]) == [1s: Row<i64, 2>(items: [19, 32])]\n",
+            "}\n",
+            "test bool_true_mismatch {\n",
+            "    assert eval copy_true(p: [1s: Flagged<true>(value: 1)]) == [1s: Flagged<true>(value: 2)]\n",
+            "}\n",
+            "test bool_false_mismatch {\n",
+            "    assert eval copy_false(p: [1s: Flagged<false>(value: 1)]) == [1s: Flagged<false>(value: 2)]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    for expected in [
+        "demo.inferred_size_display::Sized<2>(items: [19, 31])",
+        "demo.inferred_size_display::Row<i64, 2>(items: [19, 31])",
+        "demo.inferred_size_display::Flagged<true>(value: 1)",
+        "demo.inferred_size_display::Flagged<false>(value: 1)",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing `{expected}` in:\n{stdout}"
+        );
+    }
+    assert!(!stdout.contains("Flagged<1>"), "{stdout}");
+    assert!(!stdout.contains("Flagged<0>"), "{stdout}");
+}
+
+/// A failing trace comparison of a concrete generic struct parameterized by a
+/// named or composite `Type` value displays `Type::canonical_spelling` rather
+/// than the compiler-local declaration identity (TYPE-18, FMT-5, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_type_value_argument_trace_failure_uses_canonical_spelling() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-type-value-display");
+    let file = write(
+        &root,
+        "src/demo.type-arg-display.hgl",
+        concat!(
+            "module demo.type_arg_display\n",
+            "struct Descriptor { value: i64 }\n",
+            "struct Tagged<const K: Type> { value: i64 }\n",
+            "const fn pair() -> list<Descriptor, 2> => [Descriptor(value: 0), Descriptor(value: 1)]\n",
+            "fn same_named(value: Tagged<type(Descriptor(value: 0))>) -> Tagged<type(Descriptor(value: 0))> => value\n",
+            "fn same_composite(value: Tagged<type(pair())>) -> Tagged<type(pair())> => value\n",
+            "test named_type_mismatch {\n",
+            "    assert eval same_named(value: [Tagged<type(Descriptor(value: 0))>(value: 1)]) ==\n",
+            "        [Tagged<type(Descriptor(value: 0))>(value: 2)]\n",
+            "}\n",
+            "test composite_type_mismatch {\n",
+            "    assert eval same_composite(value: [Tagged<type(pair())>(value: 3)]) ==\n",
+            "        [Tagged<type(pair())>(value: 4)]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("demo.type_arg_display::Tagged<Descriptor>(value: 1)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("demo.type_arg_display::Tagged<list<Descriptor, 2>>(value: 3)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("declaration("), "{stdout}");
+    assert!(
+        stdout.ends_with("executable cases: 0 passed, 2 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -4240,7 +4458,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 27 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 30 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -5918,11 +6136,34 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
         "demo.store.reserved_routes.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.store.reserved_routes.hgl"),
     );
-    let output = hgl_in(&["test", &routes], &[], &[]);
+    let output = hgl_in(&["test", &routes, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.contains("rejection cases: 2 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 14 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    // TIME-8, CAP-6: explicit Core adds forwarding documentation examples;
+    // an unrelated unread route must not erase either fixed-key rejection.
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
+    let core = core.to_str().unwrap();
+    let output = hgl_in(
+        &[
+            "test",
+            core,
+            &routes,
+            "--target",
+            "cpp",
+            "--test-path",
+            &routes,
+        ],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 14 passed, 0 failed\n"),
         "{stdout}"
     );
     let file = write(
@@ -5934,7 +6175,18 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 32 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 63 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    let output = hgl_in(
+        &["test", core, &file, "--target", "cpp", "--test-path", &file],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 63 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -6230,7 +6482,7 @@ fn call_role_preferences_run_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with(
-            "rejection cases: 5 passed, 0 failed\nexecutable cases: 15 passed, 0 failed, 0 not run\n"
+            "rejection cases: 7 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
@@ -6400,6 +6652,31 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
 }
 
+/// GEN-10, GEN-16 and FMT-5: packed tuple conversions run through required
+/// calls, and compound formatting needs a plain string from each member.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn tuple_text_requirements_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("tuple-text-requirements");
+    let file = write(
+        &root,
+        "demo.tuple_text_requirements.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.tuple_text_requirements.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 3 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// UNIT-10 and UNIT-12: emitted code uses the nearest binding while a
 /// module or prelude function still works outside the hiding scope.
 #[test]
@@ -6429,6 +6706,74 @@ fn lexical_names_can_hide_module_and_prelude_functions() {
     assert!(output.status.success(), "{stdout}\n{stderr}");
     assert!(
         stdout.contains("passed   executable  demo.unit12_shadowing::uses_nearest_binding"),
+        "{stdout}"
+    );
+}
+
+/// EXPR-7 and GEN-7: concrete generic bracket reads over lists, tuples and
+/// dictionaries (direct, forwarded, nullable `T?`, and across multi-file
+/// module parts) compile and run on the C++ SDK.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_bracket_bases_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-bracket-bases");
+    write(
+        &root,
+        "src/demo.generic-bracket-bases.hgl",
+        concat!(
+            "module demo.generic_bracket_bases\n",
+            "const fn at_zero<T>(value: T) -> i64 => value[0]\n",
+            "const fn forwarded_zero<U>(value: U) -> i64 => at_zero(value)\n",
+            "const fn at_key<T>(value: T) -> i64 => value[\"k\"]\n",
+            "const fn opt_zero<T>(value: T?) -> i64 => value[0]\n",
+            "const fn opt_forwarded<U>(value: U?) -> i64 => opt_zero(value)\n",
+            "const fn opt_key<T>(value: T?) -> i64 => value[\"k\"]\n",
+            "test valid_generic_collections {\n",
+            "    assert at_zero([7]) == 7\n",
+            "    assert forwarded_zero([8]) == 8\n",
+            "    assert at_zero((9, \"x\")) == 9\n",
+            "    assert forwarded_zero((10, \"y\")) == 10\n",
+            "    let book: dict<str, i64> = [\"k\": 11]\n",
+            "    assert at_key(book) == 11\n",
+            "    let xs: list<i64>? = [12]\n",
+            "    assert opt_zero(xs) == 12\n",
+            "    assert opt_forwarded(xs) == 12\n",
+            "    assert part_opt_zero(xs) == 12\n",
+            "    let pair: tuple<i64, str>? = (13, \"z\")\n",
+            "    assert opt_zero(pair) == 13\n",
+            "    let opt_book: dict<str, i64>? = [\"k\": 14]\n",
+            "    assert opt_key(opt_book) == 14\n",
+            "    assert eval part_node_zero(value: [[15]]) == [15]\n",
+            "}\n",
+        ),
+    );
+    write(
+        &root,
+        "src/demo.generic-bracket-bases.helpers.hgl",
+        concat!(
+            "module demo.generic_bracket_bases part helpers\n",
+            "const fn part_opt_zero<T>(value: T?) -> i64 => opt_zero(value)\n",
+            "fn part_node_zero<T>(value: T) -> i64 { when all_valid(value) { return value[0] } }\n",
+            "test valid_from_part {\n",
+            "    assert forwarded_zero([16]) == 16\n",
+            "    let xs: list<i64>? = [17]\n",
+            "    assert part_opt_zero(xs) == 17\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &argument(&root), "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

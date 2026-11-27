@@ -190,7 +190,10 @@ pub(crate) fn holds(
 ) -> Option<bool> {
     let operator = match callback {
         Callee::Candidate { operator, .. } | Callee::Required { operator, .. } => *operator,
-        Callee::Parameter { .. } | Callee::DeferredOperator(_) | Callee::Unread => return None,
+        Callee::Parameter { .. }
+        | Callee::DeferredOperator(_)
+        | Callee::UnreadWithConnection
+        | Callee::Unread => return None,
         _ => return Some(false),
     };
     if template.parameters.is_empty()

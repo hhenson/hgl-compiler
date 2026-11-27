@@ -47,6 +47,16 @@ impl Reader<'_> {
         }
         let list = child(node, SyntaxKind::GenericArgs);
         let name = name_token(node);
+        if let Some(reports) = name
+            .as_ref()
+            .and_then(|name| self.module.default_type_reports.get(&self.at(name.span())))
+        {
+            for report in reports {
+                if !self.diagnostics.as_slice().contains(report) {
+                    self.diagnostics.emit(report.clone());
+                }
+            }
+        }
         let binding = name
             .as_ref()
             .and_then(|name| self.bindings.get(&(self.file, name.span().start)).copied());
@@ -496,7 +506,12 @@ impl Reader<'_> {
                 && placed
                 && at_least > 0
                 && argument.kind() == SyntaxKind::NamedType
-                && argument.text().to_string().trim() == "Type"
+                && (argument.text().to_string().trim() == "Type"
+                    || name_token(&argument).is_some_and(|name| {
+                        self.module
+                            .contextual_type_reports
+                            .contains_key(&self.at(name.span()))
+                    }))
                 && let Some(kinds) = values_of.and_then(|id| self.kinds.get(&id))
             {
                 want = kinds
@@ -579,6 +594,36 @@ impl Reader<'_> {
             };
 
             if defer_contextual
+                && kind == SyntaxKind::NamedType
+                && child(&argument, SyntaxKind::GenericArgs).is_none()
+                && let Some(name) = name_token(&argument)
+                && let name_at = self.at(name.span())
+                && let Some(value_error) = self
+                    .module
+                    .contextual_type_reports
+                    .get(&name_at)
+                    .and_then(|reports| {
+                        reports
+                            .iter()
+                            .find(|report| report.code.as_str() == codes::DEFAULT_FORMAL_ARGUMENT)
+                    })
+                    .cloned()
+            {
+                // The value reading is excluded. Retain the type and its
+                // diagnostics independently until this pair's role is known.
+                let before = self.diagnostics.len();
+                let ty = self.type_(&argument, position);
+                let reports = self.diagnostics.as_slice()[before..].to_vec();
+                self.diagnostics.truncate(before);
+                self.paired_default_names.insert(
+                    self.at(argument.span()),
+                    crate::program::PairedDefaultName {
+                        value_error,
+                        type_errors: reports,
+                    },
+                );
+                arguments.push(Argument::Type(ty));
+            } else if defer_contextual
                 && kind == SyntaxKind::NamedType
                 && child(&argument, SyntaxKind::QualifiedName).is_none()
                 && child(&argument, SyntaxKind::GenericArgs).is_none()
@@ -695,12 +740,19 @@ impl Reader<'_> {
         let contextual_type =
             name.text() == "Type" && child(node, SyntaxKind::QualifiedName).is_none();
         let binding = self.bindings.get(&(self.file, name.span().start)).copied();
+        if want == Kind::Value
+            && self
+                .module
+                .contextual_type_reports
+                .contains_key(&self.at(name.span()))
+        {
+            return Some(self.held(node, Err(Fault::Reported), expected, place));
+        }
         let Some(binding) = binding else {
-            if contextual_type
-                && self
-                    .module
-                    .contextual_type_reports
-                    .contains_key(&self.at(name.span()))
+            if self
+                .module
+                .contextual_type_reports
+                .contains_key(&self.at(name.span()))
             {
                 // A failed ordinary value lookup is not a second reading as
                 // the descriptor type. held emits the retained lookup report.
@@ -817,6 +869,44 @@ impl Reader<'_> {
         read(&scope)
     }
 
+    /// CTRL-12 and GEN-8: the first binding of an enclosing `for` can
+    /// acquire a constant field name when the body types its iterable.
+    /// Check binding locations so a shadowing ordinary local stays ordinary.
+    fn may_read_field_name_at_call(&self, node: &SyntaxNode) -> bool {
+        let Some(list) = node
+            .parent()
+            .filter(|list| list.kind() == SyntaxKind::GenericArgs)
+        else {
+            return false;
+        };
+        let Some((module, declaration)) = list
+            .parent()
+            .and_then(|callee| self.callable_named(&callee))
+        else {
+            return false;
+        };
+        self.program.modules[module].declarations[declaration]
+            .kind
+            .binding_role()
+            .is_some()
+            && node
+                .descendants_with_tokens()
+                .filter_map(|part| part.into_token())
+                .any(|token| {
+                    let Some(Binding::Local {
+                        at,
+                        kind: LocalKind::Iteration,
+                    }) = self.bindings.get(&(self.file, token.span().start)).copied()
+                    else {
+                        return false;
+                    };
+                    node.ancestors()
+                        .filter(|part| part.kind() == SyntaxKind::ForStmt)
+                        .filter_map(|statement| name_token(&statement))
+                        .any(|name| self.at(name.span()) == *at)
+                })
+    }
+
     /// The constant `node` is, read as `read`, held as a value of
     /// `expected`. Where `place` names its place, a value of another
     /// type is reported (`type.mismatch`, EXPR-5), and so is a member
@@ -873,6 +963,12 @@ impl Reader<'_> {
                 ConstantValue::Unknown
             }
             Ok(value) => value,
+            Err(Fault::NotConstant)
+                if place.is_some() && self.may_read_field_name_at_call(node) =>
+            {
+                self.field_name_arguments.insert(self.at(node.span()));
+                ConstantValue::Unevaluated
+            }
             Err(Fault::NotConstant) if place.is_some() => {
                 if let Some(place) = place {
                     self.diagnostics.emit(error(

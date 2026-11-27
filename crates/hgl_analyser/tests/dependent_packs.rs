@@ -6,6 +6,46 @@ use common::module;
 use hgl_analyser::{Argument, Binding, ConstantValue, Detail, LocalKind, Type};
 
 #[test]
+fn a_function_type_rejects_a_positional_pack_where_written() {
+    // FN-17 and GEN-17: a positional pack remains parseable, but must
+    // not be read as a fixed input or give a callback a fixed arity.
+    for arguments in ["\"a\"", "\"a\", \"b\""] {
+        let checked = module(&format!(
+            "const fn one(a: str) -> str => a\n\
+             const fn all(parts: ...str) -> str => \"\"\n\
+             const fn through(f: const fn(...str) -> str) -> str => f({arguments})\n\
+             test dropped {{ assert through(one) == \"a\" }}"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        let error = &checked.findings[0];
+        assert_eq!(error.at, "m.hgl:4:30");
+        assert_eq!(error.code, "local:type/pack.function_type");
+        assert_eq!(error.rule, "FN-17");
+    }
+
+    let checked = module("operator read(f: fn(i64, ...list<str>{1:*}) -> str) -> str");
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].at, "m.hgl:2:26");
+    assert_eq!(checked.findings[0].code, "local:type/pack.function_type");
+}
+
+#[test]
+fn fixed_function_type_inputs_and_positional_callable_packs_can_coexist() {
+    // FN-17 and FN-8: a fixed, named callback input and a separately
+    // declared variadic function retain their normal call shapes.
+    let checked = module(
+        r#"const fn one(a: str) -> str => a
+const fn all(parts: ...str) -> str => parts[0]
+const fn through(f: const fn(a: str) -> str) -> str => f(a: "a")
+test preserved {
+    assert through(one) == "a"
+    assert all("a", "b") == "a"
+}"#,
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+#[test]
 fn a_named_pack_of_function_parameters_and_call_exclusions_are_bound() {
     // GEN-17 and FN-8: fixed inputs come first; the reflected pack and
     // the independent argument pack bind to different generic parameters.

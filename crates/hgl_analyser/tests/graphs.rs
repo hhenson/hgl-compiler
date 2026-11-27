@@ -132,6 +132,7 @@ fn composition_takes_the_temporal_definition_and_candidate() {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => {
                 panic!("a callee")
             }

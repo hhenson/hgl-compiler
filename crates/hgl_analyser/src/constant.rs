@@ -695,9 +695,16 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
         SyntaxKind::UnaryExpr => unary(node, expected, scope),
         SyntaxKind::BinaryExpr => binary(node, expected, scope),
         SyntaxKind::SequenceExpr => sequence(node, expected, scope),
+        SyntaxKind::SetExpr => match expected {
+            Some(ty @ Type::Set(element)) if **element == Type::Scalar(Scalar::Str) => {
+                string_set(node, ty, scope)
+            }
+            Some(ty @ Type::Set(_)) => Ok(Typed::unevaluated(Some(ty.clone()))),
+            _ => Ok(Typed::unevaluated(None)),
+        },
         // TYPE-10: "`unbounded` is the size sentinel."
         SyntaxKind::UnboundedSize => Ok(Typed::of(ConstantValue::Unbounded, None)),
-        SyntaxKind::TupleExpr => tuple(node, expected, scope),
+        SyntaxKind::TupleExpr | SyntaxKind::SequencePair => tuple(node, expected, scope),
         _ => Err(Fault::NotConstant),
     }
 }
@@ -928,6 +935,24 @@ pub(crate) fn named(name: &SyntaxToken, scope: &Scope) -> Result<Typed, Fault> {
             });
             Ok(Typed::of(value, (scope.parameter)(*at)))
         }
+        // CTRL-16: only an iteration binding given a value by this
+        // constant scope can be a struct field name.
+        Binding::Local {
+            at,
+            kind: LocalKind::Iteration,
+        } => scope
+            .arguments
+            .iter()
+            .find_map(|(binding, argument)| match argument {
+                Argument::Constant(given) if at == binding => match &given.value {
+                    ConstantValue::Str(name) => {
+                        Some(Typed::scalar(ConstantValue::Str(name.clone()), Scalar::Str))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .ok_or(Fault::NotConstant),
         Binding::Local { .. } => Err(Fault::NotConstant),
         // "a constant (UNIT-13)".
         Binding::Declarations {
@@ -1412,9 +1437,6 @@ fn sequence(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result
     let mut parts = Vec::new();
     let mut failed = false;
     for entry in node.children() {
-        if entry.kind() == SyntaxKind::SequencePair {
-            return Ok(Typed::unevaluated(None));
-        }
         let read = value(&entry, element, scope)?;
         failed |= read.failed;
         types.push(read.ty.clone());

@@ -46,6 +46,7 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => {
                 found.push("none".to_string());
                 return;
@@ -760,7 +761,11 @@ fn a_candidate_that_outranks_every_one_not_told_is_known() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:9:39 operator/operator.no_candidate GEN-5"],
+        [
+            "m.hgl:7:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:8:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:9:39 operator/operator.no_candidate GEN-5",
+        ],
         "{}",
         checked.report
     );
@@ -4310,4 +4315,30 @@ fn null_allowed() -> bool => nullable("s")"#,
             .any(|call| call == "first_result(U, U) <f64?>"),
         "{nullable_calls:?}"
     );
+}
+
+/// TYPE-5, EXPR-9 and GEN-7: a settled generic sibling supplies the
+/// types of empty collection literals in the other constructor fields.
+#[test]
+fn inferred_struct_fields_settle_empty_braced_collections() {
+    let checked = module(
+        r#"operator positive<T>(input:T) -> bool
+impl const fn positive<T>(input:T) -> bool => true
+impl fn positive(input:i64) -> bool { when { return input > 0 } }
+enum Side { buy, sell }
+struct Book<U> {
+    first: U
+    tags: set<U>
+    entries: dict<str, U>
+}
+fn select_side<T>(const input:T) -> Side {
+    let chosen = if positive(input) { Side.buy }
+    let book = Book(first:chosen, tags:{,}, entries:{:})
+    return book.first
+}
+test temporal { assert eval select_side(input:1) == [.buy] }
+test constant { assert eval select_side(input:"x") == [.buy] }
+"#,
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
 }

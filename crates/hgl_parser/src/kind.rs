@@ -273,6 +273,10 @@ define_syntax_kinds! {
         TupleExpr,
         /// `[a, b]`, `[a: b]` or `[]`
         SequenceExpr,
+        /// An explicitly braced set, including the empty `{,}`.
+        SetExpr,
+        /// A braced dictionary or a contextually named struct (EXPR-9, TYPE-5).
+        KeyedExpr,
         /// `[for item in iterable: expression]`.
         ListComprehension,
         /// `{for key in arg_keys(Ps): expression}` (FN-19).
