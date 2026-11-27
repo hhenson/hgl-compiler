@@ -264,11 +264,11 @@ parser: done
 
 analyser: partial
 
-- Decides an undecided constructor from what its name resolves to, a generic type, function or operator; a generic type before a comparison's `<` rejected; each argument against its parameter's kind
+- Decides an undecided constructor from what its name resolves to and checks each argument against its parameter's kind. Rejects an invalid application when `<` touches a generic function or operator name. A generic type name used in a comparison also rejects.
 - A contextual `Type` argument supplies the descriptor in a known type slot and uses ordinary value lookup in a value slot. Callable signatures and constraints settle their declared slots before call arguments are read, including operator and pack slots. Where the call supplies the kind, module/imported constants and local value bindings take precedence over the descriptor fallback. Value-only lookup diagnostics are retained only on the value path; GEN-8 still requires a constant.
 - With no value named `Type`, a known value slot rejects the descriptor as the wrong argument kind, including struct annotations and constructors.
 - Function pairs defer the contextual spelling until the existing FN-4/6 role selection supplies the receiving signature. Declaration order cannot choose a type or value interpretation.
-- Left: a generic function or operator before a comparison's `<`
+- Left: check the generic arguments of an `instantiate` request (#1018).
 
 ## GEN-15
 
