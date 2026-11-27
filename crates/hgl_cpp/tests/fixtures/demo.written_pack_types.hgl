@@ -281,3 +281,18 @@ test a_nonmatching_member_rejects_the_universal_requirement {
 # A known false requirement still rejects in the presence of an existential.
 # expect-error(constraint, "requires.unmet")
 const fn known_false<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires Ps[item_key] == str && any key in arg_keys(Ps) { Ps[key] == i64 } => exact<Ps[item_key]>(item)
+
+# GEN-3, GEN-10 and GEN-17: the concrete named and positional keys
+# specialize nominal value arguments when the call checks its requirement.
+struct NamedField<const Key: str> { value: i64 }
+struct IndexedField<const Index: i64> { value: i64 }
+const fn named_field(item: NamedField<item_key>) -> i64 => item.value
+const fn check_named<...Ps>(f: const fn(...{Ps}) -> i64) -> bool
+    requires each k in arg_keys(Ps) { Ps[k] == NamedField<k> } => true
+const fn check_positions<...Ps>(fields: ...Ps) -> bool
+    requires each k in arg_keys(Ps) { Ps[k] in {IndexedField<k>} } => true
+
+test concrete_keys_supply_nominal_arguments_at_the_call {
+    assert check_named(named_field)
+    assert check_positions(IndexedField<0>(value: 4), IndexedField<1>(value: 8))
+}

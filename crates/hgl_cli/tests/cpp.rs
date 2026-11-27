@@ -3502,7 +3502,7 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 8 passed, 0 failed, 0 not run\n"
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
@@ -4431,7 +4431,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 27 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 30 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

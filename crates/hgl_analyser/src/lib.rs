@@ -620,6 +620,9 @@ pub mod codes {
         /// A compile-time function used as a runtime value (FN-17).
         pub const FUNCTION_VALUE: &str = "function.value";
 
+        /// A function type writes a positional pack (FN-17, GEN-17).
+        pub const PACK_FUNCTION_TYPE: &str = "pack.function_type";
+
         /// A configuration parameter has a mode FN-18 forbids.
         pub const PARAMETER_CONFIGURATION: &str = "parameter.configuration";
 
@@ -630,10 +633,11 @@ pub mod codes {
         pub const PROPERTY_DOMAIN: &str = "property.domain";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 7] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
+            PACK_FUNCTION_TYPE,
             PARAMETER_CONFIGURATION,
             IMPL_CONFIGURATION,
             PROPERTY_DOMAIN,

@@ -6008,7 +6008,16 @@ fn each_holds(
                     value,
                 }),
             });
-            let checked = holds_with_packs(&body, of, Some(scope), &nested);
+            // GEN-17: written operands such as Field<key> take this
+            // pass's key before falling back to an enclosing type binding.
+            let written = |operand: &SyntaxNode| {
+                (scope.written)(operand, &nested).or_else(|| (of.written)(operand))
+            };
+            let here = Condition {
+                written: &written,
+                ..*of
+            };
+            let checked = holds_with_packs(&body, &here, Some(scope), &nested);
             nested.pop();
             match checked {
                 Some(value) if value == existential => return Some(value),
