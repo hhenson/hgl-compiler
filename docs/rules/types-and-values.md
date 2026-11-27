@@ -176,8 +176,14 @@ analyser: partial
 - `list<T>` and `list<T, unbounded>` share one type, instance identity and API documentation type name. Fixed sizes are nonnegative counts and participate in list identity. Tuples have positional identity.
 - A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
 - A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
-- Ordinary and generic value functions accept a fixed-size list at an unsized `list<T>` parameter when the element type agrees.
-- Left: A fixed-size connection is rejected at an unsized input (#591). A live
+- Ordinary and generic value functions, and an operator's value candidates,
+  accept a fixed-size list at an unsized `list<T>` parameter when the element
+  type agrees. A candidate does in a lifted call too, as Core's `join` of a
+  `map` result.
+- Left: A fixed-size connection is rejected at an unsized input of a node, a
+  graph or a lifted value function (#1045, #1047). An unsized pattern does not
+  reach an element's type (`list<list<i64>>` given `list<list<i64, 2>, 3>`)
+  (#1046). A live
   local list extent can pass source checking (#929). A local extent such as
   `list<i64, N - 3>` can stay unresolved even in a concrete instance (#963).
 
@@ -185,6 +191,8 @@ transpiler: partial
 
 - Writes growing lists (`list<T>` and `list<T, unbounded>`) and positive fixed-size
   lists in value code and as connections. A zero-size list works in value code.
+- A fixed-size list given to an unsized parameter is copied into a growing
+  list (`emit::calls`), in a lifted call with a default too (`emit::lifting`).
 - Left: Zero-size list connections are declined (#829), as are unresolved local
   sizes (#963). Temporal element forms follow TYPE-9.
 

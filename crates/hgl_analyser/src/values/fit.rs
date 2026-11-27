@@ -20,7 +20,7 @@ use crate::hir::{
 };
 use crate::program::{DeclarationKind, Program};
 use crate::syntax::has_token;
-use crate::types::{Argument, Detail, GenericKind, Scalar, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
 /// The complete fallible form of a child checked at runtime (ERR-14).
@@ -45,6 +45,26 @@ pub(super) fn checked_child_result(value: &Expr) -> Option<Expr> {
         at: value.at,
         category: value.category,
     })
+}
+
+/// TYPE-10: an unsized `list<T>` value parameter accepts a fixed-size
+/// `list<T, N>` when their element types agree. This does not reach
+/// inside an element type (for example `list<list<i64>>` given
+/// `list<list<i64, 2>, 3>`).
+pub(super) fn fixed_list_for_unsized(expected: &Type, actual: &Type) -> bool {
+    matches!(
+        (expected, actual.omission_removed()),
+        (
+            Type::List {
+                element,
+                size: None,
+            },
+            Type::List {
+                element: actual,
+                size: Some(size),
+            },
+        ) if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
+    )
 }
 
 /// TYPE-10: when an operand or a component fits a public input pattern, keep

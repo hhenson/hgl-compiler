@@ -33,7 +33,7 @@ use hgl_analyser::hir::{
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Phase as BodyPhase, Role as Phase, Type};
 use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::NativePack;
-use hgl_lower::types::read_whole_all_valid;
+use hgl_lower::types::{fixed_list_size, read_whole_all_valid};
 
 use super::Emitter;
 use super::anonymous::{anonymous_arguments, anonymous_signature};
@@ -410,13 +410,38 @@ impl Emitter<'_> {
                             // parameter written `T?` binds a `T?`, the value
                             // read or its fallback.
                             let input = self.temporal_read(&ty, &view, at);
-                            let value = if local_read {
+                            let mut value = if local_read {
                                 read = argument.value.ty.clone();
                                 local_read = false;
                                 self.apply_reader_chain(&argument.value, &input)
                             } else {
                                 input
                             };
+                            // TYPE-10: a fixed-size connection given to a
+                            // lifted unsized `list<T>` parameter with a
+                            // fallback converts to `list<T>` so both arms
+                            // of the conditional share the parameter's type.
+                            if let (
+                                Type::List { size: None, .. },
+                                Type::List {
+                                    element,
+                                    size: Some(size),
+                                },
+                            ) = (parameter.ty.omission_removed(), &read)
+                                && fixed_list_size(Some(size)).is_some()
+                            {
+                                let list_type = Type::List {
+                                    element: element.clone(),
+                                    size: None,
+                                };
+                                let Some(list_cpp) = self.named_type(&list_type) else {
+                                    return self.missing(at, &format!("the type `{list_type}`"));
+                                };
+                                value = format!(
+                                    "[](const auto& entries) {{ return {list_cpp}(entries.begin(), entries.end()); }}({value})"
+                                );
+                                read = list_type;
+                            }
                             let nullable =
                                 matches!(parameter.ty.omission_removed(), Type::Nullable(_));
                             if nullable && !matches!(read, Type::Nullable(_)) {
