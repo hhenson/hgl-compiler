@@ -13,7 +13,7 @@ analyser: partial
 - A generic parameter of a value function that a call's place, or what the call writes, binds to a type that holds a window is `type.not_ordinary`; one given a window binds to the `list<V>` it holds (GEN-1, TYPE-11)
 - In a hook, a source and a value function a `const` parameter is given a constant expression (`argument.constant`); in a graph, no connection (`connection.as_constant`)
 - A constant, generic value parameter, or enclosing `const` parameter can be read by field or at a constant index in a constant expression. An admitted read can serve as the base of the next read.
-- Left: a `const` parameter that only an operator marks; roles of `const fn` and a temporal `fn` in bodies
+- A candidate must keep its operator's `const` parameter mark (`impl.parameter`). Calls in bodies follow FN-3 and FN-4.
 
 ## FN-2
 
@@ -31,7 +31,7 @@ analyser: partial
 - A node's hook is read as value code: a temporal parameter that is not `ref` is a value of its declared type, a `ref` one an endpoint (FN-16), and a temporal function called there is rejected (`call.role`)
 - A graph's body calls any function: a temporal parameter and the result of a temporal or lifted call are connections, and a connection given to a `const` parameter is rejected (`connection.as_constant`)
 - What each expression is, a connection or an ordinary value, is recorded on it for the stages after the analyser, and on an instance's body with its candidates in place: a symbol, `&&`, `||` and `!` among them, and a construction, a result form, an element or a field of a connection is one
-- Left: what a composition body admits of a connection; what it calls; iteration and conditionals in composition
+- Left: A graph accepts a connection as the size of a local fixed list (#929, TYPE-10). Graph iteration over changing membership remains under CTRL-7 and CTRL-15 (#373).
 
 transpiler: partial
 
@@ -41,8 +41,7 @@ transpiler: partial
 - A supported set or dictionary publishes once at graph start where a connection is
   expected. This includes empty collections, nested values, and values bound to a `let`
   or returned from a graph.
-- Left: A read of a connection outside an admitted phase, an ordinary call of a temporal
-  function and unsupported connection expressions are reported.
+- Left: C++ declines an ordinary growing list wired as a constant connection (#818), and direct property reads on a connection carrying an error (#895).
 
 ## FN-4
 
@@ -55,7 +54,7 @@ analyser: partial
 - The selected definition checks the call's signature
 - Nested anonymous callbacks given to pairs reuse phase checks across unread lexical locals, branches, and monotonic temporal probes, and skip redundant inner committed reads while probing a role so each callback is read a bounded number of times at arbitrary nesting depth. A referenced local whose category or type affects selection still keeps its actual phase and type. In a generic pair, an unresolved callback input leaves independent result and parameter-annotation evidence in declared argument order (GEN-2, FN-17).
 - A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
-- Left: named-pair selection where an operand's category settles only after instance selection or after it receives a contextual type
+- Left: When a graph calls a scalar callback parameter beside a contextual anonymous callback, the unused temporal definition can cause a requirement failure in the value call (#666).
 
 ## FN-5
 
@@ -73,16 +72,14 @@ analyser: partial
 
 - In a graph a value function or a value candidate called with a connection among its arguments gives a connection, and one called with ordinary values alone an ordinary value
 - Each call records whether it is lifted: in a graph's body, of a value function or a value candidate that marks no parameter `var` (FN-15), given a connection; its arguments that are connections are the node's inputs, and the rest its configuration
-- Left: an outputless helper as a sink
+- An outputless value helper used in composition with a connection is a sink.
 
 transpiler: partial
 
 - Wires a helper's temporal inputs and binds ordinary arguments and omitted defaults as
   configuration. Includes the value-function eval path.
-- Left: Reports an unavailable lifted or packed target, a fallible default of an omitted
-  nullable parameter, and defaults that run statements or propagate a failure. Constant
-  inputs require a supported temporal schema, excluding sets and dictionaries.
-  Contextual connection reads have no ordinary value-code path.
+- Ordinary positional packs, statement defaults and constant set or dictionary inputs work on supported schemas.
+- Left: C++ declines a lifted call that omits a nullable parameter when the default calls a value function returning a result or a nullable value (#1003).
 
 ## FN-7
 
@@ -99,9 +96,7 @@ transpiler: partial
 
 - Graph returns choose a connection, hook returns publish and exit the evaluation, and
   ordinary functions return values.
-- Left: Restrictions on returns in temporal branches and value expressions are under
-  CTRL-13, CTRL-14 and CTRL-10. A valued return in a source, a valued return where the
-  graph or hook cannot return one, and a return in a test have defensive reports.
+- Left: C++ declines an early return inside an ordinary call argument (#985) and some temporal branch continuations and nonlocal loops (#986). The analyser also rejects a valued source return under the proposed SOURCE-4.
 
 ## FN-8
 
@@ -130,7 +125,7 @@ analyser: partial
 - An application injects `global_state`, for the statements before its run statement (UNIT-14), and `run_config` (RUN-6), and no other
 - A graph injects it alone too, and a call on it there is given no connection (`connection.as_constant`). An instance checks arguments whose categories were unsettled at the declaration (GEN-7).
 - `scheduled()` in a value function or a graph, which has no schedule of its own (TIME-9), is `scheduled.outside_node`; so is one in an anonymous function written there, and `scheduled<T>()`
-- Left: an anonymous function written in a graph; a capability used outside a hook or a source's body
+- Left: A graph-supplied anonymous callback taking its phase from a `const fn` parameter can inject a capability. FN-9 forbids injection in this value body (#1004, FN-17).
 
 transpiler: partial
 
@@ -140,8 +135,7 @@ transpiler: partial
   its directly wired scalar node starts, including on re-entry. Captured
   connections and write-only branches also admit the prefix.
   Captured aliases in these prefixes share the run store.
-- Left: Store reads that determine child wiring, startup with multiple
-  user nodes, and loops (#541). Other child capabilities are declined.
+- Left: A selected child's store reads that determine wiring, startup with multiple user nodes, and store operations in graph loops are declined (#541). Store timing for a member of a mapping operator remains proposed under FN-9.
 
 ## FN-10
 
@@ -151,28 +145,28 @@ parser: done
 
 ## FN-11
 
-analyser: planned
+analyser: partial
 
-- Left: which lifted arguments need a valid input. The analyser records a nullable connection read as T at the reader (ERR-12).
+- The analyser records a nullable connection read as T at the reader (ERR-12). Lifted input admission is applied at execution.
 
 transpiler: partial
 
 - Uses default or null when a lifted input is invalid and gates required inputs. Wires
   an omitted optional input with no publication.
-- Left: Unsupported constant schemas and fallible defaults follow FN-6 and UNIT-8.
+- Left: A growing list used for constant wiring (#818) and an omitted nullable parameter with a fallible default (#1003) remain unsupported.
 
 ## FN-12
 
 analyser: partial
 
 - A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1); a `list<V>?` takes it too, "whatever its default or null contract" (FN-11)
-- Left: which aggregates need `all_valid` (FN-11)
+- Left: A lifted helper taking an ordinary struct rejects its atomic input (#962). A list parameter of an operator candidate can reject a rolling-window input that an ordinary value function accepts (#997).
 
 transpiler: partial
 
 - Lifts whole list, dictionary, struct, tuple and window reads using the input's
   eligibility for a whole read.
-- Left: Nested aggregate shapes follow TYPE-9. Fallible default expressions follow FN-6.
+- A partially valid tuple waits for the missing position even with a declared default. Nested fixed lists can be supplied whole. The omitted nullable default case is tracked under FN-6 (#1003).
 
 ## FN-13
 
@@ -211,9 +205,7 @@ transpiler: partial
 
 - Passes `var` places by mutable reference and holds ordinary arguments independently of
   changes a call makes. Holds indexes before resolving a place at the call.
-- Left: Calls that assign in an expression, alias two `var` arguments to one place, or
-  take an unsupported place are reported. This includes a `list<bool>` bit, a dictionary
-  entry and an abstract field.
+- Left: C++ declines a call that assigns a place inside an expression (#774), a dictionary-entry argument or an abstract mutable field (#943), and calls that give one place to two `var` parameters or give a boolean list element to one (#1005).
 
 ## FN-16
 
@@ -238,20 +230,18 @@ transpiler: partial
   designate a whole ordinary input, a fixed-list position, a dictionary entry, or a struct
   field path of an ordinary input. Nodes with a scheduler or an alarm can make these
   designations.
-- Left: Reports designations of other children (including children of a `ref` parameter,
-  tuple positions, and growing list positions), simultaneous whole and positional
-  designation of one input, and unsupported assignments to a `ref` result.
-  Graph and source `ref` forms have defensive reports.
+- Left: C++ declines a child of a `ref` input, a tuple position, and a growing-list position as a `ref` result (#1006). An assignment to the whole `out` can designate a supported path. An assignment to a part of `out` rejects during analysis.
 
 ## FN-17
 
 parser: done
 
-- Function types in parameter positions take fixed inputs and packs, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
+- Function types in parameter positions parse fixed inputs and the pack syntax, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
 
 analyser: partial
 
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
+- A function type may reflect a named pack `...{Ps}` (GEN-17). A positional pack `...T` in a function type reports local `pack.function_type` at the ellipsis. Callable declarations may still declare positional packs (FN-8).
 - When a graph instance completes a call's parameter types, an anonymous callback takes the completed template in its lexical scope. Its synthesized capture inputs are separate from the written arguments (GEN-2).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - A named operator call reads a fixed callback against each candidate's function template, including when only the candidate declares the option. The other arguments can resolve its input types, its template sets an anonymous callback's phase, and the supplied function can resolve its result type (GEN-2, GEN-6).
@@ -327,4 +317,4 @@ transpiler: partial
 - Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
 - Stores each computed entry once where its `let` runs. Bindings of an existing pack reuse the same entries. SDK cases cover all four forwarding examples, constructor fields, reuse, and a fixed graph loop that carries a connection binding.
 
-Left: C++ declines a spread whose pass condition does not supply a known constant `bool`.
+Left: A computed spread can be declined when its pass condition depends on a constant computed by a value function (#240, CTRL-16). A condition that reads an ordinary runtime parameter rejects during analysis.

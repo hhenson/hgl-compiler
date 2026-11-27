@@ -1,0 +1,159 @@
+module demo.struct_iteration
+
+abstract struct Labelled<T> {
+    label: T
+}
+
+abstract struct Quoted {
+    bid: i64
+}
+
+struct Quote : Labelled<str>, Quoted {
+    ask: f64
+    open: bool
+}
+
+struct Empty {}
+
+struct Flags {
+    ready: bool
+    rank: i64
+}
+
+struct FieldTag<const Kind: Type> {
+    mark: i64
+}
+
+const fn describe(quote: Quote) -> str {
+    var text = ""
+    for name, value in quote {
+        text += name + ":"
+        if name == "label" {
+            text += value + ";"
+        } else if name == "bid" {
+            text += convert<str>(value + 1) + ";"
+        } else if name == "ask" {
+            text += convert<str>(value + 0.5) + ";"
+        } else {
+            if value { text += "yes;" } else { text += "no;" }
+        }
+    }
+    return text
+}
+
+const fn names(quote: Quote) -> str {
+    var text = ""
+    for name in quote { text += name + " " }
+    return text
+}
+
+const fn reflected_types(quote: Quote) -> str {
+    var text = convert<str>(type(quote.ask)) + " "
+    let flags = Flags(ready: true, rank: 1)
+    for name, value in quote {
+        text += name + "=" + convert<str>(type(value)) + ":"
+        for flag, item in flags {
+            text += convert<str>(type(item)) + ","
+        }
+        text += convert<str>(type(value)) + " "
+    }
+    return text + convert<str>(type(quote.label))
+}
+
+const fn describe_by_type(quote: Quote) -> str {
+    var text = ""
+    for name, value in quote {
+        if type(value) == type(1) {
+            let size: i64 = value
+            text += convert<str>(size + 2)
+        } else {
+            let field = value
+            if type(field) == type("") {
+                let venue: str = field
+                text += venue + "!"
+            }
+        }
+    }
+    return text
+}
+
+const fn constant_labels(quote: Quote) -> i64 {
+    var matches = 0
+    for name in quote {
+        switch "bid" {
+            case name:
+                matches += 1
+            default:
+                matches += 0
+        }
+    }
+    return matches
+}
+
+const fn once() -> i64 {
+    var calls = 0
+    for name, value in ({
+        calls += 1
+        Quote(label: "first", bid: 7, ask: 2.5, open: true)
+    }) { }
+    return calls
+}
+
+const fn from_snapshot() -> i64 {
+    var quote = Quote(label: "first", bid: 7, ask: 2.5, open: true)
+    var bid = 0
+    for name, value in quote {
+        quote.bid = 99
+        if name == "bid" { bid = value }
+    }
+    return bid
+}
+
+const fn empty(structure: Empty) -> i64 {
+    var count = 0
+    for name in structure { count += 1 }
+    return count
+}
+
+fn hook_names(quote: Quote) -> str {
+    when all_valid(quote) {
+        var text = ""
+        for name, value in quote {
+            if name == "label" { text += value }
+            if name == "bid" { text += convert<str>(value) }
+        }
+        return text
+    }
+}
+
+test field_types_and_order {
+    let quote = Quote(label: "first", bid: 7, ask: 2.5, open: true)
+    assert describe(quote) == "label:first;bid:8;ask:3.0;open:yes;"
+    assert names(quote) == "label bid ask open "
+    assert constant_labels(quote) == 1
+    assert reflected_types(quote) ==
+        "f64 label=str:bool,i64,str bid=i64:bool,i64,i64 ask=f64:bool,i64,f64 open=bool:bool,i64,bool str"
+    assert describe_by_type(quote) == "first!9"
+    for name, value in quote {
+        let marked: FieldTag<type(value)> = FieldTag<type(value)>(mark: 0)
+        if name == "bid" {
+            assert type(marked) == type(FieldTag<type(1)>(mark: 0))
+        }
+        if name == "open" {
+            assert type(marked) == type(FieldTag<type(true)>(mark: 0))
+        }
+    }
+}
+
+test whole_struct_is_held_once {
+    assert once() == 1
+    assert from_snapshot() == 7
+    assert empty(Empty()) == 0
+}
+
+test guarded_hook_reads_ordinary_fields {
+    assert eval hook_names([
+        Quote(label: "top", bid: 1, ask: 2.5, open: true),
+        Quote(label: "next", bid: 2, ask: 3.5, open: false),
+    ]) == ["top1", "next2"]
+}

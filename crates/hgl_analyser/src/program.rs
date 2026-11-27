@@ -44,6 +44,13 @@ pub struct Program {
     /// The `const` slots of a cycle whose store key can differ between its
     /// calls (TIME-8).
     pub(crate) changing_store_slots: crate::const_inputs::ChangingSlots,
+    /// Store-key demands proved for one concrete type/pack call route.
+    pub(crate) selected_store_routes: crate::const_inputs::StoreRoutes,
+    /// The fixed store inputs of the callable instance currently checked.
+    pub(crate) store_input_contexts:
+        std::cell::RefCell<Vec<crate::const_inputs::StoreInputContext>>,
+    /// Lexical parameter provenance shared by source and target store checks.
+    pub(crate) store_input_bindings: std::sync::OnceLock<HashMap<(FileId, u32), Location>>,
     /// Bodies that read a generic value to fix a run-store key.
     pub(crate) generic_store_bodies: HashSet<(usize, usize)>,
     /// Lexical lookup ranges reused across concrete checks of one body.
@@ -184,6 +191,13 @@ impl Program {
     }
 }
 
+/// GEN-14 readings of a default's bare argument in a temporal/value pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairedDefaultName {
+    pub value_error: hgl_diagnostics::Diagnostic,
+    pub type_errors: Vec<hgl_diagnostics::Diagnostic>,
+}
+
 /// One module: the files that name it, assembled (UNIT-1).
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -219,6 +233,11 @@ pub struct Module {
     /// GEN-14 lookup reports for a contextual Type argument. The type reader
     /// emits them only when the corresponding slot chooses a value.
     pub(crate) contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
+    /// UNIT-7: ordinary type lookup reports when a default’s bare generic argument is a type.
+    pub(crate) default_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
+    /// Type-reading diagnostics for bare names excluded as values by UNIT-7.
+    /// Calls to a pair select one reading once its FN-4/FN-17 role is known.
+    pub(crate) paired_default_names: HashMap<Location, PairedDefaultName>,
     /// Local bindings that hide a callable, mapped to the callable's declaration (UNIT-12).
     pub(crate) hidden_callables: HashMap<Location, Location>,
     /// What each `name<...>(...)` the parser left undecided was decided

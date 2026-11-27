@@ -187,9 +187,6 @@ fn stages_writes(selected: &[(&Handler<'_>, Location)], out: usize) -> bool {
     let mut writes = Writes::NONE;
     for (handler, _) in selected {
         let mut check = |node| match node {
-            Node::Statement(Stmt::Assign { local, value, .. }) if *local == out => {
-                eligible &= matches!(value.ty, Type::Delta(_));
-            }
             Node::Expression(Expr {
                 kind:
                     ExprKind::Endpoint {

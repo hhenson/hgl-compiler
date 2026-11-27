@@ -87,6 +87,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
             reader.enter(module.files[*file].file);
             reader.scan(node);
         }
+        let paired_default_names = std::mem::take(&mut reader.paired_default_names);
         let calls = std::mem::take(&mut reader.calls);
         let dependent_packs = std::mem::take(&mut reader.dependent_packs);
         let delta_inputs = std::mem::take(&mut reader.delta_inputs);
@@ -106,6 +107,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.written = written;
         module.delta_inputs = delta_inputs;
         module.call_arguments = calls;
+        module.paired_default_names = paired_default_names;
     }
 }
 
@@ -255,6 +257,7 @@ struct Reader<'a> {
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
+    paired_default_names: HashMap<Location, crate::program::PairedDefaultName>,
     /// What each name of the program resolved to, by the file and
     /// offset of its use: a constant a type names may be declared in
     /// another module, and is read there (UNIT-13).
@@ -304,6 +307,7 @@ impl<'a> Reader<'a> {
             delta_inputs: Vec::new(),
             dependent_packs: HashMap::new(),
             calls: Vec::new(),
+            paired_default_names: HashMap::new(),
             everywhere: program
                 .modules
                 .iter()

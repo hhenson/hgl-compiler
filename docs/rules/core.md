@@ -557,10 +557,17 @@ analyser: partial
   different type than an earlier use is `store.key_type` (TIME-8).
 - Left: a helper outside the cycle that also formats its key is checked
   in source for each key an instance of the cycle gives it (#877).
-- Left: two forms the text fixes are judged as cycles, so their key fails
-  at the operation: one key handed round through two `const` parameters
-  of a function, and a cycle that only an operator candidate no instance
-  selects would close (#885).
+- A key forwarded to multiple aliased `const` parameters remains fixed.
+  Store-cycle classification follows the candidates each type instance
+  selects, with symbolic keys; an unselected candidate closes no cycle.
+- Fixed-key proofs belong to each call route. An unused entry with other
+  types or distinct aliases does not delay an independent fixed call.
+- Entry aliases include repeated reads of a named constant, a fixed field,
+  list or tuple position, or a primitive expression computed before the
+  cycle. Equal source-known strings share that entry symmetrically across
+  literals, direct aliases and primitive expressions. Distinct projections
+  stay distinct; computing a key again on a recursive edge still leaves its
+  check to the operation.
 
 transpiler: partial
 
@@ -659,7 +666,8 @@ transpiler: partial
 - Replays scalar publications, whole or delta collection entries, and window arrivals as
   their forms require.
 - Replays a supported nested dictionary.
-- Replays supported concrete struct applications with generic type arguments.
+- Replays supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-11.
 
 ## CEVAL-4
@@ -668,7 +676,8 @@ transpiler: partial
 
 - Records independent timestamp and delta pairs, including an empty recording. A cycle
   that only ages a window adds no entry.
-- Records supported concrete struct applications with generic type arguments.
+- Records supported concrete struct applications with generic type and value arguments
+  (`i64`, `bool`, finite `f64`, enum, and `Type`).
   Remaining schema limits are under TYPE-9 and TYPE-16.
 
 ## CEVAL-5
@@ -774,8 +783,11 @@ analyser: partial
 - A `"run.output"` key the text fixes is rejected (`store.reserved_key`),
   including where a call supplies a fixed `const` argument or generic
   value (CAP-6).
-- Left: a helper outside a cycle that also formats its key (CAP-6, #877);
-  two forms judged as cycles fail at the operation (CAP-6, #885).
+- Fixed aliased parameters and acyclic selected-candidate routes reject
+  in source, or at the build when a computation supplies the key (CAP-6).
+- Forwarding follows concrete instances: revisiting one declaration with
+  different types on a finite route still checks the computed key at build.
+- Left: a helper outside a cycle that also formats its key (CAP-6, #877).
 
 transpiler: partial
 

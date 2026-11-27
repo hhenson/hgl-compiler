@@ -678,10 +678,13 @@ impl<'a> Typer<'a> {
         if !given
             .arguments
             .iter()
-            .zip(&signature.generics)
-            .any(|((_, argument), generic)| {
-                *argument == Argument::Type(Type::TypeValue)
-                    && !matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+            .enumerate()
+            .any(|(index, (at, argument))| {
+                self.module.paired_default_names.contains_key(at)
+                    || *argument == Argument::Type(Type::TypeValue)
+                        && signature.generics.get(index).is_some_and(|generic| {
+                            !matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+                        })
             })
         {
             return None;
@@ -694,6 +697,38 @@ impl<'a> Typer<'a> {
             .collect();
         let mut given = given.clone();
         for (index, (at, argument)) in given.arguments.iter_mut().enumerate() {
+            if let Some(readings) = self.module.paired_default_names.get(at) {
+                let kind = signature.generics.get(index).or_else(|| {
+                    signature
+                        .generics
+                        .last()
+                        .filter(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+                });
+                let Some(generic) = kind else { continue };
+                if let Some(visits) = &mut self.default_name_visits {
+                    visits.push(*at);
+                }
+                let value_slot = matches!(generic.kind, GenericKind::Value(_))
+                    || generic.kind == GenericKind::Plain
+                        && matches!(argument, Argument::Type(Type::Unknown | Type::TypeValue));
+                let reports = if value_slot {
+                    std::slice::from_ref(&readings.value_error)
+                } else {
+                    &readings.type_errors
+                };
+                for report in reports {
+                    if !self.diagnostics.as_slice().contains(report) {
+                        self.diagnostics.emit(report.clone());
+                    }
+                }
+                if value_slot {
+                    *argument = Argument::Constant(Constant {
+                        text: generic.name.clone(),
+                        value: ConstantValue::Unknown,
+                    });
+                }
+                continue;
+            }
             if *argument != Argument::Type(Type::TypeValue) {
                 continue;
             }

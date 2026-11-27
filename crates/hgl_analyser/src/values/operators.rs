@@ -5,9 +5,10 @@
 
 use std::collections::HashSet;
 
-use hgl_diagnostics::{Category, Diagnostic, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::arguments::Takes;
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{
@@ -18,7 +19,7 @@ use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
 use super::expressions::written_null;
-use super::fit::{is_integer_literal, negated, open, whole};
+use super::fit::{fitted_input_pattern, is_integer_literal, negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, defaulted_argument, infer, infer_from_place, mentions,
@@ -439,8 +440,7 @@ impl<'a> Typer<'a> {
         // "`convert<f64>(count)` supplies T". With them in place the
         // operator's result is the output requested, when nothing of it
         // is left to resolve: `convert<f64>(count)` asks for an `f64`.
-        // What they say of the operands is for the pass that resolves
-        // generic candidates.
+        // They can also fix types of the operator's public parameters.
         let Some(ExplicitGenerics {
             fixed: written,
             faulty,
@@ -608,6 +608,9 @@ impl<'a> Typer<'a> {
             return (kind, Type::Unknown);
         }
         if faulty || unknown {
+            return (self.unselected(given, Form::Named), Type::Unknown);
+        }
+        if !self.written_operator_inputs_fit(public, &explicit, &given) {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let dictionary_fallback =
@@ -1844,6 +1847,109 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// GEN-8 and EXPR-5: a written generic argument fixes the public
+    /// parameter types it determines. Fit those arguments before trying
+    /// candidates, without changing the readings used to choose one.
+    fn written_operator_inputs_fit(
+        &mut self,
+        public: &Signature,
+        explicit: &[Option<Argument>],
+        given: &[Given],
+    ) -> bool {
+        let written: Vec<_> = public
+            .generics
+            .iter()
+            .zip(explicit)
+            .filter_map(|(parameter, argument)| {
+                matches!(argument, Some(Argument::Type(_) | Argument::Constant(_)))
+                    .then_some(parameter.at)
+            })
+            .collect();
+        if written.is_empty() {
+            return true;
+        }
+        let inputs: Vec<_> = given
+            .iter()
+            .filter_map(|argument| {
+                let index = argument.key.public_parameter(public)?;
+                let parameter = &public.parameters[index];
+                (parameter.pack.is_none()
+                    && argument.dependent_callback.is_none()
+                    && mentions(&parameter.ty, &written))
+                .then_some((argument, parameter))
+            })
+            .collect();
+        if inputs.is_empty() {
+            return true;
+        }
+
+        let mut found = explicit.to_vec();
+        self.infer_operator_inputs(public, &mut found, &public_inputs(public, given));
+        let own: Vec<_> = public
+            .generics
+            .iter()
+            .map(|parameter| parameter.at)
+            .collect();
+        let bindings: Vec<_> = own
+            .iter()
+            .copied()
+            .zip(&found)
+            .filter_map(|(at, value)| value.as_ref().map(|value| (at, value)))
+            .collect();
+        let mut rejected = Vec::new();
+        for (argument, parameter) in inputs {
+            let ty = placed(substitute_within(&parameter.ty, &bindings), &own);
+            if !whole(&ty) || open(&ty) {
+                continue;
+            }
+            if whole(argument.ty()) && agree(&ty, argument.ty()) {
+                continue;
+            }
+            if argument.retried && !self.may_reread() {
+                continue;
+            }
+            let mark = self.mark();
+            if argument.by_function {
+                if let Type::Function(template) = &ty {
+                    self.operator_function_argument(
+                        &argument.node,
+                        template,
+                        &CallbackInputs::default(),
+                    );
+                }
+            } else {
+                let value = if argument.retried {
+                    self.expression_for_input_pattern(&argument.node, &ty)
+                } else {
+                    argument.value.clone()
+                };
+                // TYPE-11: a lifted value candidate can read a window
+                // as a list. The candidate still decides whether it can
+                // take that connection (FN-12).
+                if !self.lifted_window(&ty, true, &value, Takes::Parameters) {
+                    let ty = fitted_input_pattern(&value, &ty).unwrap_or(ty);
+                    let place = format!("the parameter `{}`", parameter.name);
+                    self.fit_input(value, &ty, &place);
+                }
+            }
+            rejected.extend(
+                self.diagnostics.as_slice()[mark.diagnostics..]
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.severity == Severity::Error
+                            && diagnostic.code.as_str() != codes::local::READING_LIMIT
+                    })
+                    .cloned(),
+            );
+            self.take_back(mark, false);
+        }
+        let fits = rejected.is_empty();
+        for diagnostic in rejected {
+            self.diagnostics.emit(diagnostic);
+        }
+        fits
+    }
+
     /// The arguments of an operator's call as they are written, each
     /// with its position or its name. What is wrong with the call
     /// whichever candidate takes it is reported here (EXPR-2): an
@@ -2279,13 +2385,17 @@ impl Typer<'_> {
             _ if matches!(store.value.kind, ExprKind::Pairs(_)) => None,
             // GEN-7: the operations of every stated member are callable here.
             Type::Parameter { at, .. }
-                if self.memberships().iter().any(|(position, members)| {
-                    position == at
-                        && !members.is_empty()
-                        && members
-                            .iter()
-                            .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
-                }) =>
+                if self
+                    .finite_domains()
+                    .memberships()
+                    .iter()
+                    .any(|(position, members)| {
+                        position == at
+                            && !members.is_empty()
+                            && members
+                                .iter()
+                                .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
+                    }) =>
             {
                 None
             }

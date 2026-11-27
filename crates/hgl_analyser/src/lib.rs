@@ -194,6 +194,8 @@ pub mod codes {
     pub const PROPERTY_DUPLICATE: &str = "property.duplicate";
     /// A candidate declares a fixed parameter in its operator's pack slot (GEN-6).
     pub const IMPL_PACK: &str = "impl.pack";
+    /// A candidate disagrees with a parameter in its operator's declaration (GEN-6).
+    pub const IMPL_PARAMETER: &str = "impl.parameter";
     /// A candidate's result disagrees with its operator's result for its parameters (GEN-6).
     pub const IMPL_RESULT: &str = "impl.result";
     /// A candidate's parameter types fall outside its operator's stated type set (GEN-6).
@@ -563,6 +565,8 @@ pub mod codes {
     /// A sequence's entries give no type, and nothing is expected
     /// of it (EXPR-9).
     pub const SEQUENCE_CONTEXT: &str = "sequence.context_type";
+    /// Two entries of a written dictionary have the same constant key (EXPR-9).
+    pub const DICT_DUPLICATE_KEY: &str = "dict.duplicate_key";
     /// Two entries of a written set are the same constant (EXPR-9).
     pub const SET_DUPLICATE_MEMBER: &str = "set.duplicate_member";
     /// A call of an operator, by symbol or by name, that no candidate
@@ -616,6 +620,9 @@ pub mod codes {
         /// A compile-time function used as a runtime value (FN-17).
         pub const FUNCTION_VALUE: &str = "function.value";
 
+        /// A function type writes a positional pack (FN-17, GEN-17).
+        pub const PACK_FUNCTION_TYPE: &str = "pack.function_type";
+
         /// A configuration parameter has a mode FN-18 forbids.
         pub const PARAMETER_CONFIGURATION: &str = "parameter.configuration";
 
@@ -626,10 +633,11 @@ pub mod codes {
         pub const PROPERTY_DOMAIN: &str = "property.domain";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 7] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
+            PACK_FUNCTION_TYPE,
             PARAMETER_CONFIGURATION,
             IMPL_CONFIGURATION,
             PROPERTY_DOMAIN,

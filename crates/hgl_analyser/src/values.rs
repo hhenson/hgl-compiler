@@ -74,6 +74,7 @@ mod capabilities;
 // The read of a collection's child, and the endpoint a child is (TIME-1).
 mod children;
 // The values a body reads as compile-time constants (UNIT-8, UNIT-13, GEN-8).
+mod collection_constants;
 mod constants;
 // Blocks, `if`, `while`, `for` and `switch` (CTRL-5, CTRL-10 to CTRL-15).
 mod control;
@@ -356,6 +357,9 @@ pub(crate) fn check(
         let mut defaults = Vec::with_capacity(module.declarations.len());
         selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
+            if !module.paired_default_names.is_empty() {
+                constants::check_default_names(program, module, position, found, diagnostics);
+            }
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))
                     if signature
@@ -1033,10 +1037,14 @@ struct Typer<'a> {
     pack_inputs: Option<PackInputs<'a>>,
     /// UNIT-8 reads dependency edges from both arms of a parameter default.
     lexical_default_dependencies: bool,
+    /// UNIT-7 names visited in a committed reading during the lexical default audit.
+    default_name_visits: Option<Vec<Location>>,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
     pack_passes: Vec<(String, hir::PackKey)>,
+    /// CTRL-16 field names in the currently expanded struct loop passes.
+    field_passes: Vec<(Location, Argument)>,
     /// Packs bound by `let`. Only their individual entries reach lowering.
     bound_packs: HashMap<LocalId, forwarded_packs::BoundPack>,
     /// The generic value parameters of the declaration being read that
@@ -1226,8 +1234,10 @@ impl<'a> Typer<'a> {
             const_inputs: Vec::new(),
             pack_inputs: None,
             lexical_default_dependencies: false,
+            default_name_visits: None,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
+            field_passes: Vec::new(),
             bound_packs: HashMap::new(),
             bound: Vec::new(),
             diagnostics,
@@ -1392,6 +1402,7 @@ impl<'a> Typer<'a> {
             resolved_written: self
                 .resolved_written
                 .map_or(0, |target| target.borrow().len()),
+            default_name_visits: self.default_name_visits.as_ref().map_or(0, Vec::len),
             probe_saw_temporal: self.probe_saw_temporal,
         }
     }
@@ -1406,6 +1417,9 @@ impl<'a> Typer<'a> {
     /// first to learn something and then where it stands, must leave
     /// one reading's worth of each.
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
+        if let Some(visits) = &mut self.default_name_visits {
+            visits.truncate(mark.default_name_visits);
+        }
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
         self.unsettled_list_size = mark.unsettled_list_size;
@@ -1429,7 +1443,17 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
-        while self.type_query_locations.len() > mark.type_queries {
+        self.restore_type_queries(mark.type_queries);
+        if let Some(target) = self.resolved_written {
+            target.borrow_mut().truncate(mark.resolved_written);
+        }
+        self.restore_read(mark, keep_flow);
+        clean
+    }
+
+    /// Restore the TYPE-18 query entries that preceded a lexical reread.
+    fn restore_type_queries(&mut self, saved: usize) {
+        while self.type_query_locations.len() > saved {
             if let Some((at, previous)) = self.type_query_locations.pop() {
                 match previous {
                     Some(old) => {
@@ -1439,11 +1463,6 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        if let Some(target) = self.resolved_written {
-            target.borrow_mut().truncate(mark.resolved_written);
-        }
-        self.restore_read(mark, keep_flow);
-        clean
     }
 
     /// Restores the surrounding scope after an anonymous function's
@@ -1606,6 +1625,7 @@ struct Mark {
     selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.
     resolved_written: usize,
+    default_name_visits: usize,
     /// Whether the active role probe already observed a temporal pair call.
     probe_saw_temporal: bool,
 }

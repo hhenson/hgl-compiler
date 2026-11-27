@@ -139,14 +139,15 @@ transpiler: partial
   The first read of retained data after each write copies the samples in time
   and space proportional to their count. A later read reuses that copy until
   another write or withdrawal.
-- A multiply written set or dictionary result stages delta assignments and a
-  final return. Cancellation leaves an already valid result silent, including
-  when the change cancels inside a nested keyed entry. The staging records only
-  keys named by the writes. A scalar dictionary entry that is withdrawn and
+- A multiply written set or dictionary result stages whole and delta assignments
+  and a final return. Cancellation leaves an already valid result silent, including
+  when the change cancels inside a nested keyed entry. Deltas visit only the keys they name.
+  A whole assignment replaces earlier writes; later observations or deltas
+  compare its entries with the previously published collection. A scalar dictionary entry that is withdrawn and
   restored during the evaluation publishes its final value. Output validity,
   `all_valid`, modification, delta, and modification time are visible to the
   handlers as they write. Single-write nodes keep direct publication.
-- Left: A whole assignment to `out`, invalidation, other output observations or
+- Left: Invalidation, other output observations or
   tuple-valued dictionary entries keep their existing keyed publication path.
   Unsupported reads and writes of `out` and its children are reported.
   Other publication forms are under TYPE-9 and window observation limits are under END-9.

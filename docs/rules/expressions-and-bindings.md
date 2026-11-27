@@ -138,11 +138,9 @@ analyser: partial
 - An inferred list with unfinished entries keeps its element type open until graph specialization can join them and widen eligible literals (EXPR-5, GEN-7).
 - Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
 - A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
-- A written `set<str>` rejects a repeated constant string at the later member (`set.duplicate_member`, UNIT-13).
+- A dictionary key or set member already known to repeat when its source is checked reports at the later occurrence, with the first as a related location (`dict.duplicate_key`, `set.duplicate_member`, UNIT-13).
 - In a trace, timed pairs have explicit publications. `_` is admitted in a dense
   trace and rejected in a timed trace or ordinary sequence (EXPR-8, TST-7).
-- Left: Repeated constant dictionary keys and repeated constant non-string set
-  members can still pass source checking.
 
 transpiler: partial
 
@@ -235,6 +233,7 @@ parser: done
 analyser: done
 
 - Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent, which must agree with the destination after selection.
+- In an operator's public input pattern, a comprehension entry can keep a fixed list extent where the pattern omits it. The candidate still checks its own extent (TYPE-10, GEN-8).
 - A range in a forwarded body uses its enclosing instance's fitted bounds when the body is read again (GEN-7).
 - In composition, ordinary entries over a range make an ordinary list that a `const` parameter can take. A connection in a range's entries or the use of a fixed-list connection as the iterable makes a fixed list connection.
 
