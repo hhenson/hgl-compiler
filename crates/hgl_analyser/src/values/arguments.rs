@@ -11,15 +11,13 @@ use hgl_source::Span;
 use super::Typer;
 use super::evals::{holds_trace, publications};
 use super::expressions::ExpressionFit;
-use super::fit::whole;
+use super::fit::{fixed_list_for_unsized, whole};
 use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
-use crate::declared::{agree, is_optional};
+use crate::declared::is_optional;
 use crate::hir::{self, EndpointOperation, Expr, ExprKind, Value};
 use crate::program::DeclarationKind;
 use crate::syntax::{child, has_token, name_token, tokens};
-use crate::types::{
-    Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type,
-};
+use crate::types::{Argument, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type};
 use crate::{RESULT_FORMS, codes, error};
 
 impl<'a> Typer<'a> {
@@ -881,11 +879,7 @@ impl<'a> Typer<'a> {
         let fixed_list_value = takes == Takes::Parameters
             && slot.listed
             && !self.composes(&value)
-            && matches!(
-                (&slot.ty, value.ty.omission_removed()),
-                (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
-                    if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
-            );
+            && fixed_list_for_unsized(&slot.ty, &value.ty);
         if lifted || fixed_list_value || (!traced && holds_trace(&value.ty)) {
             value
         } else {

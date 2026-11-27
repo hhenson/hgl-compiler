@@ -24,7 +24,8 @@ use super::dependent_packs::{
 };
 use super::expressions::{takes_its_type, written_null};
 use super::fit::{
-    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
+    accepts_float, arithmetic, checked_child_result, fixed_list_for_unsized, is_integer_literal,
+    negated, not_null, whole,
 };
 use super::function_arguments::{CallbackInputs, matches_template, operator_callback_type};
 use super::inference::{
@@ -1087,7 +1088,10 @@ impl<'a> Typer<'a> {
         if argument.by_place || !whole(actual) || !whole(expected) {
             return None;
         }
-        if agree(actual, expected) {
+        // GEN-5, TYPE-10: a fixed-size list at an unsized `list<T>` is an
+        // exact match, not a widening; specificity then ranks `list<T, N>`
+        // over `list<T>` (GEN-12).
+        if agree(actual, expected) || fixed_list_for_unsized(expected, actual) {
             return Some(false);
         }
         (matches!(expected, Type::Scalar(Scalar::Any))
@@ -1296,6 +1300,10 @@ impl<'a> Typer<'a> {
                 Detail::Callable(public) => Some(public),
                 _ => None,
             });
+        let value_candidate = program.modules[module].declarations[declaration]
+            .kind
+            .role()
+            == Some(Role::Value);
         let mut fitted_inputs = vec![None; public.map_or(0, |public| public.parameters.len())];
         let mut braced = Vec::new();
         // GEN-7: when an instance has to select again, keep the input
@@ -1366,6 +1374,10 @@ impl<'a> Typer<'a> {
                     }
                 }
                 let value = if matches!(input.kind, ExprKind::StaticCallable(_)) {
+                    input
+                } else if value_candidate && fixed_list_for_unsized(ty, &input.ty) {
+                    // TYPE-10: the argument keeps its fixed-list type;
+                    // lowering takes its entries.
                     input
                 } else {
                     self.fit(input, ty, &place)
@@ -1539,6 +1551,7 @@ impl<'a> Typer<'a> {
             }
         }
         // Match each supplied argument, including every entry a pack captures.
+        let value_candidate = candidate.kind.role() == Some(Role::Value);
         for (given, &place) in given.iter().zip(bound) {
             let ty = match place {
                 Place::OperatorGeneric => continue,
@@ -1551,7 +1564,13 @@ impl<'a> Typer<'a> {
             let Some(ty) = ty else {
                 return Admits::Misfit;
             };
-            if !self.candidate_argument_admits(given, place, ty, (widening, converting)) {
+            if !self.candidate_argument_admits(
+                given,
+                place,
+                ty,
+                (widening, converting),
+                value_candidate,
+            ) {
                 return Admits::Misfit;
             }
         }
@@ -1790,13 +1809,15 @@ impl<'a> Typer<'a> {
     }
 
     /// Whether an argument fits its candidate slot at this precision
-    /// and with the operand's allowed read forms (GEN-5, FN-17, ERR-15).
+    /// and with the operand's allowed read forms (GEN-5, FN-17, ERR-15,
+    /// TYPE-10).
     fn candidate_argument_admits(
         &mut self,
         given: &Given,
         place: Place,
         ty: &Type,
         (widening, converting): (bool, bool),
+        value_candidate: bool,
     ) -> bool {
         match (ty, given.ty()) {
             (Type::Function(template), Type::Function(actual)) => {
@@ -1822,7 +1843,13 @@ impl<'a> Typer<'a> {
                     && self.fits_argument_place(given, ty, widening)
             }
             _ => {
+                // TYPE-10: an unsized `list<T>` parameter of a value candidate
+                // accepts a fixed-size list of the same element type. Generic
+                // value parameters (`Place::Generic`) keep exact size identity.
                 self.admits(ty, given.ty())
+                    || value_candidate
+                        && place.parameter().is_some()
+                        && fixed_list_for_unsized(ty, given.ty())
                     || converting
                         && place.parameter().is_some()
                         && given.explicit.is_none()
@@ -2037,11 +2064,18 @@ impl<'a> Typer<'a> {
             let mut errors = self.diagnostics.as_slice()[reported..].to_vec();
             if !self.take_back(mark, false) {
                 let partial = in_instance(signature, &map);
+                let value_candidate = candidate.kind.role() == Some(Role::Value);
                 if !self.candidate_result_admits(wanted.place, partial.result.as_ref())
                     || !checking.iter().zip(bound).all(|(other, &slot)| {
                         other.by_function
                             || parameter_type(&partial, &type_packs, slot).is_none_or(|ty| {
-                                self.candidate_argument_admits(other, slot, ty, (true, true))
+                                self.candidate_argument_admits(
+                                    other,
+                                    slot,
+                                    ty,
+                                    (true, true),
+                                    value_candidate,
+                                )
                             })
                     })
                 {
@@ -4480,9 +4514,32 @@ fn specificity(left: RankingType<'_>, right: RankingType<'_>) -> Specific {
         | (Type::Endpoint(left), Type::Endpoint(right))
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))
-        | (Type::List { element: left, .. }, Type::List { element: right, .. })
         | (Type::RollingWindow { value: left, .. }, Type::RollingWindow { value: right, .. }) => {
             compare(left, right, 0)
+        }
+        (
+            Type::List {
+                element: left,
+                size: left_size,
+            },
+            Type::List {
+                element: right,
+                size: right_size,
+            },
+        ) => {
+            // GEN-5, GEN-12, TYPE-10: a sized list pattern (`list<T, N>`) is
+            // more specific than an unsized one (`list<T>`), which also
+            // admits a fixed size.
+            let fixed = |size: &Option<Constant>| {
+                size.as_ref()
+                    .is_some_and(|size| !matches!(size.value, ConstantValue::Unbounded))
+            };
+            let size = match (fixed(left_size), fixed(right_size)) {
+                (true, false) => Specific::More,
+                (false, true) => Specific::Less,
+                _ => Specific::Same,
+            };
+            compare(left, right, 0).and(size)
         }
         (Type::Tuple(left_elements), Type::Tuple(right_elements))
             if left_elements.len() == right_elements.len() =>

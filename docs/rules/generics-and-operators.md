@@ -95,6 +95,10 @@ analyser: partial
 
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12). A fallible candidate can meet a T or `T?` place. The selected candidate determines the result before its form is taken (ERR-15).
+- A fixed-size list given to an unsized list candidate (`list<T>` or
+  `list<T, unbounded>`) is an exact match (TYPE-10). A sized one (`list<T, N>`)
+  that also admits it outranks it (GEN-12), with no tie in either declaration
+  order.
 - A fixed-length tuple pattern outranks a tuple pattern with a pack that admits it. The comparison also applies inside nested and nullable tuple types.
 - Exact parameter matches are compared before structural specificity (GEN-12). A candidate that widens fewer arguments in this comparison beats one that widens those same arguments and another. Opposite widenings leave the call ambiguous. Widenings include `T?`, `delta<V?>` (TYPE-16), an inherited parent struct, and `any`.
 - Keeping the value of an anonymous callback body with no written result counts as an exact match (FN-17). Proposed: the same comparison applies to a callback input shared with another argument, so the inferred input type beats its nullable widening. [Specification #257](https://github.com/hhenson/hgl_spec/pull/257)
@@ -236,7 +240,7 @@ analyser: partial
 
 analyser: partial
 
-- Among the candidates a named call admits in a value function, each of the operator's parameters is compared with the other candidate's part for part: a concrete type or a structure over a bare variable in the same place; a candidate as specific everywhere and more in one place outranks
+- Among the candidates a named call admits in a value function, each of the operator's parameters is compared with the other candidate's part for part: a concrete type or a structure over a bare variable in the same place, and a sized list pattern (`list<T, N>`) over an unsized one (`list<T>`) (TYPE-10); a candidate as specific everywhere and more in one place outranks
 - A candidate's generics are bound in declared parameter order
 - A named function call preserves declared parameter order when an earlier graph argument settles in an instance (GEN-7).
 - A callback result explicitly absent is more specific than one that can bind to none (GEN-1), except when GEN-5 prefers keeping the value of an anonymous callback's body. The inputs still take part in the comparison.

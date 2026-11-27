@@ -1,0 +1,155 @@
+module demo.fixed_list_candidates
+
+# TYPE-10: an operator's candidate over `list<T>` takes a fixed-size list.
+# GEN-5, GEN-12: where a candidate over `list<T, N>` also takes it, the
+# sized one is selected, in either declaration order.
+
+operator total<T>(xs: T) -> i64
+impl const fn total(xs: list<i64>) -> i64 {
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    return s
+}
+
+operator first<T>(xs: list<T>) -> T
+impl const fn first<T>(xs: list<T>) -> T => xs[0]
+
+operator nested(rows: list<list<i64, 2>>) -> i64
+impl const fn nested(rows: list<list<i64, 2>>) -> i64 => rows[2][1]
+
+operator apply_first<T, R>(f: const fn(T) -> R, xs: list<T>) -> R
+impl const fn apply_first<T, R>(f: const fn(T) -> R, xs: list<T>) -> R => f(xs[0])
+
+const fn twice(x: i64) -> i64 => x * 2
+
+operator sized_first<T>(xs: T) -> i64
+impl const fn sized_first(xs: list<i64, 3>) -> i64 => 3
+impl const fn sized_first(xs: list<i64>) -> i64 => 1
+
+operator unsized_first<T>(xs: T) -> i64
+impl const fn unsized_first(xs: list<i64>) -> i64 => 1
+impl const fn unsized_first(xs: list<i64, 3>) -> i64 => 3
+
+operator size_of<T>(xs: T) -> i64
+impl const fn size_of(xs: list<i64>) -> i64 => -1
+impl const fn size_of<N>(xs: list<i64, N>) -> i64 => N
+
+# GEN-7: each instance selects again.
+const fn forwarded<const N: i64>(xs: list<i64, N>) -> i64 => sized_first(xs)
+
+operator pick_gen<T>(xs: T) -> i64
+impl const fn pick_gen(xs: any) -> i64 => 1
+impl const fn pick_gen<T>(xs: list<T>) -> i64 => 2
+
+operator pick_conc<T>(xs: T) -> i64
+impl const fn pick_conc(xs: any) -> i64 => 1
+impl const fn pick_conc(xs: list<i64>) -> i64 => 2
+
+const fn fn_cfg{cfg: list<i64>}() -> i64 => cfg[0]
+
+operator op_ord(xs: list<i64>) -> i64
+impl const fn op_ord(xs: list<i64>) -> i64 => xs[0]
+
+operator op_cfg{cfg: list<i64>}() -> i64
+impl const fn op_cfg{cfg: list<i64>}() -> i64 => cfg[0]
+
+const fn text(x: i64) -> str => convert<str>(x)
+
+fn joined(items: list<i64, 3>) -> str => join(map(text, x: items))
+fn separated(items: list<i64, 3>) -> str => join{separator: ", "}(map(text, x: items))
+
+# FN-11: an invalid input binds the default; a fixed-size connection
+# otherwise takes the `list<i64>` parameter.
+operator with_default(xs: list<i64> = [0]) -> i64
+impl const fn with_default(xs: list<i64> = [0]) -> i64 => xs[0]
+
+fn defaulted(xs: list<i64, 3>) -> i64 => with_default(xs)
+
+operator summed(trigger: bool, xs: list<i64> = [9, 10]) -> i64
+impl const fn summed(trigger: bool, xs: list<i64> = [9, 10]) -> i64 => total(xs)
+
+fn summed_or_default(xs: list<i64, 2>, trigger: bool) -> i64 => summed(trigger, xs)
+
+test unsized_candidates_take_fixed_lists {
+    let fixed: list<i64, 3> = [1, 2, 3]
+    let growing: list<i64> = [4, 5]
+    let words: list<str, 2> = ["alpha", "beta"]
+    let rows: list<list<i64, 2>, 3> = [[1, 2], [3, 4], [5, 6]]
+    assert total(fixed) == 6
+    assert total(growing) == 9
+    assert first(words) == "alpha"
+    assert nested(rows) == 6
+    assert apply_first(twice, fixed) == 2
+    assert apply_first(fn(x) => x + 1, fixed) == 2
+}
+
+test sized_candidates_outrank_unsized_ones_in_either_order {
+    let three: list<i64, 3> = [1, 2, 3]
+    let two: list<i64, 2> = [1, 2]
+    let growing: list<i64> = [1, 2, 3]
+    assert sized_first(three) == 3
+    assert sized_first(two) == 1
+    assert sized_first(growing) == 1
+    assert unsized_first(three) == 3
+    assert unsized_first(two) == 1
+    assert unsized_first(growing) == 1
+    assert forwarded(three) == 3
+    assert forwarded(two) == 1
+}
+
+test a_generic_size_takes_a_fixed_list {
+    let fixed: list<i64, 4> = [1, 2, 3, 4]
+    let growing: list<i64> = [1]
+    assert size_of(fixed) == 4
+    assert size_of(growing) == -1
+}
+
+test a_list_candidate_outranks_any {
+    let fixed: list<i64, 3> = [1, 2, 3]
+    let growing: list<i64> = [1, 2, 3]
+    assert pick_gen(fixed) == 2
+    assert pick_conc(fixed) == 2
+    assert pick_gen(growing) == 2
+    assert pick_conc(growing) == 2
+}
+
+test braces_and_configuration_take_fixed_lists {
+    let fixed: list<i64, 2> = [7, 8]
+    assert fn_cfg{cfg: fixed}() == 7
+    assert op_ord(xs: fixed) == 7
+    assert op_ord{xs: fixed}() == 7
+    assert op_cfg{cfg: fixed}() == 7
+}
+
+test cores_join_takes_fixed_lists {
+    let fixed: list<str, 3> = ["a", "b", "c"]
+    let empty: list<str, 0> = []
+    let growing: list<str> = ["a", "b"]
+    assert join(fixed) == "a b c"
+    assert join{separator: ", "}(fixed) == "a, b, c"
+    assert join(empty) == ""
+    assert join(growing) == "a b"
+}
+
+test cores_join_takes_a_map_result {
+    assert eval joined(items: [[1, 2, 3]]) == ["1 2 3"]
+    assert eval separated(items: [
+        delta<list<i64, 3>>(updated: [0: 1]),
+        delta<list<i64, 3>>(updated: [1: 2, 2: 3]),
+        delta<list<i64, 3>>(updated: [0: 4]),
+    ]) == [_, "1, 2, 3", "4, 2, 3"]
+}
+
+test lifted_defaults_take_fixed_connections {
+    assert eval defaulted(xs: [[10, 20, 30]]) == [10]
+    assert eval summed_or_default(
+        xs: [
+            _,
+            delta<list<i64, 2>>(updated: [0: 3]),
+            delta<list<i64, 2>>(updated: [1: 4]),
+        ],
+        trigger: [true, true, true],
+    ) == [19, _, 7]
+}

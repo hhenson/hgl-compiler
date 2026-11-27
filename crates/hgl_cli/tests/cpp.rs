@@ -2990,6 +2990,35 @@ fn fixed_lists_supply_unsized_value_parameters_on_the_sdk() {
     );
 }
 
+/// TYPE-10, GEN-5, GEN-12: an operator's unsized candidate takes a fixed
+/// list, a sized one outranks it in either order, and Core's `join` runs
+/// on a fixed list and a `map` result.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_list_operator_candidates_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-list-candidates");
+    let file = write(
+        &root,
+        "demo.fixed_list_candidates.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_list_candidates.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: value, operator and callback calls forward a pack; graph
 /// calls forward the individual connections. Constructors, defaults and
 /// lexical captures retain the concrete shape (FN-8, FN-14, TYPE-5).
