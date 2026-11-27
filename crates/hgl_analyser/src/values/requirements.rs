@@ -848,7 +848,15 @@ impl<'a> Typer<'a> {
                     })
                     .collect::<Vec<_>>();
                 let held = self
-                    .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
+                    .requires_for_trial(
+                        callee,
+                        (&placed_generics, &placed_packs),
+                        None,
+                        &[],
+                        members
+                            .iter()
+                            .any(|(_, ty)| matches!(ty, Type::Parameter { .. })),
+                    )
                     .map(|(_, held, _)| held);
                 (held != Some(Some(true))).then_some(held)
             });
@@ -1714,6 +1722,25 @@ impl<'a> Typer<'a> {
         member_fault: Option<&std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
         laws: &[(u32, Option<bool>)],
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
+        self.requires_for_trial(
+            (module, declaration),
+            (generics, type_packs),
+            member_fault,
+            laws,
+            false,
+        )
+    }
+
+    /// A declaration-time member trial may compare a parameter whose
+    /// identity the reflected bounds have established (GEN-3, GEN-7).
+    fn requires_for_trial(
+        &mut self,
+        (module, declaration): (usize, usize),
+        (generics, type_packs): (&[Argument], &[hir::TypePackArgument]),
+        member_fault: Option<&RefCell<Option<super::dependent_packs::MemberFault>>>,
+        laws: &[(u32, Option<bool>)],
+        symbolic_member: bool,
+    ) -> Option<(SyntaxNode, Option<bool>, bool)> {
         let program = self.program;
         let (parameters, condition) = required(program, (module, declaration))?;
         let declared = &program.modules[module].declarations[declaration];
@@ -1756,6 +1783,7 @@ impl<'a> Typer<'a> {
             generics,
             &condition,
             &Told {
+                symbolic_member,
                 constant: &constant,
                 callable: &callable,
                 quantified: &quantified,
@@ -5413,6 +5441,8 @@ type QuantifiedCall<'a> = dyn Fn(&SyntaxNode, &RequirementType<'_>) -> Option<bo
 /// What the place a `requires` is tested at says of it, beyond the
 /// generic arguments ([`requires_holds`]).
 struct Told<'t> {
+    /// Whether this trial has established an outer type parameter's identity.
+    symbolic_member: bool,
     /// What a constant written in the condition comes to as a value of
     /// the type given (`crate::constant`), read where the declaration
     /// is written. `None` where it is no constant read so.
@@ -5445,6 +5475,7 @@ pub(super) fn declared_requirement(
         arguments,
         &condition,
         &Told {
+            symbolic_member: false,
             constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
             callable: &|_| None,
             quantified: &|_, _| None,
@@ -5492,7 +5523,8 @@ fn requires_holds(
     let told = |ty: Type| {
         (whole(&ty)
             && (!names_parameter(&ty)
-                || matches!(&ty, Type::Parameter { at, .. } if !own.contains(at))))
+                || (place.symbolic_member
+                    && matches!(&ty, Type::Parameter { at, .. } if !own.contains(at)))))
         .then_some(ty)
     };
     let type_of = |name: &str| -> Option<Type> {
