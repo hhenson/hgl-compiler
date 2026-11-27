@@ -228,7 +228,7 @@ fn formatting_follows_an_indexed_packs_selected_const_demand() {
 #[test]
 fn selected_operator_patterns_can_remain_runtime_values() {
     let checked = with_core(concat!(
-        "operator variant<T>{const pattern: str}(value: T) -> str\n",
+        "operator variant<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
         "impl const fn variant{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
         "impl const fn variant{const pattern: str}(value: i64) -> str => pattern\n",
         "const fn req<T>(const p: str, v: T) -> str requires variant(T) -> str => variant{pattern: p}(v)\n",

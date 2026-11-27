@@ -24,10 +24,13 @@ impl const fn show_variant{const pattern: str}(value: f64) -> str => format(patt
 impl const fn show_variant{const pattern: str}(value: i64) -> str => pattern
 const fn choose_variant<T>(const pattern: str, value: T) -> str
     requires T in {f64, i64} => show_variant{pattern: pattern}(value)
+operator required_format<T>{const pattern: str = "<{}>"}(value: T) -> str
+impl const fn required_format{const pattern: str}(value: f64) -> str => format(pattern, value)
+impl const fn required_format{const pattern: str}(value: i64) -> str => pattern
 const fn required_variant<T>(const pattern: str, value: T) -> str
-    requires show_variant(T) -> str => show_variant{pattern: pattern}(value)
+    requires required_format(T) -> str => required_format{pattern: pattern}(value)
 const fn indexed_variant<...As>(const pattern: str, values: ...As) -> str =>
-    show_variant{pattern: pattern}(values[0])
+    required_format{pattern: pattern}(values[0])
 operator packed_format<T>{const pattern: str = "<{}>"}(value: T) -> str
 impl const fn packed_format{const pattern: str}(value: f64) -> str => format(pattern, value)
 impl const fn packed_format{const pattern: str}(value: i64) -> str => format(pattern, value)
@@ -447,6 +450,7 @@ fn core_format_and_write_run_on_the_sdk() {
         "nullable_formats",
         "selected_converters",
         "deferred_patterns",
+        "selected_operator_patterns",
     ] {
         assert!(
             stdout.contains(&format!("passed   executable  demo.formatting::{test}")),
