@@ -8,6 +8,19 @@
 use hgl_lexer::literal::decode_string;
 use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
 
+/// EXPR-9: the written entries of a list, set or keyed collection.
+pub(crate) fn is_collection_literal(node: &SyntaxNode) -> bool {
+    matches!(
+        node.kind(),
+        SyntaxKind::SequenceExpr | SyntaxKind::SetExpr | SyntaxKind::KeyedExpr
+    )
+}
+
+/// EXPR-9: an empty literal needs its member types from its place.
+pub(crate) fn is_empty_collection_literal(node: &SyntaxNode) -> bool {
+    is_collection_literal(node) && node.children().next().is_none()
+}
+
 /// The first child node of `node` of kind `kind`.
 pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
     node.children().find(|child| child.kind() == kind)

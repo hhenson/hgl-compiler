@@ -1300,3 +1300,14 @@ fn a_recursive_field_may_end_in_an_empty_collection() {
         ]
     );
 }
+
+/// TYPE-6: the empty set or dictionary ends a recursive field's default,
+/// whether its empty literal uses a bracket or explicit EXPR-9 braces.
+#[test]
+fn empty_braced_default_ends_recursive_collection_fields() {
+    let checked = common::module(concat!(
+        "struct Group { members: atomic<set<Group>> = ({,}) }\n",
+        "struct Index { children: atomic<dict<str, Index>> = {:} }\n",
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}

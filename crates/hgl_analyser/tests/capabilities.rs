@@ -1385,3 +1385,30 @@ test fixed { eval sample("run.output", 1, false) }
         );
     }
 }
+
+/// TIME-8 and EXPR-9: either collection spelling retains its entries.
+/// Binding a capability and passing it to a capability parameter are uses.
+#[test]
+fn braced_collections_reject_retained_capabilities() {
+    let checked = module(concat!(
+        "const fn accepts(clock: Clock) -> i64 => 1\n",
+        "const fn uses(clock: Clock, flag: bool) -> i64 {\n",
+        "    let alias = {clock}\n",
+        "    let direct = {alias,}\n",
+        "    let nested = {if flag { clock } else { (alias) },}\n",
+        "    let mapped = {1: clock}\n",
+        "    let key = {clock: 1}\n",
+        "    return accepts(alias)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:19 injectable/capability.as_value TIME-8",
+            "m.hgl:6:29 injectable/capability.as_value TIME-8",
+            "m.hgl:6:45 injectable/capability.as_value TIME-8",
+            "m.hgl:7:22 injectable/capability.as_value TIME-8",
+            "m.hgl:8:16 injectable/capability.as_value TIME-8",
+        ]
+    );
+}

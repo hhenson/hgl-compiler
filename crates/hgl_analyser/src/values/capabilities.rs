@@ -136,7 +136,8 @@ impl<'a> Typer<'a> {
             SyntaxKind::CacheDecl => Some("the value of a `cache`"),
             SyntaxKind::TupleExpr => Some("an entry of a tuple"),
             SyntaxKind::SequenceExpr => Some("an entry of a list or a set"),
-            // `[key: value]`: either side of a dictionary's entry.
+            SyntaxKind::SetExpr => Some("an entry of a set"),
+            // Either side of a colon entry, in brackets or braces.
             SyntaxKind::SequencePair => Some("an entry of a dictionary"),
             SyntaxKind::ReturnStmt => Some("what is returned"),
             // `yield time: value`: the value is what the source

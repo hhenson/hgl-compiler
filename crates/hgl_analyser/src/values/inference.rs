@@ -1734,8 +1734,7 @@ impl<'a> Typer<'a> {
 /// Whether an argument has no complete type without its expected place.
 fn needs_argument_place(node: &SyntaxNode) -> bool {
     let node = ungrouped(node.clone());
-    takes_its_type(&node)
-        || node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+    takes_its_type(&node) || crate::syntax::is_empty_collection_literal(&node)
 }
 
 /// CTRL-10: a constructor supplies a block's tail with its field type.
@@ -1750,7 +1749,7 @@ fn field_needs_argument_place(node: &SyntaxNode) -> bool {
     }
     written_null(&tail)
         || tail.kind() == SyntaxKind::ImpliedMember
-        || (tail.kind() == SyntaxKind::SequenceExpr && tail.children().next().is_none())
+        || crate::syntax::is_empty_collection_literal(&tail)
 }
 
 /// Explicit arguments to ordinary generics and to the positional type

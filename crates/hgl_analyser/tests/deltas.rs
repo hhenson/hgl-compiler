@@ -524,3 +524,33 @@ fn a_lists_delta_has_its_properties_and_a_constant_overlap_is_rejected() {
         ["moved: dict<i64, i64>", "gone: set<i64>", "size: i64?",]
     );
 }
+
+/// TYPE-16 and EXPR-9: static overlap and bounds checks inspect entries
+/// in braced collection arguments, including alongside bracketed ones.
+#[test]
+fn braced_delta_arguments_check_constant_entries() {
+    let checked = module(concat!(
+        "const fn non_overlapping() -> delta<list<i64, 2>> => delta<list<i64, 2>>(updated: {1: 5}, removed: {0,})\n",
+        "const fn symbolic(k: i64) -> delta<list<i64>> => delta<list<i64>>(updated: {k: 5}, removed: {k,})\n",
+        "const fn sets() -> delta<set<str>> => delta<set<str>>(added: {\"a\",}, removed: [\"a\"])\n",
+        "const fn books() -> delta<dict<str, i64>> => delta<dict<str, i64>>(updated: [\"a\": 1], removed: {\"a\",})\n",
+        "const fn both() -> delta<list<i64, 2>> => delta<list<i64, 2>>(updated: {1: 1}, removed: {1,})\n",
+        "const fn high() -> delta<list<i64, 2>> => delta<list<i64, 2>>(updated: {2: 1})\n",
+        "const fn low() -> delta<list<i64, 2>> => delta<list<i64, 2>>(removed: {-1,})\n",
+    ));
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "type/delta.overlap",
+            "type/delta.overlap",
+            "type/delta.overlap",
+            "type/delta.index_bounds",
+            "type/delta.index_bounds"
+        ]
+    );
+}

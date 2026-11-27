@@ -365,9 +365,8 @@ pub(crate) fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
         .find_map(|element| element.into_node())
 }
 
-/// True when an expression is the empty collection `[]`, in parentheses
-/// or not (EXPR-9: "Empty brackets have no entries").
-fn is_empty_sequence(expression: &SyntaxNode) -> bool {
+/// EXPR-9: an empty collection literal, optionally grouped in parentheses.
+fn is_empty_collection(expression: &SyntaxNode) -> bool {
     let mut node = expression.clone();
     // The parser bounds how deep parentheses nest; so does this.
     for _ in 0..128 {
@@ -379,7 +378,7 @@ fn is_empty_sequence(expression: &SyntaxNode) -> bool {
             None => return false,
         }
     }
-    node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+    crate::syntax::is_empty_collection_literal(&node)
 }
 
 /// True when an expression is the literal `null`, in parentheses or
