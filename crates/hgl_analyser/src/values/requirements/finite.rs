@@ -540,36 +540,110 @@ impl FiniteDomains {
             |at| self.group(&FiniteSlot::Parameter(*at)),
             equal_members,
         );
-        // An over-limit product is incomplete. Leave its sentinel intact
-        // for the caller's existing limit diagnostic.
-        if !self.dependent.is_empty() && trials.len() <= crate::INSTANCES {
-            trials.retain(|trial| {
-                let value = |at| {
-                    let group = self.group(&FiniteSlot::Parameter(at))?;
-                    trial.iter().find_map(|(other, value)| {
-                        let member = FiniteSlot::Parameter(*other);
-                        self.groups[group]
-                            .slots
-                            .iter()
-                            .any(|slot| slot.same(&member))
-                            .then_some(value)
-                    })
-                };
-                self.dependent.iter().all(|(subject, alternatives)| {
-                    let Some(subject) = value(*subject) else {
-                        return true;
-                    };
-                    alternatives.iter().any(|alternative| {
-                        let other = match alternative {
-                            TypeAlternative::Parameter(at) => value(*at),
-                            TypeAlternative::Fixed(other) => Some(other),
-                        };
-                        other.is_none_or(|other| equal_members(subject, other) != Some(false))
-                    })
-                })
-            });
+        // The callers diagnose an over-limit product. It is incomplete and
+        // cannot supply evidence for eliminating any combination.
+        if trials.len() > crate::INSTANCES || self.dependent.is_empty() || trials.is_empty() {
+            return trials;
         }
+        trials.retain(|trial| self.admits_memberships(trial, &[]));
+        let hidden = self.hidden_choices(choices);
+        if hidden.is_empty() || trials.is_empty() {
+            return trials;
+        }
+        // A visible assignment is admitted when at least one assignment of
+        // the omitted parameters satisfies the same memberships (GEN-3,
+        // GEN-7). Count both parts against the existing proof budget. If the
+        // finer proof is unavailable, keep every directly admitted trial.
+        let mut count = trials.len();
+        for (_, values) in &hidden {
+            count = count.saturating_mul(values.len());
+            if count > crate::INSTANCES {
+                return trials;
+            }
+        }
+        let witnesses = combinations(&hidden);
+        trials.retain(|trial| {
+            witnesses
+                .iter()
+                .any(|witness| self.admits_memberships(trial, witness))
+        });
         trials
+    }
+
+    /// Find the finite ordinary classes connected to the call by memberships.
+    /// An unbounded alternative permits an unknown type; a contradictory
+    /// class supplies no independent evidence for a call using other slots.
+    fn hidden_choices(
+        &self,
+        visible: &[(Location, Vec<Argument>)],
+    ) -> Vec<(Location, Vec<Argument>)> {
+        let mut reached = vec![false; self.groups.len()];
+        for (at, _) in visible {
+            if let Some(group) = self.group(&FiniteSlot::Parameter(*at)) {
+                reached[group] = true;
+            }
+        }
+        let mut hidden = Vec::new();
+        loop {
+            let before = hidden.len();
+            for (subject, alternatives) in &self.dependent {
+                let parameters = std::iter::once(*subject).chain(alternatives.iter().filter_map(
+                    |alternative| match alternative {
+                        TypeAlternative::Parameter(at) => Some(*at),
+                        TypeAlternative::Fixed(_) => None,
+                    },
+                ));
+                let finite_group = |at| {
+                    let index = self.group(&FiniteSlot::Parameter(at))?;
+                    let choices = self.groups[index].choices.as_deref()?;
+                    (!choices.is_empty()).then_some((at, index, choices))
+                };
+                let Some(groups) = parameters.map(finite_group).collect::<Option<Vec<_>>>() else {
+                    continue;
+                };
+                if groups.iter().any(|(_, group, _)| reached[*group]) {
+                    for (at, group, choices) in groups {
+                        if !reached[group] {
+                            hidden.push((at, choices.to_vec()));
+                            reached[group] = true;
+                        }
+                    }
+                }
+            }
+            if before == hidden.len() {
+                return hidden;
+            }
+        }
+    }
+
+    fn admits_memberships(
+        &self,
+        trial: &[(Location, Argument)],
+        witness: &[(Location, Argument)],
+    ) -> bool {
+        let value = |at| {
+            let group = self.group(&FiniteSlot::Parameter(at))?;
+            trial.iter().chain(witness).find_map(|(other, value)| {
+                let member = FiniteSlot::Parameter(*other);
+                self.groups[group]
+                    .slots
+                    .iter()
+                    .any(|slot| slot.same(&member))
+                    .then_some(value)
+            })
+        };
+        self.dependent.iter().all(|(subject, alternatives)| {
+            let Some(subject) = value(*subject) else {
+                return true;
+            };
+            alternatives.iter().any(|alternative| {
+                let other = match alternative {
+                    TypeAlternative::Parameter(at) => value(*at),
+                    TypeAlternative::Fixed(other) => Some(other),
+                };
+                other.is_none_or(|other| equal_members(subject, other) != Some(false))
+            })
+        })
     }
 
     /// Joint bindings of the reflected members the call reads.

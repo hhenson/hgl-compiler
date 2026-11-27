@@ -160,3 +160,15 @@ test literal_free_membership_results_keep_their_consumers {
     assert membership_chain(3, 2, 4) == 11
     assert membership_chain(1.5, 2.0, 0.5) == 2.5
 }
+
+# GEN-3, GEN-7: the call omits U, which ties the choices of T and V.
+const fn projected_pair<A, B>(x: A, y: B) -> i64 requires A == B || A == f64 => 1
+const fn projected_chain<T, U, V>(t: T, u: U, v: V) -> i64
+    requires V in {i64, f64} && U in {V, f64} && T in {U, f64}
+    => projected_pair(t, v)
+
+test omitted_parameter_preserves_each_admitted_pair {
+    assert projected_chain(1, 2, 3) == 1
+    assert projected_chain(1.0, 2, 3) == 1
+    assert projected_chain(1.0, 2.0, 3.0) == 1
+}

@@ -166,6 +166,70 @@ fn ordinary_memberships_use_the_domains_of_their_named_alternatives() {
     }
 }
 
+/// GEN-3, GEN-7: a call uses only the endpoint types of a membership
+/// chain. A combination has to extend to a common choice for the middle.
+#[test]
+fn ordinary_memberships_project_the_omitted_parameters() {
+    let declarations = concat!(
+        "const fn related<A, B>(x: A, y: B) -> i64 requires A == B || A == f64 => 1\n",
+        "const fn relay<T, U, V>(t: T, u: U, v: V) -> i64 requires ",
+    );
+    for (condition, accepts) in [
+        ("V in {i64, f64} && U in {V, f64} && T in {U, f64}", true),
+        ("T in {f64, U} && U in {f64, V} && V in {f64, i64}", true),
+        // T and V also share a witness if both memberships name U.
+        ("U in {i64, f64} && T in {U, f64} && V in {U, i64}", true),
+        // Either of these allows the bad pair T = i64, V = f64.
+        ("V in {i64, f64} && U in {V, f64} && T in {U, i64}", false),
+        ("V in {i64, f64} && U in {i64, f64} && T in {U, f64}", false),
+    ] {
+        let checked = module(&format!("{declarations}{condition} => related(t, v)\n"));
+        if accepts {
+            assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+        }
+    }
+}
+
+/// GEN-3, GEN-7: a projected proof uses the existing limit. A long set
+/// of finite choices outside the call does not consume that budget.
+#[test]
+fn omitted_membership_trials_respect_the_existing_budget() {
+    let middle: Vec<_> = (0..hgl_analyser::INSTANCES.ilog2())
+        .map(|i| format!("U{i}"))
+        .collect();
+    let mut chain = vec!["V in {i64, f64}".to_string()];
+    let mut previous = "V";
+    for parameter in &middle {
+        chain.push(format!("{parameter} in {{{previous}, f64}}"));
+        previous = parameter;
+    }
+    let unrelated = chain.join(" && ").replace('V', "X");
+    chain.push(format!("T in {{{previous}, f64}}"));
+    let connected = chain.join(" && ");
+    let decls = format!(
+        "const fn related<A, B>(x: A, y: B) -> i64 requires A == B || A == f64 => 1\n\
+         const fn numeric<A>(x: A) -> i64 requires A in {{i64, f64}} => 1\n\
+         const fn relay<T, V, X, H, {}>(t: T, v: V) -> i64 requires ",
+        middle.join(", ")
+    );
+    // The direct finite proof suffices without enumerating the whole chain.
+    let direct = module(&format!("{decls}{connected} => numeric(t)\n"));
+    assert_eq!(direct.summary(), NONE, "{}", direct.report);
+    // A genuinely independent chain is absent from the proof of this call.
+    let independent = module(&format!(
+        "{decls}{unrelated} && V in {{i64, f64}} && H in {{V, f64}} && T in {{H, f64}} => related(t, v)\n"
+    ));
+    assert_eq!(independent.summary(), NONE, "{}", independent.report);
+    // The projected proof needs more assignments than the budget. Never
+    // infer success from a truncated enumeration.
+    let limited = module(&format!("{decls}{connected} => related(t, v)\n"));
+    assert_eq!(limited.findings.len(), 1, "{}", limited.report);
+    assert_eq!(limited.findings[0].code, "constraint/requires.unmet");
+}
+
 /// GEN-3 and GEN-7: a generic declaration must support each type admitted
 /// by all of its conjoined memberships and equalities, in either order.
 #[test]
