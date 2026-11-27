@@ -24,8 +24,11 @@
 //! Native positional packs give each packed argument its own runtime
 //! slot (FN-8), including Boolean chains (OPS-5).
 
+use std::collections::HashSet;
+
 use hgl_analyser::hir::{
-    Argument, Body, Callee, ErrorPart, Expr, ExprKind, Local, Raise, Stmt, ValueCategory,
+    Argument, BinaryOperator, Body, Callee, ErrorPart, Expr, ExprKind, Form, Local, LocalId, Raise,
+    Stmt, Value, ValueCategory,
 };
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Phase as BodyPhase, Role as Phase, Type};
 use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
@@ -210,6 +213,17 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "this lifted call");
         };
+        if let Form::Binary(operator @ (BinaryOperator::And | BinaryOperator::Or)) = form
+            && lifts_guarded_nullable_read(*operator, arguments)
+        {
+            return self.missing(
+                value.at,
+                &format!(
+                    "a nullable payload read guarded by a composed `{}`",
+                    operator.symbol(),
+                ),
+            );
+        }
         let program = self.program;
         let anonymous_declared;
         let anonymous_args;
@@ -1198,6 +1212,70 @@ fn form_on(form: &Expr, operand: Expr) -> Expr {
         ty: form.ty.clone(),
         at: form.at,
         category: ValueCategory::Value,
+    }
+}
+
+/// EXPR-6 gives every connected operand its own dependency. If a
+/// nullable guard is the only thing separating an eager reader from a
+/// null (ERR-12), the target cannot use that dependency as a guard.
+fn lifts_guarded_nullable_read(operator: BinaryOperator, arguments: &[Argument]) -> bool {
+    let test = match operator {
+        BinaryOperator::And => BinaryOperator::NotEqual,
+        BinaryOperator::Or => BinaryOperator::Equal,
+        _ => unreachable!("only short-circuit Boolean connectives can guard a read"),
+    };
+    let mut guarded = HashSet::new();
+    for argument in arguments {
+        let operand = &argument.value;
+        if !guarded.is_empty() && reads_guarded_connection(operand, &guarded) {
+            return true;
+        }
+        if let Some((comparison, left, right)) = operand.kind.binary()
+            && comparison == test
+        {
+            let binding = if matches!(left.kind, ExprKind::Literal(Value::Null)) {
+                nullable_connection_local(right)
+            } else if matches!(right.kind, ExprKind::Literal(Value::Null)) {
+                nullable_connection_local(left)
+            } else {
+                None
+            };
+            guarded.extend(binding);
+        }
+    }
+    false
+}
+
+/// Follow eager inputs. A separately wired conditional or failure
+/// boundary can admit its own reads.
+fn reads_guarded_connection(value: &Expr, guarded: &HashSet<LocalId>) -> bool {
+    match &value.kind {
+        ExprKind::NullRead { value, .. } => {
+            nullable_connection_local(value).is_some_and(|local| guarded.contains(&local))
+        }
+        ExprKind::Call {
+            arguments,
+            lifted: true,
+            ..
+        } => arguments
+            .iter()
+            .any(|argument| reads_guarded_connection(&argument.value, guarded)),
+        ExprKind::Block {
+            statements,
+            value: Some(tail),
+        } if statements.is_empty() => reads_guarded_connection(tail, guarded),
+        _ => false,
+    }
+}
+
+fn nullable_connection_local(value: &Expr) -> Option<LocalId> {
+    if let ExprKind::Local(local) = value.kind
+        && value.is_connection()
+        && matches!(value.ty, Type::Nullable(_))
+    {
+        Some(local)
+    } else {
+        None
     }
 }
 

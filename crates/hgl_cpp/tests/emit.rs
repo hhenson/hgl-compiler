@@ -2116,6 +2116,62 @@ fn an_instance_only_a_piece_left_out_asks_for_is_not_written() {
     );
 }
 
+/// EXPR-6 and ERR-12: a composed Boolean cannot guard the read of a
+/// nullable connection wired as an independent dependency.
+#[test]
+fn a_composed_nullable_guard_declines_the_independent_read() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            r#"module m
+fn both(x: i64?) -> bool => x != null && x > 3
+fn either(x: i64?) -> bool => x == null || x > 3
+fn chained(enabled: bool, x: i64?) -> bool => enabled && null != x && x > 3
+fn different(x: i64?, y: i64?) -> bool => x != null && y > 3
+fn unguarded(x: i64?) -> bool => x == null && x > 3
+fn composed_if(x: i64?) -> bool => if x != null { x > 3 } else { false }
+const fn scalar_both(x: i64?) -> bool => x != null && x > 3
+const fn scalar_either(x: i64?) -> bool => x == null || x > 3
+fn lifted_value(x: i64?) -> bool => scalar_either(x)
+
+test and_chain { assert eval both(x: [null, 5, 2]) == [false, true, false] }
+test or_chain { assert eval either(x: [null, 5, 2]) == [true, true, false] }
+test pack_chain { assert eval chained(x: [null, 5, 2], enabled: [true, true, true]) == [false, true, false] }
+test unrelated { assert eval different(x: [null, 5], y: [5, 2]) == [false, false] }
+test wrong_polarity { assert eval unguarded(x: [5, 2]) == [false, false] }
+test temporal_if { assert eval composed_if(x: [null, 5, 2]) == [false, true, false] }
+test scalar { assert !scalar_both(null) && scalar_either(null) }
+test lifted_scalar { assert eval lifted_value(x: [null, 5, 2]) == [true, true, false] }
+"#,
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    for (test, operator) in [
+        ("and_chain", "&&"),
+        ("or_chain", "||"),
+        ("pack_chain", "&&"),
+    ] {
+        let blocked = emitted
+            .blocked(test)
+            .expect("nullable graph guard is declined");
+        assert!(
+            blocked.ends_with(&format!(
+                "the cpp target does not write a nullable payload read guarded by a composed `{operator}` yet"
+            )),
+            "{blocked}"
+        );
+    }
+    for test in [
+        "unrelated",
+        "wrong_polarity",
+        "temporal_if",
+        "scalar",
+        "lifted_scalar",
+    ] {
+        assert_eq!(emitted.blocked(test), None, "{test}");
+    }
+}
+
 /// TYPE-14: a connection of T is one of `T?` where one is taken, through
 /// hgraph's own widening of its port (`Port::as`): given to a node's input,
 /// returned as a graph's result, and given to a `ref` parameter of `T?`,
