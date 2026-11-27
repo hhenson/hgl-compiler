@@ -290,7 +290,7 @@ impl Program {
         // FN-19: the entries a call gives a pack decide which calls a
         // forwarding body makes, and so which of its consts they read.
         let pack_inputs = pack_inputs_of(self, callee, signature, arguments);
-        let store_route = (check_store
+        let mut store_route = (check_store
             && (demand.values().any(|d| *d == Demand::StoreKey)
                 || self
                     .changing_store_slots
@@ -298,12 +298,42 @@ impl Program {
                     .any(|(owner, _)| *owner == (module, declaration))))
         .then(|| self.store_route(callee, arguments))
         .flatten();
-        // Give unconditional inputs the first use of the read budget.
-        let ordered = [Demand::Always, Demand::IfSelected, Demand::StoreKey]
-            .into_iter()
-            .filter(|mode| check_store || *mode != Demand::StoreKey)
-            .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
-        for (&slot, &demand) in ordered {
+        let mut ordered: Vec<_> = demand
+            .iter()
+            .filter_map(|(&slot, &demand)| {
+                if demand == Demand::StoreKey && !check_store {
+                    return None;
+                }
+                // CAP-6/TIME-8: conditional discovery can supersede StoreKey
+                // in the declaration's demand map. A candidate that does not
+                // read this value for formatting must still retain a separate
+                // fixed-store proof, using the store reader's staging rules.
+                let demand = if demand == Demand::IfSelected
+                    && !self.instance_reads_const(callee, pack_inputs.clone(), slot)
+                {
+                    if !check_store {
+                        return None;
+                    }
+                    if store_route.is_none() {
+                        store_route = self.store_route(callee, arguments);
+                    }
+                    if !store_route
+                        .as_ref()
+                        .is_some_and(|route| route.fixed.contains(&slot))
+                    {
+                        return None;
+                    }
+                    Demand::StoreKey
+                } else {
+                    demand
+                };
+                Some((slot, demand))
+            })
+            .collect();
+        // GEN-13: classify recovered store-only inputs before spending the
+        // shared budget, so genuine formatting inputs still precede them.
+        ordered.sort_by_key(|&(slot, demand)| (std::cmp::Reverse(demand), slot));
+        for (slot, demand) in ordered {
             if demand == Demand::StoreKey
                 && store_route.as_ref().map_or_else(
                     || {
@@ -312,11 +342,6 @@ impl Program {
                     },
                     |route| !route.fixed.contains(&slot),
                 )
-            {
-                continue;
-            }
-            if demand == Demand::IfSelected
-                && !self.instance_reads_const(callee, pack_inputs.clone(), slot)
             {
                 continue;
             }
@@ -1260,7 +1285,19 @@ pub(crate) fn demands(
                 else {
                     return;
                 };
-                if matches!(callee, Callee::DeferredPackCall) {
+                // FN-19: an indexed pack entry can leave the entire call
+                // unread, before it has a provisional operator selection.
+                let indexed_pack_call = matches!(callee, Callee::Unread | Callee::DeferredValue)
+                    && arguments.iter().any(|argument| {
+                        let mut deferred = false;
+                        argument.value.walk(&mut |value| {
+                            deferred |= matches!(value.kind, ExprKind::DeferredPackRead);
+                        });
+                        deferred
+                    });
+                if indexed_pack_call
+                    || matches!(callee, Callee::DeferredPackCall | Callee::Required { .. })
+                {
                     forwarding.push(call.at);
                     return;
                 }
@@ -1313,9 +1350,9 @@ pub(crate) fn demands(
                     });
                 }
             });
-            // FN-19 and GEN-7: a call that spreads a pack is read in each
-            // instance, where its entries are known, and its callee and
-            // the slot of each written argument with them. A const read
+            // FN-19 and GEN-7: pack calls and named requirements are read
+            // in each instance, where the selected callee
+            // and the slot of each written argument are known. A const read
             // anywhere in it is followed there, as a deferred candidate's
             // is, and is an input only where that instance reads it.
             for call in forwarding {
