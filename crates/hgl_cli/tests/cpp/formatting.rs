@@ -212,6 +212,46 @@ fn rejects_invalid_module_helper_patterns_before_emission() {
     }
 }
 
+/// FMT-3 and UNIT-13: the helper extension does not preempt an older
+/// memoized source fold when the typed helper body is already available.
+#[test]
+fn module_helper_fallback_preserves_legacy_cross_module_source_folds() {
+    let root = scratch("legacy-module-helper-pattern");
+    let mut helper = "module legacy.helper\nconst fn p0() -> str => \"a\"\n".to_string();
+    for level in 1..=14 {
+        writeln!(
+            helper,
+            "const fn p{level}() -> str => p{}() + p{}()",
+            level - 1,
+            level - 1
+        )
+        .unwrap();
+    }
+    helper.push_str("export const fn pattern() -> str => p14() + \"{}\"\n");
+    let a = write(&root, "a.hgl", &helper);
+    let b = write(
+        &root,
+        "b.hgl",
+        "module legacy.user\nuse legacy.helper::{pattern}\nconst P: str = pattern()\ntest t { assert format(P, 1.5) != \"\" }\n",
+    );
+    for (index, files) in [[&a, &b], [&b, &a]].iter().enumerate() {
+        let emitted = hgl_in(
+            &[
+                "emit",
+                files[0],
+                files[1],
+                "--target",
+                "cpp",
+                "--out",
+                &argument(&root.join(format!("cpp-{index}"))),
+            ],
+            &[],
+            &[],
+        );
+        assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+    }
+}
+
 /// FMT-3/4/5 and UNIT-13: helper arguments and immutable locals yield
 /// compiled patterns in direct calls, concrete instances and lifted calls.
 #[test]

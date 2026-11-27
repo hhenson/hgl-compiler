@@ -438,6 +438,19 @@ pub(crate) fn constant_pattern_in(
     value: &Expr,
     instance: &[(Location, GenericArgument)],
 ) -> PatternText {
+    match structural_pattern_in(program, value, instance) {
+        Err(PatternFault::Unread) => module_helper_pattern_in(program, value, instance),
+        known => known,
+    }
+}
+
+/// The established typed folds, before a source fold or helper extension.
+/// Keeping this separate preserves their existing limit outcomes (FMT-3).
+pub(crate) fn structural_pattern_in(
+    program: &Program,
+    value: &Expr,
+    instance: &[(Location, GenericArgument)],
+) -> PatternText {
     use PatternFault::Unread;
 
     fn read(
@@ -505,26 +518,31 @@ pub(crate) fn constant_pattern_in(
         Ok(Rc::from(text))
     }
 
-    let text = read(
+    read(
         program,
         value,
         instance,
         &mut PatternMemo::default(),
         PATTERN_DECLARATIONS,
-    );
-    if !matches!(text, Err(Unread)) {
-        return text;
-    }
-    // FMT-3, UNIT-13: a module constant may obtain its string through
-    // a bounded ordinary helper. Reuse the typed const reader rather
-    // than evaluating another copy of the source syntax.
+    )
+}
+
+/// FMT-3, UNIT-13: extend an unread module pattern through the bounded
+/// typed helper reader, after the caller's established folds have failed.
+pub(crate) fn module_helper_pattern_in(
+    program: &Program,
+    value: &Expr,
+    instance: &[(Location, GenericArgument)],
+) -> PatternText {
     use crate::const_inputs::ConstInputFault::{ReaderLimit, TextLimit};
-    let value = crate::const_inputs::projection_value(program, value, instance).map_err(
-        |fault| match fault {
-            ReaderLimit | TextLimit => PatternFault::Limit,
-            _ => Unread,
-        },
-    )?;
+    use PatternFault::Unread;
+    let value =
+        crate::const_inputs::module_helper_pattern(program, value, instance).map_err(|fault| {
+            match fault {
+                ReaderLimit | TextLimit => PatternFault::Limit,
+                _ => Unread,
+            }
+        })?;
     let ExprKind::Literal(Value::Str(text)) = value.kind else {
         return Err(Unread);
     };

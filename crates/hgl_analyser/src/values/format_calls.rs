@@ -216,7 +216,7 @@ impl Typer<'_> {
             return;
         }
         let text =
-            match formatting::constant_pattern_in(self.program, &pattern.value, &self.instance) {
+            match formatting::structural_pattern_in(self.program, &pattern.value, &self.instance) {
                 Err(PatternFault::Unread) => self
                     .node_at(pattern.value.at)
                     .ok_or(PatternFault::Unread)
@@ -229,6 +229,14 @@ impl Typer<'_> {
                     }),
                 known => known,
             };
+        // Preserve every established source fold and its limits before
+        // extending an unread module pattern through typed helpers.
+        let text = match text {
+            Err(PatternFault::Unread) => {
+                formatting::module_helper_pattern_in(self.program, &pattern.value, &self.instance)
+            }
+            known => known,
+        };
         let text = match text {
             Ok(text) => text,
             Err(PatternFault::Limit) => return,

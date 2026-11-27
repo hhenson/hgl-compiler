@@ -1071,6 +1071,118 @@ fn formatting_leaves_unsupported_module_helpers_unread() {
     }
 }
 
+/// UNIT-13 and FN-1: the helper extension must not fold a non-helper
+/// expression and add a format error after its existing source failure.
+#[test]
+fn formatting_helper_fallback_preserves_non_helper_source_failures() {
+    for (source, code, rule) in [
+        (
+            "const P: str = if false { P } else { \"{:x}\" }\nconst fn show(value: f64) -> str => format(P, value)\n",
+            "name/constant.cycle",
+            "UNIT-13",
+        ),
+        (
+            "const fn show(value: f64) -> str => format(if true { \"{:x}\" } else { \"{}\" }, value)\n",
+            "type/argument.constant",
+            "FN-1",
+        ),
+    ] {
+        let checked = with_core(source);
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [(code, rule)],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// UNIT-13, FN-1: evidence for one helper constant cannot validate a
+/// different written root, including in a non-selected conditional arm.
+#[test]
+fn formatting_helper_fallback_proves_every_written_module_root() {
+    for cyclic in [false, true] {
+        for inline in [false, true] {
+            for condition in [false, true] {
+                let other = if cyclic {
+                    "const Q: str = if false { Q } else { \"\" }\n"
+                } else {
+                    "native const fn unknown() -> str\nconst Q: str = unknown()\n"
+                };
+                let conditional = format!("if {condition} {{ P }} else {{ Q }}");
+                let (definition, pattern) = if inline {
+                    (String::new(), conditional)
+                } else {
+                    (format!("const R: str = {conditional}\n"), "R".to_string())
+                };
+                let checked = with_core(&format!(
+                    "const fn pat(text: str) -> str => text\nconst P: str = pat(\"{{:x}}\")\n{other}{definition}const fn show(value: f64) -> str => format({pattern}, value)\n"
+                ));
+                let mut expected = Vec::new();
+                if cyclic {
+                    expected.push(("name/constant.cycle", "UNIT-13"));
+                }
+                if inline {
+                    expected.push(("type/argument.constant", "FN-1"));
+                }
+                assert_eq!(
+                    checked
+                        .findings
+                        .iter()
+                        .map(|f| (f.code.as_str(), f.rule))
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+    for forwarded in [false, true] {
+        let call = if forwarded {
+            "relay(P + Q, value)"
+        } else {
+            "format(P + Q, value)"
+        };
+        let checked = with_core(&format!(
+            "const fn pat(text: str) -> str => text\nconst P: str = pat(\"{{:x}}\")\nconst Q: str = if false {{ Q }} else {{ \"\" }}\nconst fn relay<T>(const p: str, value: T) -> str => format(p, value)\nconst fn show(value: f64) -> str => {call}\n"
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|f| (f.code.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [("name/constant.cycle", "UNIT-13")],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// FMT-4, UNIT-13: an earlier input's helper proof must not impose
+/// new proof requirements on an independent later input.
+#[test]
+fn formatting_helper_input_proofs_do_not_leak_to_another_input() {
+    let checked = with_core(
+        "const fn pat(text: str) -> str => text\nconst P: str = pat(\"{}\")\nnative const fn opaque() -> str\nconst Q: str = if true { \"{:x}\" } else { opaque() }\nconst fn show(const a: str, const b: str, value: f64) -> str => format(a, 1) + format(b, value)\ntest t { assert show(P, Q, 1.5) == \"\" }\n",
+    );
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|f| (f.code.as_str(), f.rule))
+            .collect::<Vec<_>>(),
+        [("type/format.specifier", "FMT-4")],
+        "{}",
+        checked.report
+    );
+}
+
 /// FMT-5: an implicit conversion reaches the same instance and
 /// dependency checks as a written call (GEN-7, UNIT-13).
 #[test]

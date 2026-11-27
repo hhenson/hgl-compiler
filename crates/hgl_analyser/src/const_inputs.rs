@@ -369,7 +369,7 @@ impl Program {
                     {
                         return Err(Unread);
                     }
-                    reader.read(&given.value, INPUT_DEPTH, &[])?
+                    reader.read_input(&given.value, INPUT_DEPTH, &[])?
                 } else if let Some(default) = self.inherited_configuration_default(callee, slot) {
                     if let Callee::Candidate {
                         operator,
@@ -386,14 +386,14 @@ impl Program {
                             .map(|(parameter, value)| (parameter.at, value))
                             .collect();
                     }
-                    reader.read(&default.value, INPUT_DEPTH, &generics)?
+                    reader.read_input(&default.value, INPUT_DEPTH, &generics)?
                 } else if let Some(default) = owner
                     .defaults
                     .get(declaration)
                     .and_then(|defaults| defaults.get(slot))
                     .and_then(Option::as_ref)
                 {
-                    reader.read(&default.value, INPUT_DEPTH, &generics)?
+                    reader.read_input(&default.value, INPUT_DEPTH, &generics)?
                 } else if matches!(parameter.ty, Type::Nullable(_)) {
                     Expr {
                         kind: ExprKind::Literal(Value::Null),
@@ -695,6 +695,8 @@ struct Reader<'a> {
     reading: Vec<(Declaration, Option<usize>)>,
     /// Completed proofs share this read's budget, never another read's.
     proven_helpers: HashSet<Declaration>,
+    /// Successful bounded helper reads, shared across lexical frames.
+    helper_reads: usize,
     read_string_helpers: bool,
 }
 
@@ -708,7 +710,32 @@ pub(crate) fn projection_value(
         .iter()
         .map(|(at, argument)| (*at, argument))
         .collect();
-    Reader::new(program).read(expression, INPUT_DEPTH, &generics)
+    Reader::new(program).read_input(expression, INPUT_DEPTH, &generics)
+}
+
+/// FMT-3, UNIT-13: extend pattern reading only through an admitted
+/// module helper. Other previously unread expressions keep their
+/// existing diagnostics and target boundary.
+pub(crate) fn module_helper_pattern(
+    program: &Program,
+    expression: &Expr,
+    generics: &[(Location, GenericArgument)],
+) -> Result<Expr, ConstInputFault> {
+    // FN-1: reading one helper does not make an enclosing runtime
+    // expression a fixed format operand.
+    if !crate::values::fixed_expression(expression, &|_| false) {
+        return Err(ConstInputFault::Unread);
+    }
+    let generics: Vec<_> = generics
+        .iter()
+        .map(|(at, argument)| (*at, argument))
+        .collect();
+    let mut reader = Reader::new(program);
+    let value = reader.read_input(expression, INPUT_DEPTH, &generics)?;
+    if reader.helper_reads == 0 {
+        return Err(ConstInputFault::Unread);
+    }
+    Ok(value)
 }
 
 /// Normalize a known value in an immediate anonymous call's lexical scope.
@@ -738,8 +765,47 @@ impl<'a> Reader<'a> {
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
             proven_helpers: HashSet::new(),
+            helper_reads: 0,
             read_string_helpers: true,
         }
+    }
+
+    /// Check the whole input that used a helper, not only the root
+    /// visited by that helper (UNIT-13). Independent inputs retain
+    /// their own helper-use test while sharing the existing budgets.
+    fn read_input(
+        &mut self,
+        expression: &Expr,
+        depth: usize,
+        generics: &[(Location, &GenericArgument)],
+    ) -> Result<Expr, ConstInputFault> {
+        let before = self.helper_reads;
+        let value = self.read(expression, depth, generics)?;
+        if self.helper_reads != before {
+            let mut roots = Vec::new();
+            expression.walk(&mut |value| match &value.kind {
+                ExprKind::Constant {
+                    module,
+                    declaration,
+                } => roots.push((*module, *declaration)),
+                ExprKind::Call {
+                    callee,
+                    form: Form::Named,
+                    ..
+                } => {
+                    if let Some(root) = callee.declaration() {
+                        roots.push(root);
+                    }
+                }
+                _ => {}
+            });
+            roots.sort_unstable();
+            roots.dedup();
+            for root in roots {
+                self.helper_dependencies(root)?;
+            }
+        }
+        Ok(value)
     }
 
     fn read_declaration(
@@ -1119,6 +1185,10 @@ impl<'a> Reader<'a> {
             self.in_local_scope(returned, depth, &locals)
         })();
         self.reading.pop();
+        if read.is_ok() {
+            // Every call already spent a traversal step, bounding this count.
+            self.helper_reads += 1;
+        }
         read
     }
 
@@ -1288,12 +1358,14 @@ impl<'a> Reader<'a> {
             text_left: self.text_left,
             reading: self.reading.clone(),
             proven_helpers: self.proven_helpers.clone(),
+            helper_reads: self.helper_reads,
             read_string_helpers: self.read_string_helpers,
         };
         let read = scope.read(expression, depth, &[]);
         self.steps_left = scope.steps_left;
         self.text_left = scope.text_left;
         self.proven_helpers = scope.proven_helpers;
+        self.helper_reads = scope.helper_reads;
         read
     }
 
@@ -2891,7 +2963,7 @@ mod tests {
         let read = |budget| {
             let mut reader = Reader::new(&program);
             reader.steps_left = budget;
-            let value = reader.read(&value, INPUT_DEPTH, &[]);
+            let value = reader.read_input(&value, INPUT_DEPTH, &[]);
             (value, budget - reader.steps_left)
         };
         let (first, spent) = read(INPUT_BUDGET);
