@@ -1130,6 +1130,44 @@ fn a_local_list_size_uses_reached_fixed_range_values() {
     }
 }
 
+/// EXPR-16 and TYPE-10: an immediate call inside a fixed iteration reads
+/// the enclosing bindings from the pass in which it is reached.
+#[test]
+fn a_local_list_size_checks_nested_calls_with_reached_range_bindings() {
+    let program = |body: &str| {
+        format!(
+            "fn measured(tick: i64) -> i64 {{\n\
+                 let span = (fn() -> i64 {{\n\
+                     for idx in 7..<9 {{\n\
+                         {body}\n\
+                     }}\n\
+                     return 2\n\
+                 }})()\n\
+                 var row: list<i64, span>\n\
+                 return tick\n\
+             }}\n"
+        )
+    };
+    for selected in [11, 7] {
+        let branch = format!("if idx == {selected} {{ return tick }}\nreturn 6");
+        let nested = format!("return (fn() -> i64 {{ {branch} }})()");
+        let through_parameter = format!(
+            "return (fn(n: i64) -> i64 {{\n\
+                 let key = n\n\
+                 return (fn() -> i64 {{ if key == {selected} {{ return tick }}\nreturn 6 }})()\n\
+             }})(idx)"
+        );
+        for body in [branch, nested, through_parameter] {
+            if selected == 11 {
+                expect(&program(&body), &[]);
+            } else {
+                let extent = body.lines().count() + 8;
+                expect(&program(&body), &[&format!("{extent} list.size")]);
+            }
+        }
+    }
+}
+
 /// CTRL-13, CTRL-15 and TYPE-10: an initializer's reached category is
 /// what a later capture or loop binding reads at a fixed range step.
 #[test]

@@ -36,6 +36,7 @@ pub(super) struct ImmediateValues<'a> {
     locals: &'a [(LocalId, Rc<Expr>)],
     ranges: &'a [(LocalId, Range<i64>)],
     range_aliases: Option<&'a HashMap<LocalId, LocalId>>,
+    call_categories: Option<&'a HashMap<Location, ValueCategory>>,
 }
 
 /// Categories established along the reached paths of an immediate call.
@@ -47,6 +48,12 @@ pub(super) struct ReachedLocals {
 }
 
 impl ReachedLocals {
+    /// Captures belong to the calling scope; the callee owns later IDs.
+    pub(super) fn keep_before(&mut self, first: LocalId) {
+        self.connections.retain(|local| *local < first);
+        self.ordinary.retain(|local| *local < first);
+    }
+
     /// A fresh lexical binding has no facts from a prior reached pass.
     pub(super) fn clear(&mut self, local: LocalId) {
         self.connections.remove(&local);
@@ -98,6 +105,7 @@ impl<'a> ImmediateValues<'a> {
             locals,
             ranges: &[],
             range_aliases: None,
+            call_categories: None,
         }
     }
 
@@ -109,6 +117,15 @@ impl<'a> ImmediateValues<'a> {
     ) -> Self {
         self.ranges = ranges;
         self.range_aliases = Some(aliases);
+        self
+    }
+
+    /// Results of direct calls evaluated by this immediate flow.
+    pub(super) fn with_call_categories(
+        mut self,
+        calls: &'a HashMap<Location, ValueCategory>,
+    ) -> Self {
+        self.call_categories = Some(calls);
         self
     }
 
@@ -282,20 +299,21 @@ impl<'a> Typer<'a> {
             .filter(|_| !self.type_query)
             .and_then(|body| body.immediate_values.as_deref())
             .map(|locals| ImmediateValues::new(self.program, &self.instance, locals));
-        self.category_with_reached_locals(value, known, None)
+        self.category_with_reached_locals(&self.locals, value, known, None)
     }
 
     /// Classify an immediately invoked result with the reached writes in
     /// its discarded body. The additional categories belong to that call.
     pub(super) fn category_with_reached_locals(
         &self,
+        locals: &[Local],
         value: &Expr,
         known: Option<ImmediateValues<'_>>,
         reached: Option<&ReachedLocals>,
     ) -> ValueCategory {
         category_with_functions(
             self.program,
-            &self.locals,
+            locals,
             value,
             &self.pack_functions,
             &self.callback_captures,
@@ -608,6 +626,13 @@ fn category_with_functions(
             callee, arguments, ..
         } => {
             let given = all(&mut arguments.iter().map(|argument| &argument.value));
+            if matches!(callee, Callee::Unread | Callee::UnreadWithConnection)
+                && let Some(category) = evaluated
+                    .and_then(|known| known.call_categories)
+                    .and_then(|calls| calls.get(&value.at))
+            {
+                return join(given, *category);
+            }
             // FN-17: the binding of a value formal supplies the actual
             // callback's role and its captures for the FN-6 category below.
             let (callee, given) = if let Callee::Parameter {

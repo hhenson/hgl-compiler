@@ -1394,6 +1394,10 @@ impl<'a> Typer<'a> {
             type_queries: self.type_query_locations.len(),
             nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
+            immediate_calls: self
+                .anonymous
+                .as_ref()
+                .map_or(0, |scope| scope.immediate_calls.len()),
             unsettled_callback_pair: self.unsettled_callback_pair,
             unsettled_list_size: self.unsettled_list_size,
             selected_pack_branches: self
@@ -1471,6 +1475,9 @@ impl<'a> Typer<'a> {
         // A call the reading put to be selected for each instance goes
         // with it: the reading that stands puts its own.
         self.selecting.borrow_mut().truncate(mark.selecting);
+        if let Some(scope) = self.anonymous.as_mut() {
+            scope.immediate_calls.truncate(mark.immediate_calls);
+        }
         // A reading that declared nothing has nothing of its own in the
         // tables of locals, and they are not walked: a reading taken
         // back costs what was read, not what the function holds.
@@ -1619,6 +1626,8 @@ struct Mark {
     nested_query_selects: bool,
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
+    /// Number of direct-call bodies kept by the enclosing immediate read.
+    immediate_calls: usize,
     unsettled_callback_pair: bool,
     unsettled_list_size: bool,
     /// Number of selected pack branches before a tentative read (CTRL-16).

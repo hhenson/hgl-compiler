@@ -5,6 +5,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::rc::Rc;
 
+use hgl_diagnostics::Location;
+
 use super::super::Typer;
 use super::super::control::{bound_by_loop, iterates};
 use super::super::forms::received_type;
@@ -12,8 +14,8 @@ use super::super::lifting::{ImmediateValues, ReachedLocals};
 use super::ImmediateBindings;
 use crate::hir::ValueCategory::{Connection, Value as Ordinary};
 use crate::hir::{
-    BinaryOperator, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, Value, ValueCategory,
-    walk_statement_nodes,
+    Argument, BinaryOperator, Callee, Case, Expr, ExprKind, LabelValue, Local, LocalId, Node, Stmt,
+    Value, ValueCategory, walk_statement_nodes,
 };
 use crate::program::LocalKind;
 use crate::types::{ConstantValue, Scalar, Type};
@@ -23,6 +25,23 @@ use crate::types::{ConstantValue, Scalar, Type};
 const RANGE_PASSES: u64 = 128;
 // Comparison and case boundaries also share one limit across nested ranges.
 const RANGE_SPLITS: usize = 128;
+// Deeper calls and later iterations draw from the same replay allowance.
+const NESTED_CALLS: usize = 128;
+
+/// A nested direct call's typed body before its lexical locals are discarded.
+pub(in crate::values) struct ImmediateCall {
+    pub(super) first_local: LocalId,
+    pub(super) locals: Vec<Local>,
+    pub(super) statements: Vec<Stmt>,
+    pub(super) calls: Vec<(Location, Rc<Self>)>,
+}
+
+#[derive(Clone, Copy)]
+struct Fuel {
+    range_passes: u64,
+    range_splits: usize,
+    calls: usize,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Return {
@@ -33,12 +52,15 @@ enum Return {
 /// Which reached writes can make a later read depend on a connection.
 struct Flow<'a, 'p> {
     typer: &'a Typer<'p>,
+    locals: &'a [Local],
+    calls: &'a [(Location, Rc<ImmediateCall>)],
+    call_categories: HashMap<Location, ValueCategory>,
+    replaying: bool,
     bindings: ImmediateBindings,
     enclosing_bindings: usize,
     ranges: Vec<(LocalId, Range<i64>)>,
     range_aliases: HashMap<LocalId, LocalId>,
-    range_passes_left: u64,
-    range_splits_left: usize,
+    fuel: Fuel,
     reached: ReachedLocals,
 }
 
@@ -46,8 +68,35 @@ pub(super) fn result_is_live(
     typer: &Typer<'_>,
     body: &[Stmt],
     known: &[(LocalId, Rc<Expr>)],
+    calls: &[(Location, Rc<ImmediateCall>)],
 ) -> bool {
     let mut range_aliases = HashMap::new();
+    remember_range_aliases(body, &typer.locals, &mut range_aliases);
+    let mut flow = Flow {
+        typer,
+        locals: &typer.locals,
+        calls,
+        call_categories: HashMap::new(),
+        replaying: false,
+        bindings: known.to_vec(),
+        enclosing_bindings: known.len(),
+        ranges: Vec::new(),
+        range_aliases,
+        fuel: Fuel {
+            range_passes: RANGE_PASSES,
+            range_splits: RANGE_SPLITS,
+            calls: NESTED_CALLS,
+        },
+        reached: ReachedLocals::default(),
+    };
+    flow.statements(body, false) == Err(Return::Connection)
+}
+
+fn remember_range_aliases(
+    body: &[Stmt],
+    locals: &[Local],
+    range_aliases: &mut HashMap<LocalId, LocalId>,
+) {
     walk_statement_nodes(body, &mut |node| {
         if let Node::Statement(Stmt::Declare {
             local,
@@ -57,7 +106,7 @@ pub(super) fn result_is_live(
                     ..
                 }),
         }) = node
-            && typer.locals[*local].kind == LocalKind::Let
+            && locals[*local].kind == LocalKind::Let
         {
             // These are lexical IDs. A direct immutable copy carries an
             // iteration binding's bounds even when its value varies by pass.
@@ -65,28 +114,22 @@ pub(super) fn result_is_live(
             range_aliases.insert(*local, source);
         }
     });
-    let mut flow = Flow {
-        typer,
-        bindings: known.to_vec(),
-        enclosing_bindings: known.len(),
-        ranges: Vec::new(),
-        range_aliases,
-        range_passes_left: RANGE_PASSES,
-        range_splits_left: RANGE_SPLITS,
-        reached: ReachedLocals::default(),
-    };
-    flow.statements(body, false) == Err(Return::Connection)
 }
 
 impl Flow<'_, '_> {
     fn known(&self) -> ImmediateValues<'_> {
         ImmediateValues::new(self.typer.program, &self.typer.instance, &self.bindings)
             .with_ranges(&self.ranges, &self.range_aliases)
+            .with_call_categories(&self.call_categories)
     }
 
     fn category(&self, value: &Expr) -> ValueCategory {
-        self.typer
-            .category_with_reached_locals(value, Some(self.known()), Some(&self.reached))
+        self.typer.category_with_reached_locals(
+            self.locals,
+            value,
+            Some(self.known()),
+            Some(&self.reached),
+        )
     }
 
     fn reads_live(&self, value: &Expr) -> bool {
@@ -122,9 +165,9 @@ impl Flow<'_, '_> {
                     };
                     self.reached.set(*local, category);
                     if category == Ordinary
-                        && self.bindings.len() > self.enclosing_bindings
+                        && (self.replaying || self.bindings.len() > self.enclosing_bindings)
                         && matches!(statement, Stmt::Declare { .. })
-                        && self.typer.locals[*local].kind == LocalKind::Let
+                        && self.locals[*local].kind == LocalKind::Let
                         && !self.bindings.iter().any(|(id, _)| id == local)
                         && let Some(value) = self.known().read(value)
                     {
@@ -215,6 +258,19 @@ impl Flow<'_, '_> {
                 unreachable!("block statements are read by the flow walker");
             };
             match &value.kind {
+                ExprKind::Call {
+                    callee: Callee::Unread | Callee::UnreadWithConnection,
+                    arguments,
+                    ..
+                } if self.calls.iter().any(|(at, _)| *at == value.at) => {
+                    for argument in arguments {
+                        self.expression(&argument.value, controlled)?;
+                    }
+                    self.call_categories.remove(&value.at);
+                    if let Some(category) = self.replay_call(value.at, arguments) {
+                        self.call_categories.insert(value.at, category);
+                    }
+                }
                 ExprKind::Block { statements, value } => {
                     self.statements(statements, controlled)?;
                     self.maybe_expression(value.as_deref(), controlled)?;
@@ -265,6 +321,72 @@ impl Flow<'_, '_> {
 
     fn maybe_expression(&mut self, value: Option<&Expr>, controlled: bool) -> Result<(), Return> {
         value.map_or(Ok(()), |value| self.expression(value, controlled))
+    }
+
+    /// Walk a reached inner body in the same bounded analysis. Its own
+    /// return and local writes cannot escape into the caller.
+    fn replay_call(&mut self, at: Location, arguments: &[Argument]) -> Option<ValueCategory> {
+        if self.fuel.calls == 0
+            || (!self.replaying
+                && self.bindings.len() == self.enclosing_bindings
+                && self.ranges.is_empty()
+                && self.reached == ReachedLocals::default())
+        {
+            return None;
+        }
+        let mut matches = self.calls.iter().filter(|(site, _)| *site == at);
+        let (_, call) = matches.next()?;
+        if matches.next().is_some() {
+            // A source site can be typed more than once by an expanded
+            // statement. Each copy retains its original category.
+            return None;
+        }
+        self.fuel.calls -= 1;
+        let first = call.first_local;
+        let mut bindings = self
+            .bindings
+            .iter()
+            .filter(|(id, _)| *id < first)
+            .cloned()
+            .collect::<ImmediateBindings>();
+        let mut reached = self.reached.clone();
+        reached.keep_before(first);
+        let mut range_aliases = self.range_aliases.clone();
+        range_aliases.retain(|local, _| *local < first);
+        let known = self.known();
+        for argument in arguments {
+            if let Some(parameter) = argument.parameter {
+                let local = first + parameter;
+                reached.set(local, self.category(&argument.value));
+                if let Some(value) = known.read(&argument.value) {
+                    bindings.push((local, Rc::new(value)));
+                } else if known.range_bounds(&argument.value).is_some()
+                    && let Some(range) = known.range_local(&argument.value)
+                {
+                    range_aliases.insert(local, range);
+                }
+            }
+        }
+        remember_range_aliases(&call.statements, &call.locals, &mut range_aliases);
+        let mut flow = Flow {
+            typer: self.typer,
+            locals: &call.locals,
+            calls: &call.calls,
+            call_categories: HashMap::new(),
+            replaying: true,
+            enclosing_bindings: bindings.len(),
+            bindings,
+            ranges: self.ranges.clone(),
+            range_aliases,
+            fuel: self.fuel,
+            reached,
+        };
+        let returned = flow.statements(&call.statements, false);
+        self.fuel = flow.fuel;
+        (self.fuel.calls > 0).then_some(match returned {
+            Err(Return::Connection) => Connection,
+            _ => Ordinary,
+        })
     }
 
     fn switch(
@@ -324,11 +446,11 @@ impl Flow<'_, '_> {
         body: &[Stmt],
         controlled: bool,
     ) -> Result<(), Return> {
-        while self.range_passes_left != 0 {
+        while self.fuel.range_passes != 0 {
             let Some(value) = range.next() else {
                 return Ok(());
             };
-            self.range_passes_left -= 1;
+            self.fuel.range_passes -= 1;
             self.range_pass(binding, sequence, value, body, controlled)?;
         }
         if range.is_empty() {
@@ -337,10 +459,10 @@ impl Flow<'_, '_> {
         // Split the remainder at known source comparisons so an ordinary
         // return still ends the loop before later iterations are considered.
         for upper in self.range_boundaries(binding, &range, body) {
-            let Some(remaining) = self.range_splits_left.checked_sub(1) else {
+            let Some(remaining) = self.fuel.range_splits.checked_sub(1) else {
                 break;
             };
-            self.range_splits_left = remaining;
+            self.fuel.range_splits = remaining;
             self.range_piece(binding, sequence, range.start..upper, body, controlled)?;
             range.start = upper;
         }
@@ -397,7 +519,7 @@ impl Flow<'_, '_> {
         body: &[Stmt],
     ) -> BTreeSet<i64> {
         let mut boundaries = BTreeSet::new();
-        if self.range_splits_left != 0 {
+        if self.fuel.range_splits != 0 {
             let known = self.known();
             let mut insert = |boundary: i64| {
                 // Equality and a case label both isolate a single pass.
@@ -407,7 +529,7 @@ impl Flow<'_, '_> {
                 {
                     if point > range.start && range.contains(&point) {
                         boundaries.insert(point);
-                        if boundaries.len() > self.range_splits_left {
+                        if boundaries.len() > self.fuel.range_splits {
                             boundaries.pop_last();
                         }
                     }

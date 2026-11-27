@@ -36,6 +36,7 @@ analyser: partial
   the connection category of its result, including through a local binding.
   The result depends on reached captures, supplied callbacks, selectors and
   writes that determine the returned value (CTRL-13 to CTRL-15, EXPR-16).
+  A nested direct call uses the enclosing bindings of the pass that reaches it.
   The check follows known fixed ranges in order. Comparisons and case labels
   use the bounds of iteration names and their immutable aliases. Reached
   initializers and loop bindings supply the category of later reads.
