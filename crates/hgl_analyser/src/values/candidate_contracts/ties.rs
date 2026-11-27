@@ -1,11 +1,11 @@
 //! GEN-6 declaration warnings for candidates with a demonstrably tied call.
-//! Construct ordinary positional inputs, then use the normal call matcher
+//! Construct typed positional and configuration inputs, then use the normal call matcher
 //! so a more specific candidate or an unsettled requirement can prevent a warning.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use hgl_diagnostics::{Category, Diagnostics};
+use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, ast::Item};
 use hgl_source::{FileId, Span};
 
@@ -16,10 +16,10 @@ use crate::program::{
     Binding, Declaration, ImportKind, LocalKind, Module, OperatorRef, Program, Role,
 };
 use crate::syntax::child;
-use crate::types::{Detail, Scalar, Signature, Type};
-use crate::values::candidates::{Chosen, Given, Wanted};
+use crate::types::{ConstantValue, Detail, Scalar, Signature, Type};
+use crate::values::candidates::{Chosen, Given, Key, Wanted};
 use crate::values::fit::{open, whole};
-use crate::values::operators::from_place;
+use crate::values::operators::{from_place, public_inputs};
 use crate::values::{Candidate, Tables, Typer, tables};
 use crate::{TestCandidateScope, codes, warning};
 
@@ -62,7 +62,7 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
         let Detail::Callable(public) = &unit.details[declaration] else {
             continue;
         };
-        if !positional_shape(public) || declaration_has_error(operator, diagnostics) {
+        if !witness_shape(public) || declaration_has_error(operator, diagnostics) {
             continue;
         }
         let declared = |(module, declaration, _): Candidate<'_>| {
@@ -215,6 +215,13 @@ fn declarations_used(
 
 type Ties = BTreeMap<(usize, usize), BTreeSet<(usize, usize)>>;
 
+#[derive(PartialEq)]
+struct Witness<'a> {
+    positional: Vec<Type>,
+    configuration: Vec<(&'a str, Type)>,
+    output: Option<&'a Type>,
+}
+
 /// Check typed witnesses in an ordinary value function and in composition.
 /// Value functions only consider value candidates, as they do for real calls.
 fn witness_ties<'a>(
@@ -268,7 +275,7 @@ fn witness_ties<'a>(
             .iter()
             .copied()
             .filter(|&candidate| {
-                declared_role(candidate) == Some(role) && positional_shape(candidate.2)
+                declared_role(candidate) == Some(role) && witness_shape(candidate.2)
             })
             .collect();
         let mut tried = Vec::new();
@@ -277,20 +284,41 @@ fn witness_ties<'a>(
                 let Some(expected) = common_output(left.2, right.2) else {
                     continue;
                 };
-                let maximum = left.2.parameters.len().min(right.2.parameters.len());
+                let generics: Vec<_> = left
+                    .2
+                    .generics
+                    .iter()
+                    .chain(&right.2.generics)
+                    .map(|generic| generic.at)
+                    .collect();
                 // Admission checks whether omitted slots can take
                 // defaults declared on either the candidate or its operator.
-                for arity in 0..=maximum {
-                    for fallback in [Scalar::I64, Scalar::F64, Scalar::Bool, Scalar::Str] {
-                        let Some(types) = witness_types(left.2, right.2, arity, fallback) else {
-                            break;
-                        };
-                        let witness = (types, expected);
-                        if tried.contains(&witness) {
-                            continue;
+                for fallback in [Scalar::I64, Scalar::F64, Scalar::Bool, Scalar::Str] {
+                    let positional: Vec<_> = left
+                        .2
+                        .positional_parameters()
+                        .zip(right.2.positional_parameters())
+                        .map_while(|((_, left), (_, right))| {
+                            witness_type(&left.ty, &right.ty, fallback, &generics)
+                        })
+                        .collect();
+                    let configurations =
+                        configuration_witnesses(public, left.2, right.2, fallback, &generics);
+                    for arity in 0..=positional.len() {
+                        for configuration in &configurations {
+                            let witness = Witness {
+                                positional: positional[..arity].to_vec(),
+                                configuration: configuration.clone(),
+                                output: expected,
+                            };
+                            if tried.contains(&witness) {
+                                continue;
+                            }
+                            record_tied_call(
+                                &mut typer, operator, public, &matching, &witness, ties,
+                            );
+                            tried.push(witness);
                         }
-                        record_tied_call(&mut typer, operator, public, &matching, &witness, ties);
-                        tried.push(witness);
                     }
                 }
             }
@@ -298,15 +326,11 @@ fn witness_ties<'a>(
     }
 }
 
-/// Calls considered here use fixed positional slots and no special modes.
-/// Declared type parameters and concrete scalars are supported below.
-fn positional_shape(signature: &Signature) -> bool {
+/// This witness looks for calls with fixed ordinary inputs. A static callback,
+/// place, endpoint designation or compile-time value would need its own proof.
+fn witness_shape(signature: &Signature) -> bool {
     signature.parameters.iter().all(|parameter| {
-        !parameter.configuration
-            && parameter.pack.is_none()
-            && !parameter.constant
-            && !parameter.var
-            && !parameter.reference
+        parameter.pack.is_none() && !parameter.constant && !parameter.var && !parameter.reference
     })
 }
 
@@ -322,32 +346,95 @@ fn common_output<'a>(left: &'a Signature, right: &'a Signature) -> Option<Option
     }
 }
 
-/// Find a positional witness for the two shapes. Admission checks the
-/// full signatures, including repeated type parameters and constraints.
-fn witness_types(
-    left: &Signature,
-    right: &Signature,
-    arity: usize,
+/// Take a concrete input from the two declarations or use a common scalar
+/// for two bare parameters. Admission checks the remaining constraints.
+fn witness_type(
+    left: &Type,
+    right: &Type,
     fallback: Scalar,
-) -> Option<Vec<Type>> {
-    left.parameters
+    generics: &[Location],
+) -> Option<Type> {
+    let concrete = |ty: &Type| {
+        matches!(
+            ty,
+            Type::Scalar(_)
+                | Type::Named { .. }
+                | Type::List { .. }
+                | Type::Set(_)
+                | Type::Dict { .. }
+                | Type::Tuple(_)
+        ) && !ty.any_part(
+            &|part| {
+                open(part)
+                    || matches!(
+                        part,
+                        Type::Parameter { .. } | Type::PackMember { .. } | Type::Function(_)
+                    )
+            },
+            &|constant| {
+                matches!(constant.value, ConstantValue::Unknown)
+                    || !crate::constant::worked_out(&constant.value)
+                    || constant.value.names_one_of(generics)
+            },
+        )
+    };
+    match (left, right) {
+        (Type::Parameter { .. }, Type::Parameter { .. }) => Some(Type::Scalar(fallback)),
+        (Type::Parameter { .. }, ty) | (ty, Type::Parameter { .. }) if concrete(ty) => {
+            Some(ty.clone())
+        }
+        (left, right) if left == right && concrete(left) => Some(left.clone()),
+        _ => None,
+    }
+}
+
+/// Configuration uses names, even where a candidate's declaration changes
+/// their order. Try omission, required shared slots and all compatible shared
+/// slots, keeping the number of trials independent of the number of subsets.
+fn configuration_witnesses<'a>(
+    public: &Signature,
+    left: &'a Signature,
+    right: &Signature,
+    fallback: Scalar,
+    generics: &[Location],
+) -> Vec<Vec<(&'a str, Type)>> {
+    let mut required = Vec::new();
+    let mut shared = Vec::new();
+    for left in left
+        .parameters
         .iter()
-        .zip(&right.parameters)
-        .take(arity)
-        .map(|(a, b)| match (&a.ty, &b.ty) {
-            (Type::Parameter { .. }, Type::Parameter { .. }) => Some(Type::Scalar(fallback)),
-            (Type::Scalar(a), Type::Scalar(b)) if a == b && *a != Scalar::Any => {
-                Some(Type::Scalar(*a))
-            }
-            (Type::Scalar(scalar), Type::Parameter { .. })
-            | (Type::Parameter { .. }, Type::Scalar(scalar))
-                if *scalar != Scalar::Any =>
-            {
-                Some(Type::Scalar(*scalar))
-            }
-            _ => None,
-        })
-        .collect()
+        .filter(|parameter| parameter.configuration)
+    {
+        let Some(right) = right
+            .parameters
+            .iter()
+            .find(|parameter| parameter.configuration && parameter.name == left.name)
+        else {
+            continue;
+        };
+        let Some(ty) = witness_type(&left.ty, &right.ty, fallback, generics) else {
+            continue;
+        };
+        let has_default = (left.has_default && right.has_default)
+            || public.parameters.iter().any(|parameter| {
+                parameter.configuration && parameter.name == left.name && parameter.has_default
+            });
+        let name = left.name.as_str();
+        if !has_default {
+            required.push((name, ty.clone()));
+        }
+        shared.push((name, ty));
+    }
+    required.sort_unstable_by_key(|&(name, _)| name);
+    shared.sort_unstable_by_key(|&(name, _)| name);
+    let mut witnesses = vec![Vec::new()];
+    if !required.is_empty() && required != shared {
+        witnesses.push(required);
+    }
+    if !shared.is_empty() {
+        witnesses.push(shared);
+    }
+    witnesses
 }
 
 /// Ask the same request, admission and ranking used by a named operator call.
@@ -356,34 +443,37 @@ fn record_tied_call<'a>(
     operator: OperatorRef,
     public: &Signature,
     candidates: &[Candidate<'a>],
-    witness: &(Vec<Type>, Option<&Type>),
+    witness: &Witness<'_>,
     ties: &mut Ties,
 ) {
-    let (types, expected) = witness;
     let declaration = typer.declaration;
     let category = if typer.graph {
         ValueCategory::Connection
     } else {
         ValueCategory::Value
     };
-    typer.use_instance_locals(
-        types
-            .iter()
-            .enumerate()
-            .map(|(position, ty)| Local {
+    let inputs = witness
+        .positional
+        .iter()
+        .enumerate()
+        .map(|(position, ty)| (Key::Position(position), ty))
+        .chain(
+            witness
+                .configuration
+                .iter()
+                .map(|(name, ty)| (Key::Configuration((*name).to_owned()), ty)),
+        );
+    let (locals, given): (Vec<_>, Vec<_>) = inputs
+        .enumerate()
+        .map(|(position, (key, ty))| {
+            let local = Local {
                 name: format!("arg_{position}"),
                 ty: ty.clone(),
                 at: declaration.at,
                 kind: LocalKind::Parameter,
                 category,
-            })
-            .collect(),
-    );
-    let given: Vec<_> = types
-        .iter()
-        .enumerate()
-        .map(|(position, ty)| {
-            Given::read(
+            };
+            let mut input = Given::read(
                 position,
                 declaration.syntax.clone(),
                 Expr {
@@ -392,19 +482,22 @@ fn record_tied_call<'a>(
                     at: declaration.at,
                     category,
                 },
-            )
+            );
+            input.key = key;
+            (local, input)
         })
-        .collect();
+        .unzip();
+    typer.use_instance_locals(locals);
     let mark = typer.mark();
     let mut found = vec![None; public.generics.len()];
-    from_place(public, *expected, &mut found);
+    from_place(public, witness.output, &mut found);
     let request = typer.argument_output_requested(operator, public, found, &given, false);
     if request.unfit.is_some() {
         typer.take_back(mark, false);
         return;
     }
     let wanted = Wanted {
-        place: request.place.as_ref().or(*expected),
+        place: request.place.as_ref().or(witness.output),
         among: request.among,
         written: false,
         callback: None,
@@ -414,8 +507,16 @@ fn record_tied_call<'a>(
         return;
     }
     if child(&declaration.syntax, SyntaxKind::RequiresClause).is_some() {
+        let supplied = public_inputs(public, &given);
         selected.retain(|candidate| {
-            public_requirement_holds(typer, operator, public, types, *expected, candidate)
+            public_requirement_holds(
+                typer,
+                operator,
+                public,
+                &supplied,
+                witness.output,
+                candidate,
+            )
         });
         if selected.len() < 2 {
             return;
@@ -438,18 +539,16 @@ fn public_requirement_holds(
     typer: &mut Typer<'_>,
     operator: OperatorRef,
     public: &Signature,
-    types: &[Type],
+    supplied: &[Option<&Type>],
     expected: Option<&Type>,
     candidate: &Chosen<'_>,
 ) -> bool {
     let signature = candidate.signature();
     let supplied: Vec<_> = public
         .candidate_parameters(signature)
-        .enumerate()
-        .map(|(position, slot)| {
-            types
-                .get(position)
-                .or_else(|| slot.map(|slot| &signature.parameters[slot].ty))
+        .zip(supplied)
+        .map(|(slot, supplied)| {
+            supplied.or_else(|| slot.map(|slot| &signature.parameters[slot].ty))
         })
         .collect();
     let mut found = vec![None; public.generics.len()];

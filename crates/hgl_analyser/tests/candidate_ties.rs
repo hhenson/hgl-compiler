@@ -42,6 +42,75 @@ fn concrete_overlap_warns_until_a_more_specific_candidate_takes_it() {
     assert!(checked.findings.is_empty(), "{}", checked.report);
 }
 
+/// GEN-6 and FN-18: a shared required configuration option can witness
+/// a tie. Options with different names cannot be supplied to both candidates.
+#[test]
+fn required_configuration_can_witness_a_tie() {
+    let definitions = concat!(
+        "operator choose<T>(x: T) -> i64\n",
+        "impl const fn choose{extra: bool}(x: i64) -> i64 => 1\n",
+        "impl const fn choose{extra: bool}(x: i64) -> i64 => 2\n",
+    );
+    let checked = module(definitions);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    let checked = module(&format!(
+        "{definitions}test tied {{ assert choose{{extra: true}}(1) == 1 }}"
+    ));
+    assert_ambiguous(&checked);
+
+    let checked = module(&definitions.replacen("extra: bool", "other: bool", 1));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let checked = module(concat!(
+        "operator choose<T, C>{flag: C}(x: T) -> i64 requires C in {bool}\n",
+        "impl const fn choose{flag: bool, extra: i64}(x: i64) -> i64 => 1\n",
+        "impl const fn choose{extra: i64, flag: bool}(x: i64) -> i64 => 2\n",
+        "test tied { assert choose{flag: true, extra: 0}(1) == 1 }\n",
+    ));
+    assert_ambiguous(&checked);
+}
+
+/// GEN-6: a structured witness can use the exact list type. A more specific
+/// candidate for the complete call still prevents a declaration warning.
+#[test]
+fn structured_inputs_can_witness_a_tie() {
+    let definitions = concat!(
+        "operator choose<T>(x: T) -> i64\n",
+        "impl const fn choose(x: list<i64, 2>) -> i64 => 1\n",
+        "impl const fn choose(x: list<i64, 2>) -> i64 => 2\n",
+    );
+    let checked = module(definitions);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    let checked = module(&format!(
+        "{definitions}test tied {{ let fixed: list<i64, 2> = [7, 9]\nassert choose(fixed) == 1 }}"
+    ));
+    assert_ambiguous(&checked);
+
+    let crossed = concat!(
+        "operator select_pair<A, B>(a: A, b: B) -> i64\n",
+        "impl const fn select_pair<B>(a: list<i64, 2>, b: B) -> i64 => 1\n",
+        "impl const fn select_pair<A>(a: A, b: tuple<bool, str>) -> i64 => 2\n",
+    );
+    let checked = module(crossed);
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    let checked = module(&format!(
+        "{crossed}impl const fn select_pair(a: list<i64, 2>, b: tuple<bool, str>) -> i64 => 3"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
 /// GEN-6: the all-default call is a witness even when the full
 /// signatures cannot take the same pair of ordinary arguments.
 #[test]
