@@ -248,7 +248,26 @@ const fn narrowed_disjoint_atomic_opt_first<T, ...Ps>(f: const fn(...{Ps}) -> i6
 const fn narrowed_disjoint_atomic_opt_second<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {i64, str} && Ps[item_key] in {atomic<T?>, str} => exact_str<Ps[item_key]>(item)
 
+# GEN-3, GEN-5, GEN-7, GEN-17: two open memberships imply the same T.
+const fn require_same<A, B>(a: A, b: B) -> A requires A == B => a
+
+operator select_same<A, B>(a: A, b: B) -> A
+impl const fn select_same<X>(a: X, b: X) -> X => b
+impl const fn select_same(a: i64, b: i64) -> i64 => a + b
+
+const fn open_member_fn<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {T, str} && Ps[item_key] in {T, f64}
+    => require_same<Ps[item_key], T>(item, t)
+
+const fn open_member_op<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
+    requires each k in arg_keys(Ps) { Ps[k] in {T, f64} } && Ps[item_key] in {T, str}
+    => select_same(item, t)
+
 test each_proves_the_member_type {
+    assert open_member_fn(words, "first", "second") == "second"
+    assert open_member_fn(real_item, 1.5, 3.5) == 3.5
+    assert open_member_op(words, "first", "second") == "first"
+    assert open_member_op(num, 5, 7) == 12
     assert every_integer(num, 11) == 11
     assert every_sized<2>(pair, [3, 4]) == [3, 4]
     assert either_number(num, 11) == 11
