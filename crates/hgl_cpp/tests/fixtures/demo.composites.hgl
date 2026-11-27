@@ -492,7 +492,7 @@ test bits_are_held_as_they_were_read {
         on
     })
     assert !made.first && made.on == [true, true]
-    let members: set<bool> = [true, false, true]
+    let members: set<bool> = [true, false, on[0]]
     assert members == [false, true]
 }
 

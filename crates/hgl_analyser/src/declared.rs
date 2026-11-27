@@ -2325,6 +2325,13 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
     agree_as(left, right, Agreement::Known)
 }
 
+/// TYPE-10: an unsized list in an input pattern can match a fixed list
+/// at the same position. This comparison keeps every supplied extent
+/// and otherwise checks the known parts as type agreement does.
+pub(crate) fn agree_with_input_pattern(given: &Type, pattern: &Type) -> bool {
+    agree_as(given, pattern, Agreement::InputPattern)
+}
+
 /// Whether two types are one: `Some(true)` where they are known to be,
 /// `Some(false)` where they are known to differ, and `None` where a
 /// constant in either is not known, `FBox<X>` beside `FBox<2.0>` with `X`
@@ -2400,6 +2407,7 @@ fn opened(ty: &Type) -> Type {
 #[derive(Clone, Copy)]
 enum Agreement {
     Known,
+    InputPattern,
     Possible,
     CandidateResult,
 }
@@ -2414,10 +2422,10 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
     let constants_agree = |left: &Constant, right: &Constant| {
         matches!(left.value, ConstantValue::Unknown)
             || matches!(right.value, ConstantValue::Unknown)
-            || left
-                .value
-                .same(&right.value)
-                .unwrap_or(!matches!(agreement, Agreement::Known))
+            || left.value.same(&right.value).unwrap_or(matches!(
+                agreement,
+                Agreement::Possible | Agreement::CandidateResult
+            ))
     };
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
@@ -2474,6 +2482,9 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
                 }
                 (Some(size), None) if matches!(agreement, Agreement::CandidateResult) => {
                     size.value.key().is_none()
+                }
+                (Some(size), None) if matches!(agreement, Agreement::InputPattern) => {
+                    !matches!(size.value, ConstantValue::Unbounded)
                 }
                 (size, other_size) => size == other_size,
             };

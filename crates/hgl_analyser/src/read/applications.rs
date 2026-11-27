@@ -47,6 +47,16 @@ impl Reader<'_> {
         }
         let list = child(node, SyntaxKind::GenericArgs);
         let name = name_token(node);
+        if let Some(reports) = name
+            .as_ref()
+            .and_then(|name| self.module.default_type_reports.get(&self.at(name.span())))
+        {
+            for report in reports {
+                if !self.diagnostics.as_slice().contains(report) {
+                    self.diagnostics.emit(report.clone());
+                }
+            }
+        }
         let binding = name
             .as_ref()
             .and_then(|name| self.bindings.get(&(self.file, name.span().start)).copied());
@@ -496,7 +506,12 @@ impl Reader<'_> {
                 && placed
                 && at_least > 0
                 && argument.kind() == SyntaxKind::NamedType
-                && argument.text().to_string().trim() == "Type"
+                && (argument.text().to_string().trim() == "Type"
+                    || name_token(&argument).is_some_and(|name| {
+                        self.module
+                            .contextual_type_reports
+                            .contains_key(&self.at(name.span()))
+                    }))
                 && let Some(kinds) = values_of.and_then(|id| self.kinds.get(&id))
             {
                 want = kinds
@@ -579,6 +594,36 @@ impl Reader<'_> {
             };
 
             if defer_contextual
+                && kind == SyntaxKind::NamedType
+                && child(&argument, SyntaxKind::GenericArgs).is_none()
+                && let Some(name) = name_token(&argument)
+                && let name_at = self.at(name.span())
+                && let Some(value_error) = self
+                    .module
+                    .contextual_type_reports
+                    .get(&name_at)
+                    .and_then(|reports| {
+                        reports
+                            .iter()
+                            .find(|report| report.code.as_str() == codes::DEFAULT_FORMAL_ARGUMENT)
+                    })
+                    .cloned()
+            {
+                // The value reading is excluded. Retain the type and its
+                // diagnostics independently until this pair's role is known.
+                let before = self.diagnostics.len();
+                let ty = self.type_(&argument, position);
+                let reports = self.diagnostics.as_slice()[before..].to_vec();
+                self.diagnostics.truncate(before);
+                self.paired_default_names.insert(
+                    self.at(argument.span()),
+                    crate::program::PairedDefaultName {
+                        value_error,
+                        type_errors: reports,
+                    },
+                );
+                arguments.push(Argument::Type(ty));
+            } else if defer_contextual
                 && kind == SyntaxKind::NamedType
                 && child(&argument, SyntaxKind::QualifiedName).is_none()
                 && child(&argument, SyntaxKind::GenericArgs).is_none()
@@ -695,12 +740,19 @@ impl Reader<'_> {
         let contextual_type =
             name.text() == "Type" && child(node, SyntaxKind::QualifiedName).is_none();
         let binding = self.bindings.get(&(self.file, name.span().start)).copied();
+        if want == Kind::Value
+            && self
+                .module
+                .contextual_type_reports
+                .contains_key(&self.at(name.span()))
+        {
+            return Some(self.held(node, Err(Fault::Reported), expected, place));
+        }
         let Some(binding) = binding else {
-            if contextual_type
-                && self
-                    .module
-                    .contextual_type_reports
-                    .contains_key(&self.at(name.span()))
+            if self
+                .module
+                .contextual_type_reports
+                .contains_key(&self.at(name.span()))
             {
                 // A failed ordinary value lookup is not a second reading as
                 // the descriptor type. held emits the retained lookup report.

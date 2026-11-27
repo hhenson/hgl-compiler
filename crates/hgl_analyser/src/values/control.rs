@@ -5,16 +5,18 @@
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::expressions::takes_its_type;
+use super::expressions::{ExpressionFit, takes_its_type};
 use super::fit::{is_integer_literal, not_null, nullable, open};
 use super::symbols::is_null;
 use super::{BOOL, Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::agree;
-use crate::hir::{self, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
+use crate::hir::{
+    self, Expr, ExprKind, FIELD_LOOP_LOCAL_PREFIX, IfInference, Local, LocalId, Stmt, ValueCategory,
+};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{Constant, ConstantValue, Detail, Scalar, Type};
+use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
 /// CTRL-13: a graph's no-else `if` has its branch's type where it is a
@@ -229,6 +231,16 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
     ) -> (Expr, Outcome) {
+        self.flow_with_fit(node, expected, value_use, ExpressionFit::Value)
+    }
+
+    pub(super) fn flow_with_fit(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        value_use: ValueUse,
+        fit: ExpressionFit,
+    ) -> (Expr, Outcome) {
         // "Parentheses select grouping" (EXPR-1).
         let node = &ungrouped(node.clone());
         // SOURCE-4: a block or an `if` whose value is used is a value
@@ -237,10 +249,10 @@ impl<'a> Typer<'a> {
             value_use.is_used() && matches!(node.kind(), SyntaxKind::Block | SyntaxKind::IfExpr);
         self.valued += u32::from(valued);
         let read = match node.kind() {
-            SyntaxKind::Block => self.block(node, expected, value_use),
-            SyntaxKind::IfExpr => self.conditional(node, expected, value_use),
+            SyntaxKind::Block => self.block(node, expected, value_use, fit),
+            SyntaxKind::IfExpr => self.conditional(node, expected, value_use, fit),
             _ => {
-                let value = self.expression_in_flow(node, expected, value_use);
+                let value = self.expression_with_fit(node, expected, value_use, fit);
                 let outcome = if value_use == ValueUse::Inferred
                     && value.ty == Type::Unknown
                     && let ExprKind::Call { callee, .. } = &value.kind
@@ -268,12 +280,13 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         value_use: ValueUse,
+        fit: ExpressionFit,
     ) -> (Expr, Outcome) {
         let at = self.at(node);
         // ERR-12: what a null test proves inside the block holds to its
         // end.
         let frame = self.present.len();
-        let (expression, outcome) = self.block_read(node, expected, value_use, at);
+        let (expression, outcome) = self.block_read(node, expected, value_use, at, fit);
         self.present.truncate(frame);
         (expression, outcome)
     }
@@ -285,6 +298,7 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
         at: Location,
+        fit: ExpressionFit,
     ) -> (Expr, Outcome) {
         let (statements, last) = self.block_head(node);
         let (value, outcome) = match last {
@@ -295,14 +309,19 @@ impl<'a> Typer<'a> {
                 (Some(Box::new(value)), Outcome::Returns)
             }
             Some(last) => {
-                let (value, outcome) = self.flow(&last, expected, value_use);
+                let (value, outcome) = self.flow_with_fit(&last, expected, value_use, fit);
                 match (outcome, expected) {
                     (Outcome::Value(_), Some(expected)) if !open(expected) => {
                         let reported = self.diagnostics.len();
                         // A branch of a graph's `if` or `switch` gives
                         // its connection across a reference as the
                         // place it stands in does (TIME-10).
-                        let value = self.fit_input(value, expected, "the value of this block");
+                        let pattern_type = fit.input_type(&value, expected);
+                        let value = self.fit_input(
+                            value,
+                            pattern_type.as_ref().unwrap_or(expected),
+                            "the value of this block",
+                        );
                         let ty = if self.diagnostics.len() == reported {
                             value.ty.clone()
                         } else {
@@ -388,6 +407,7 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
         (before, before_returned, proved): (&[bool], bool, &[Fact]),
+        fit: ExpressionFit,
     ) -> Branch {
         self.assigned = restored(before, self.locals.len(), true);
         self.returned = before_returned;
@@ -395,7 +415,7 @@ impl<'a> Typer<'a> {
         // further.
         let frame = self.present.len();
         self.present.extend_from_slice(proved);
-        let (value, outcome) = self.flow(node, expected, value_use);
+        let (value, outcome) = self.flow_with_fit(node, expected, value_use, fit);
         self.present.truncate(frame);
         Branch {
             value,
@@ -423,6 +443,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         value_use: ValueUse,
+        fit: ExpressionFit,
     ) -> (Expr, Outcome) {
         let at = self.at(node);
         let mut parts = node.children();
@@ -439,6 +460,7 @@ impl<'a> Typer<'a> {
         };
         let otherwise = parts.next();
         let guard = ungrouped(condition.clone());
+        let mut checked_condition = None;
         let selected = if self.lexical_default_dependencies {
             None
         } else if guard.kind() == SyntaxKind::PackKeyMembership {
@@ -480,18 +502,32 @@ impl<'a> Typer<'a> {
                 }
             }
         } else {
-            self.active_pack_condition(&condition)
+            self.active_field_condition(&condition)
+                .or_else(|| self.active_pack_condition(&condition))
+                .or_else(|| {
+                    if self.field_passes.is_empty() {
+                        return None;
+                    }
+                    // TYPE-18: check the guard in this pass's lexical scope
+                    // before asking for a constant that uses its type queries.
+                    let queries = self.type_query_locations.len();
+                    checked_condition = Some(self.condition(&condition));
+                    if self.type_query_locations.len() == queries {
+                        return None;
+                    }
+                    self.active_field_condition(&condition)
+                })
         };
         if let Some(selected) = selected {
-            // CTRL-16: a constant condition in a concrete pack pass
-            // composes only the selected branch.
+            // CTRL-16: a constant condition in a concrete pass
+            // checks only the selected branch.
             if selected {
                 self.report_pack_branch(&then);
-                return self.flow(&then, expected, value_use);
+                return self.flow_with_fit(&then, expected, value_use, fit);
             }
             if let Some(otherwise) = otherwise {
                 self.report_pack_branch(&otherwise);
-                return self.flow(&otherwise, expected, value_use);
+                return self.flow_with_fit(&otherwise, expected, value_use, fit);
             }
             let (kind, outcome) = if value_use.is_used() {
                 (ExprKind::Literal(hir::Value::Null), Outcome::Null)
@@ -514,7 +550,7 @@ impl<'a> Typer<'a> {
                 outcome,
             );
         }
-        let condition = self.condition(&condition);
+        let condition = checked_condition.unwrap_or_else(|| self.condition(&condition));
         // CTRL-1: "A wiring-time condition chooses which branch to
         // compose. A temporal condition in composition selects a child
         // graph at runtime."
@@ -554,21 +590,27 @@ impl<'a> Typer<'a> {
         };
         let by_place = |branch: &SyntaxNode| branch_takes_its_type(branch);
         let (mut then, mut other) = match &otherwise {
-            None => (self.branch(&then, expected, value_use, in_then), None),
+            None => (self.branch(&then, expected, value_use, in_then, fit), None),
             Some(otherwise) if !told && by_place(&then) && !by_place(otherwise) => {
-                let other = self.branch(otherwise, expected, value_use, in_else);
+                let other = self.branch(otherwise, expected, value_use, in_else, fit);
                 let hint = from_other(&other.outcome, &then);
-                let then = self.branch(&then, hint.as_ref().or(expected), value_use, in_then);
+                let then = self.branch(&then, hint.as_ref().or(expected), value_use, in_then, fit);
                 (then, Some(other))
             }
             Some(otherwise) => {
-                let then = self.branch(&then, expected, value_use, in_then);
+                let then = self.branch(&then, expected, value_use, in_then, fit);
                 let hint = if !told && by_place(otherwise) {
                     from_other(&then.outcome, otherwise)
                 } else {
                     None
                 };
-                let other = self.branch(otherwise, hint.as_ref().or(expected), value_use, in_else);
+                let other = self.branch(
+                    otherwise,
+                    hint.as_ref().or(expected),
+                    value_use,
+                    in_else,
+                    fit,
+                );
                 (then, Some(other))
             }
         };
@@ -842,6 +884,19 @@ impl<'a> Typer<'a> {
             return self.unread(node);
         };
         let sequence = self.loop_iterable(&sequence);
+        if !self.graph
+            && matches!(names.len(), 1 | 2)
+            && let Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            } = &sequence.ty
+            && let Some(Detail::Struct(layout)) =
+                self.program.modules[*module].details.get(*declaration)
+        {
+            return self.field_loop(node, sequence, &names, &layout.members);
+        }
         let types = self.loop_bindings(&sequence, names.len());
         // CTRL-15: what the loop binds, and whether it makes one child
         // for each member.
@@ -880,6 +935,112 @@ impl<'a> Typer<'a> {
             sequence,
             body,
             at,
+        }
+    }
+
+    /// CTRL-12/15: visit the nominal layout, which has the parents'
+    /// fields in order before the struct's own. Each pass has a typed
+    /// field binding and its own lexical block.
+    fn field_loop(
+        &mut self,
+        node: &SyntaxNode,
+        sequence: Expr,
+        names: &[SyntaxToken],
+        members: &[crate::types::Member],
+    ) -> Stmt {
+        let at = self.at(node);
+        let body = child(node, SyntaxKind::Block);
+        let held = self.locals.len();
+        let base = Expr {
+            kind: ExprKind::Local(held),
+            ty: sequence.ty.clone(),
+            at: sequence.at,
+            category: ValueCategory::Value,
+        };
+        self.locals.push(Local {
+            name: format!("{FIELD_LOOP_LOCAL_PREFIX}{held}"),
+            at: base.at,
+            kind: LocalKind::Let,
+            ty: base.ty.clone(),
+            category: ValueCategory::Value,
+        });
+        self.assigned.push(true);
+        let mut statements = vec![Stmt::Declare {
+            local: held,
+            value: Some(sequence),
+        }];
+        let name = &names[0];
+        let name_at = Location::new(self.file, name.span());
+        let type_queries = self.type_query_locations.len();
+        // A written type inside the loop may differ in every pass.
+        // Each HIR binding keeps its own type. The module's written
+        // table can store only one type at a source location.
+        let outer_written = self.resolved_written.take();
+        for field in members {
+            let name_ty = Type::Scalar(Scalar::Str);
+            let name_local = self.declare(
+                name.text(),
+                name_at,
+                LocalKind::Iteration,
+                name_ty.clone(),
+                true,
+            );
+            let mut pass = vec![Stmt::Declare {
+                local: name_local,
+                value: Some(Expr {
+                    kind: ExprKind::Literal(hir::Value::Str(field.name.clone())),
+                    ty: name_ty,
+                    at: name_at,
+                    category: ValueCategory::Value,
+                }),
+            }];
+            if let Some(value) = names.get(1) {
+                let value_at = Location::new(self.file, value.span());
+                let (kind, ty) = self.member_value(base.clone(), &field.name, value_at, false);
+                let local = self.declare(
+                    value.text(),
+                    value_at,
+                    LocalKind::Iteration,
+                    ty.clone(),
+                    true,
+                );
+                pass.push(Stmt::Declare {
+                    local,
+                    value: Some(Expr {
+                        kind,
+                        ty,
+                        at: value_at,
+                        category: ValueCategory::Value,
+                    }),
+                });
+            }
+            self.field_passes.push((
+                name_at,
+                Argument::Constant(Constant {
+                    text: name.text().to_string(),
+                    value: ConstantValue::Str(field.name.clone()),
+                }),
+            ));
+            pass.extend(self.loop_body(body.as_ref()));
+            self.field_passes.pop();
+            // TYPE-18: the next pass reads the same syntax with a
+            // different field binding. Keep only the enclosing queries.
+            self.restore_type_queries(type_queries);
+            statements.push(field_loop_block(pass, at));
+        }
+        self.resolved_written = outer_written;
+        field_loop_block(statements, at)
+    }
+
+    /// CTRL-16: a constant branch in a struct pass is checked only where
+    /// selected. An ordinary runtime condition keeps its usual typing.
+    fn active_field_condition(&self, condition: &SyntaxNode) -> Option<bool> {
+        if self.field_passes.is_empty() {
+            return None;
+        }
+        match self.read_constant(condition, Some(&BOOL)) {
+            Ok(ConstantValue::Bool(value)) => Some(value),
+            _ => None,
         }
     }
 
@@ -945,6 +1106,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(sequence_node), Some(entry), Some(name)) = (
@@ -983,10 +1145,17 @@ impl<'a> Typer<'a> {
         let returned = self.returned;
         let present = self.present.len();
         let range_scope = self.enter_range_bindings(&sequence, &[binding]);
-        let value = self.expression(&entry, element);
+        let value = self.expression_with_fit(&entry, element, ValueUse::Required, fit);
         self.unrolled_range_bindings.truncate(range_scope);
         let value = match element {
-            Some(element) => self.fit_input(value, element, "this list entry"),
+            Some(element) => {
+                let pattern_type = fit.input_type(&value, element);
+                self.fit_input(
+                    value,
+                    pattern_type.as_ref().unwrap_or(element),
+                    "this list entry",
+                )
+            }
             None => value,
         };
         self.present.truncate(present);
@@ -1345,6 +1514,18 @@ impl<'a> Typer<'a> {
             self.returning_tails.get(&tail.at).map(Vec::as_slice)
         }
     }
+}
+
+fn field_loop_block(statements: Vec<Stmt>, at: Location) -> Stmt {
+    Stmt::Expr(Expr {
+        kind: ExprKind::Block {
+            statements,
+            value: None,
+        },
+        ty: Type::Unknown,
+        at,
+        category: ValueCategory::Value,
+    })
 }
 
 /// What was assigned at `before`, for as many locals as there are now.

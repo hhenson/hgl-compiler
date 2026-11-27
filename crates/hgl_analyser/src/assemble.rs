@@ -109,6 +109,8 @@ pub(crate) fn assemble<'a>(
             prelude_names: Vec::new(),
             uses: Vec::new(),
             contextual_type_reports: Default::default(),
+            default_type_reports: Default::default(),
+            paired_default_names: Default::default(),
             hidden_callables: Default::default(),
             decisions: Vec::new(),
             details: Vec::new(),

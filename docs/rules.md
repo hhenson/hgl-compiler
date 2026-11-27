@@ -159,7 +159,7 @@ unsupported case blocks only the pieces that depend on it.
 | LEX-29, EXPR-16, EXPR-17, FN-19, CTRL-16 | Ranges, loops that make lists and packs, and constant branches in unrolled passes. [#368](https://github.com/hhenson/hgl-compiler/issues/368) |
 | MAP-1 to MAP-10, RED-1 to RED-7, SET-2 | Core mapping, reduction and key sets. [#367](https://github.com/hhenson/hgl-compiler/issues/367), [#369](https://github.com/hhenson/hgl-compiler/issues/369), [#370](https://github.com/hhenson/hgl-compiler/issues/370) |
 | TYPE-1 | Reject `f64` and types containing it as keys or set members (`key.unstable`). |
-| EXPR-9 | Reject duplicate constant dictionary keys (`dict.duplicate_key`). |
+| EXPR-9 | Check dictionary keys and set members whose equality becomes known only when a generic body is specialized (GEN-7). |
 | TYPE-7 | Report a failed enum construction as `enum.no_member`. |
 | CTRL-6 | Report an unmatched switch with no default as `switch.unmatched`. |
 | END-5 | Enforce the rule for changing input activity during stop. |

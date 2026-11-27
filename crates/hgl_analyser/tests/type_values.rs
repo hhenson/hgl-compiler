@@ -6,6 +6,60 @@ use common::check;
 use hgl_analyser::hir::{ExprKind, Value};
 use hgl_analyser::{Constant, ConstantValue, NamedKind, Scalar, Type};
 
+/// GEN-13: a generic or nominal type name does not denote an ordinary value.
+#[test]
+fn type_names_reject_in_value_positions() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Quote { bid: f64 }
+const fn as_text<T>(value: T) -> str => str(T)
+const fn converted<T>(value: T) -> str => convert<str>(T)
+const fn stored<T>(value: T) -> i64 {
+    let held = T
+    return 1
+}
+const fn nominal() -> str => str(Quote)
+const invalid: str = Quote
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:45 type/type.mismatch GEN-13",
+            "m.hgl:4:56 type/type.mismatch GEN-13",
+            "m.hgl:6:16 type/type.mismatch GEN-13",
+            "m.hgl:9:34 type/type.mismatch GEN-13",
+            "m.hgl:10:22 type/type.mismatch GEN-13",
+        ],
+        "{}",
+        checked.report
+    );
+
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Quote { bid: f64 }
+enum Side { buy, sell }
+const quote_type: Type = type(Quote(bid: 1.0))
+const side: Side = Side.buy
+const fn extent<N>(items: list<i64, N>) -> i64 => N
+const fn local() -> i64 {
+    let Quote = 5
+    return Quote
+}
+test values {
+    assert quote_type == type(Quote(bid: 2.0))
+    assert side == Side.buy
+    let values: list<i64, 2> = [1, 2]
+    assert extent(values) == 2
+    assert local() == 5
+}
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
 /// TYPE-18: querying an expression keeps only its type, including in
 /// a module constant, a generic instance, and a generic value argument.
 #[test]

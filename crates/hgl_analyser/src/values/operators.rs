@@ -5,20 +5,22 @@
 
 use std::collections::HashSet;
 
-use hgl_diagnostics::{Category, Diagnostic, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::arguments::Takes;
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{
-    Chosen, DependentCallback, Given, Key, Settled, Wanted, bound, typed_by_place,
+    Chosen, DependentCallback, Given, Key, Settled, Wanted, bound, contains_sequence,
+    typed_by_place,
 };
 use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
 use super::expressions::written_null;
-use super::fit::{is_integer_literal, negated, open, whole};
+use super::fit::{fitted_input_pattern, is_integer_literal, negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, defaulted_argument, infer, infer_from_place, mentions,
@@ -65,6 +67,13 @@ pub(super) struct ReflectedCall {
     said: bool,
 }
 
+/// How the output request uses the inferred public bindings.
+enum OutputInputs {
+    Inferred,
+    Value(Vec<Option<Argument>>),
+    DeclarationWitness,
+}
+
 impl<'a> Typer<'a> {
     /// The output a call of `operator` requests of its candidates
     /// (GEN-5), from what is known of the operator's generic parameters
@@ -90,7 +99,14 @@ impl<'a> Typer<'a> {
         supplied: &[Option<&Type>],
         said: bool,
     ) -> Requested {
-        self.request_output(operator, public, found, supplied, said, None)
+        self.request_output(
+            operator,
+            public,
+            found,
+            supplied,
+            said,
+            OutputInputs::Inferred,
+        )
     }
 
     /// GEN-5, GEN-6, GEN-8: literal-aware calls keep generic value options
@@ -137,13 +153,34 @@ impl<'a> Typer<'a> {
                 self.infer_operator_inputs(public, &mut requested, &fixed);
                 requested
             });
-        let mut request = self.request_output(operator, public, found, &supplied, said, requested);
+        let inputs = requested.map_or(OutputInputs::Inferred, OutputInputs::Value);
+        let mut request = self.request_output(operator, public, found, &supplied, said, inputs);
         if !own.is_empty() {
             // UNIT-8: retain generic configuration-default metadata. GEN-7
             // changes the requested result here, not those defaults.
             request.call_generics = request.generics.clone();
         }
         request
+    }
+
+    /// A GEN-6 declaration witness needs every public binding, including
+    /// generic defaults, to decide whether the public condition holds.
+    pub(super) fn public_witness_arguments(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        supplied: &[Option<&Type>],
+    ) -> Option<Vec<Argument>> {
+        let request = self.request_output(
+            operator,
+            public,
+            found,
+            supplied,
+            false,
+            OutputInputs::DeclarationWitness,
+        );
+        request.unfit.is_none().then_some(request.generics)
     }
 
     fn request_output(
@@ -153,15 +190,19 @@ impl<'a> Typer<'a> {
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
-        requested_types: Option<Vec<Option<Argument>>>,
+        inputs: OutputInputs,
     ) -> Requested {
         let program = self.program;
         // GEN-5, GEN-6, GEN-8: a generic value default is a request for
         // that value, not for every input-derived type. Public checks below
         // still use every argument. Written types and the expected place
         // constrain a value call's result independently of input spelling.
-        let value_call = requested_types.is_some();
-        let requested_types = requested_types.unwrap_or_else(|| found.clone());
+        let value_call = matches!(inputs, OutputInputs::Value(_));
+        let witness = matches!(inputs, OutputInputs::DeclarationWitness);
+        let requested_types = match inputs {
+            OutputInputs::Value(types) => types,
+            _ => found.clone(),
+        };
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -266,25 +307,20 @@ impl<'a> Typer<'a> {
         // requirements". Where its requirement says what its result may
         // be, a candidate's result is one of those.
         let among = self.result_among(operator, public, &map, &own_generics);
+        let keeps_call_arguments = public
+            .parameters
+            .iter()
+            .any(|parameter| parameter.configuration)
+            || reflects(&program.modules[operator.module], public);
         Requested {
             place,
             among,
-            generics: if public
-                .parameters
-                .iter()
-                .any(|parameter| parameter.configuration)
-                || reflects(&program.modules[operator.module], public)
-            {
+            generics: if witness || keeps_call_arguments {
                 explicit
             } else {
                 Vec::new()
             },
-            call_generics: if public
-                .parameters
-                .iter()
-                .any(|parameter| parameter.configuration)
-                || reflects(&program.modules[operator.module], public)
-            {
+            call_generics: if keeps_call_arguments {
                 output_arguments
             } else {
                 Vec::new()
@@ -405,8 +441,7 @@ impl<'a> Typer<'a> {
         // "`convert<f64>(count)` supplies T". With them in place the
         // operator's result is the output requested, when nothing of it
         // is left to resolve: `convert<f64>(count)` asks for an `f64`.
-        // What they say of the operands is for the pass that resolves
-        // generic candidates.
+        // They can also fix types of the operator's public parameters.
         let Some(ExplicitGenerics {
             fixed: written,
             faulty,
@@ -521,6 +556,46 @@ impl<'a> Typer<'a> {
             replay,
             &candidates,
         );
+        // EXPR-9: a known public collection selects which reading of the
+        // literal the candidate can take. Keep the ordinary contextual
+        // operand: the candidate's fixed input sizes still apply (TYPE-10).
+        let public_bindings: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&explicit)
+            .filter_map(|(generic, supplied)| Some((generic.at, supplied.as_ref()?)))
+            .collect();
+        for argument in &mut given {
+            if !argument.by_place
+                || argument.explicit.is_some()
+                || !contains_sequence(&argument.node)
+            {
+                continue;
+            }
+            let Some(slot) = argument.key.public_parameter(public) else {
+                continue;
+            };
+            let parameter = &public.parameters[slot];
+            if parameter.pack.is_some() {
+                continue;
+            }
+            let pattern = substitute_within(&parameter.ty, &public_bindings);
+            if matches!(
+                super::fit::not_null(Some(&pattern)),
+                Some(
+                    Type::List { .. }
+                        | Type::Set(_)
+                        | Type::Tuple(_)
+                        | Type::Dict { .. }
+                        | Type::Result { .. }
+                )
+            ) && whole(&pattern)
+                && !names_parameter(&pattern)
+            {
+                argument.explicit =
+                    Some(fitted_input_pattern(&argument.value, &pattern).unwrap_or(pattern));
+            }
+        }
         // FN-19: the operator supplies context for written arguments. Its
         // candidate is selected once the spread supplies the remaining slots.
         if before_spread {
@@ -574,6 +649,9 @@ impl<'a> Typer<'a> {
             return (kind, Type::Unknown);
         }
         if faulty || unknown {
+            return (self.unselected(given, Form::Named), Type::Unknown);
+        }
+        if !self.written_operator_inputs_fit(public, &explicit, &given) {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let dictionary_fallback =
@@ -1325,10 +1403,18 @@ impl<'a> Typer<'a> {
                         return false;
                     }
                     candidates.iter().filter_map(|&(_, _, candidate)| {
-                        let index = public
-                            .candidate_parameters(candidate)
-                            .nth(public_slot?)
-                            .flatten()?;
+                        // GEN-6: each candidate supplies the FN-17 template
+                        // for its own options, including after the public
+                        // positional slots and in a braced entry another
+                        // candidate treats as configuration (EXPR-10).
+                        let index = match public_slot {
+                            Some(slot) => public.candidate_parameters(candidate).nth(slot).flatten(),
+                            None if matches!(key, Key::Position(_)) => key.public_parameter(candidate),
+                            None => {
+                                let mapping = public.candidate_parameters(candidate).collect::<Option<Vec<_>>>()?;
+                                key.named_candidate_parameter(candidate, public, &mapping)
+                            }
+                        }?;
                         Some(&candidate.parameters[index].ty)
                     }).any(|ty| {
                         // FN-17: a reflected anonymous input takes its
@@ -1802,6 +1888,109 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// GEN-8 and EXPR-5: a written generic argument fixes the public
+    /// parameter types it determines. Fit those arguments before trying
+    /// candidates, without changing the readings used to choose one.
+    fn written_operator_inputs_fit(
+        &mut self,
+        public: &Signature,
+        explicit: &[Option<Argument>],
+        given: &[Given],
+    ) -> bool {
+        let written: Vec<_> = public
+            .generics
+            .iter()
+            .zip(explicit)
+            .filter_map(|(parameter, argument)| {
+                matches!(argument, Some(Argument::Type(_) | Argument::Constant(_)))
+                    .then_some(parameter.at)
+            })
+            .collect();
+        if written.is_empty() {
+            return true;
+        }
+        let inputs: Vec<_> = given
+            .iter()
+            .filter_map(|argument| {
+                let index = argument.key.public_parameter(public)?;
+                let parameter = &public.parameters[index];
+                (parameter.pack.is_none()
+                    && argument.dependent_callback.is_none()
+                    && mentions(&parameter.ty, &written))
+                .then_some((argument, parameter))
+            })
+            .collect();
+        if inputs.is_empty() {
+            return true;
+        }
+
+        let mut found = explicit.to_vec();
+        self.infer_operator_inputs(public, &mut found, &public_inputs(public, given));
+        let own: Vec<_> = public
+            .generics
+            .iter()
+            .map(|parameter| parameter.at)
+            .collect();
+        let bindings: Vec<_> = own
+            .iter()
+            .copied()
+            .zip(&found)
+            .filter_map(|(at, value)| value.as_ref().map(|value| (at, value)))
+            .collect();
+        let mut rejected = Vec::new();
+        for (argument, parameter) in inputs {
+            let ty = placed(substitute_within(&parameter.ty, &bindings), &own);
+            if !whole(&ty) || open(&ty) {
+                continue;
+            }
+            if whole(argument.ty()) && agree(&ty, argument.ty()) {
+                continue;
+            }
+            if argument.retried && !self.may_reread() {
+                continue;
+            }
+            let mark = self.mark();
+            if argument.by_function {
+                if let Type::Function(template) = &ty {
+                    self.operator_function_argument(
+                        &argument.node,
+                        template,
+                        &CallbackInputs::default(),
+                    );
+                }
+            } else {
+                let value = if argument.retried {
+                    self.expression_for_input_pattern(&argument.node, &ty)
+                } else {
+                    argument.value.clone()
+                };
+                // TYPE-11: a lifted value candidate can read a window
+                // as a list. The candidate still decides whether it can
+                // take that connection (FN-12).
+                if !self.lifted_window(&ty, true, &value, Takes::Parameters) {
+                    let ty = fitted_input_pattern(&value, &ty).unwrap_or(ty);
+                    let place = format!("the parameter `{}`", parameter.name);
+                    self.fit_input(value, &ty, &place);
+                }
+            }
+            rejected.extend(
+                self.diagnostics.as_slice()[mark.diagnostics..]
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.severity == Severity::Error
+                            && diagnostic.code.as_str() != codes::local::READING_LIMIT
+                    })
+                    .cloned(),
+            );
+            self.take_back(mark, false);
+        }
+        let fits = rejected.is_empty();
+        for diagnostic in rejected {
+            self.diagnostics.emit(diagnostic);
+        }
+        fits
+    }
+
     /// The arguments of an operator's call as they are written, each
     /// with its position or its name. What is wrong with the call
     /// whichever candidate takes it is reported here (EXPR-2): an
@@ -2237,13 +2426,17 @@ impl Typer<'_> {
             _ if matches!(store.value.kind, ExprKind::Pairs(_)) => None,
             // GEN-7: the operations of every stated member are callable here.
             Type::Parameter { at, .. }
-                if self.memberships().iter().any(|(position, members)| {
-                    position == at
-                        && !members.is_empty()
-                        && members
-                            .iter()
-                            .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
-                }) =>
+                if self
+                    .finite_domains()
+                    .memberships()
+                    .iter()
+                    .any(|(position, members)| {
+                        position == at
+                            && !members.is_empty()
+                            && members
+                                .iter()
+                                .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
+                    }) =>
             {
                 None
             }

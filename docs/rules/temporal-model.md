@@ -31,7 +31,15 @@ analyser: partial
 
 - In a graph, `const` parameters, `switch` labels, `while` conditions, store calls, and a value function's declared configuration need their values during construction. A connection in any of those places rejects with `connection.as_constant` (FN-3, CTRL-15, FN-9, EXPR-14). An endpoint operation takes no input there (TIME-9).
 - A connection given as a written generic value argument rejects with `generic.argument_constant` (GEN-8).
-- Left: A local type annotation can still use a connection as a fixed list's size (TYPE-10).
+- A connection used as a fixed list size in a local annotation rejects with
+  `list.size` (TYPE-10). An immediately invoked anonymous function preserves
+  the connection category of its result, including through a local binding.
+  The result depends on reached captures, supplied callbacks, selectors and
+  writes that determine the returned value (CTRL-13 to CTRL-15, EXPR-16).
+  A nested direct call uses the enclosing bindings of the pass that reaches it.
+  The check follows known fixed ranges in order. Comparisons and case labels
+  use the bounds of iteration names and their immutable aliases. Reached
+  initializers and loop bindings supply the category of later reads.
 
 transpiler: done
 
@@ -123,6 +131,8 @@ transpiler: partial
 
 - A scalar `out` read in a `when` sees the latest write in the evaluation or the retained value. A read in `stop` sees the last published value.
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
+  A removal-only delta on a never-published or wholly invalidated dictionary
+  establishes a valid empty value; later ignored removals are silent (TYPE-16).
   Whole-output invalidation notifies readers of supported collections. A source
   yields whole values or deltas. A window result exposes its latest
   staged arrival to reads in the handler body, and publishes the last arrival once.
@@ -130,14 +140,15 @@ transpiler: partial
   The first read of retained data after each write copies the samples in time
   and space proportional to their count. A later read reuses that copy until
   another write or withdrawal.
-- A multiply written set or dictionary result stages delta assignments and a
-  final return. Cancellation leaves an already valid result silent, including
-  when the change cancels inside a nested keyed entry. The staging records only
-  keys named by the writes. A scalar dictionary entry that is withdrawn and
+- A multiply written set or dictionary result stages whole and delta assignments
+  and a final return. Cancellation leaves an already valid result silent, including
+  when the change cancels inside a nested keyed entry. Deltas visit only the keys they name.
+  A whole assignment replaces earlier writes; later observations or deltas
+  compare its entries with the previously published collection. A scalar dictionary entry that is withdrawn and
   restored during the evaluation publishes its final value. Output validity,
   `all_valid`, modification, delta, and modification time are visible to the
   handlers as they write. Single-write nodes keep direct publication.
-- Left: A whole assignment to `out`, invalidation, other output observations or
+- Left: Invalidation, other output observations or
   tuple-valued dictionary entries keep their existing keyed publication path.
   Unsupported reads and writes of `out` and its children are reported.
   Other publication forms are under TYPE-9 and window observation limits are under END-9.

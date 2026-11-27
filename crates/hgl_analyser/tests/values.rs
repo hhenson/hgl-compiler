@@ -2297,9 +2297,9 @@ fn an_operators_default_is_the_options_value_for_a_candidates_condition() {
     let checked = module(concat!(
         "enum Zero { ieee, nan, error }\n",
         "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
-        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> f64\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
         "    requires zero in {.ieee, .nan} => lhs\n",
-        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
         "    requires zero == .error => ok(lhs)\n",
         "const fn uses(a: f64, b: f64) {\n",
         "    let plain = ratio(a, b)\n",
@@ -2572,7 +2572,11 @@ fn equally_specific_generic_candidates_are_ambiguous() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:8:15 operator/operator.ambiguous GEN-5"]
+        [
+            "m.hgl:3:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:4:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:8:15 operator/operator.ambiguous GEN-5",
+        ]
     );
     assert_eq!(locals(&checked, "uses")[2..4], ["one: i64", "two: i64"]);
 }
@@ -4075,6 +4079,40 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
         locals(&elsewhere, "uses")[2..],
         ["constructed: str", "called: _"],
         "`choose(0)` is not read as the member numbered 0"
+    );
+}
+
+/// EXPR-9 and UNIT-13 compare known constants, including different
+/// spellings, while runtime keys still permit the last value to win.
+#[test]
+fn collections_reject_only_repeated_constants() {
+    let checked = module(
+        r#"
+const NAME: str = "bid"
+const FOUR: i64 = 4
+const fn collect(k: str, n: i64) {
+    let bad: dict<str, i64> = ["bid": 1, NAME: 9]
+    let ints: set<i64> = [4, FOUR]
+    let flags: set<bool> = [true, false, true]
+    let aliases: dict<duration, i64> = [1s: 1, 1000ms: 9]
+    let good: dict<str, i64> = [k: 1, "bid": 9]
+    let mixed: set<i64> = [n, FOUR]
+    let occurrences = [4, FOUR]
+}
+"#,
+    );
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/dict.duplicate_key",
+            "type/set.duplicate_member",
+            "type/set.duplicate_member",
+            "type/dict.duplicate_key"
+        ],
     );
 }
 

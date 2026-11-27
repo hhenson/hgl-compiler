@@ -86,19 +86,39 @@ struct type_value {
 };
 
 /// Structural non-type template argument carrying a compiled `Type` identity
-/// for generic structs parameterized by `const Kind: Type` (TYPE-18, GEN-13).
-template <std::size_t N>
+/// and its canonical diagnostic spelling for generic structs parameterized by
+/// `const Kind: Type` (TYPE-18, GEN-13, FMT-5).
+template <std::size_t N, std::size_t M = N>
 struct type_tag {
     char identity[N]{};
+    char spelling[M]{};
 
-    constexpr type_tag(const char (&text)[N]) noexcept {
+    constexpr type_tag(const char (&text)[N]) noexcept
+        requires(N == M)
+    {
         for (std::size_t index = 0; index < N; ++index) {
             identity[index] = text[index];
+            spelling[index] = text[index];
+        }
+    }
+
+    constexpr type_tag(const char (&id)[N], const char (&display)[M]) noexcept {
+        for (std::size_t index = 0; index < N; ++index) {
+            identity[index] = id[index];
+        }
+        for (std::size_t index = 0; index < M; ++index) {
+            spelling[index] = display[index];
         }
     }
 
     friend constexpr bool operator==(const type_tag&, const type_tag&) = default;
 };
+
+template <std::size_t N>
+type_tag(const char (&)[N]) -> type_tag<N, N>;
+
+template <std::size_t N, std::size_t M>
+type_tag(const char (&)[N], const char (&)[M]) -> type_tag<N, M>;
 
 /// `list<T>` (TYPE-4): a `std::vector<T>` with a hash, so that hgraph can
 /// hold it as configuration (see the head of this file). It is a vector in

@@ -12,7 +12,8 @@ use hgl_parser::SyntaxKind;
 use super::Typer;
 use super::arguments::Takes;
 use super::calls::removes;
-use crate::declared::{agree, names_one_of};
+use super::forms::received_type;
+use crate::declared::{agree, agree_with_input_pattern, names_one_of};
 use crate::hir::{
     BinaryOperator, Callee, ConfigurationRead, EndpointOperation, Expr, ExprKind, UnaryOperator,
     Value, ValueCategory,
@@ -44,6 +45,37 @@ pub(super) fn checked_child_result(value: &Expr) -> Option<Expr> {
         at: value.at,
         category: value.category,
     })
+}
+
+/// TYPE-10: when an operand or a component fits a public input pattern, keep
+/// its extents in the type it is fitted to. Leave conversions to `fit`.
+pub(super) fn fitted_input_pattern(supplied: &Expr, pattern: &Type) -> Option<Type> {
+    let matching = |ty: &Type| {
+        if !whole(ty) || open(ty) {
+            return None;
+        }
+        if agree_with_input_pattern(ty, pattern) {
+            return Some(ty.clone());
+        }
+        match pattern {
+            Type::Nullable(payload) if agree_with_input_pattern(ty, payload) => {
+                Some(Type::Nullable(Box::new(ty.clone())))
+            }
+            _ => None,
+        }
+    };
+    // A full result can itself match before an ordinary payload read.
+    matching(&supplied.ty)
+        .or_else(|| {
+            // ERR-14: a result slot can take a checked child whole. Its list
+            // extents are still known even if the public pattern omits them.
+            if matches!(pattern, Type::Result { error, .. } if **error == Type::Error) {
+                checked_child_result(supplied).and_then(|result| matching(&result.ty))
+            } else {
+                None
+            }
+        })
+        .or_else(|| matching(received_type(&supplied.ty, |_| true)))
 }
 
 impl<'a> Typer<'a> {

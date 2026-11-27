@@ -479,6 +479,8 @@ impl Program {
         if (inputs.test_candidates.is_some()
             || recheck_endpoints
             || (!functions.is_empty() && self.callback_phase_bodies.contains(&(module, declaration)))
+            // TYPE-10: an annotation extent awaits a concrete category.
+            || self.deferred_list_sizes.contains(&(module, declaration))
             || generics.contains(&Argument::NoResult)
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
@@ -1194,7 +1196,7 @@ fn place_callee(
                 *argument = place(argument);
             }
             for answer in requirements {
-                place_answer(answer, instance.types, instance.requirements);
+                place_answer(answer, instance);
             }
         }
         Callee::Required {
@@ -1208,6 +1210,7 @@ fn place_callee(
                 module,
                 declaration,
                 generics,
+                type_packs,
                 requirements,
             }) = instance.requirements.get(*requirement)
             {
@@ -1218,7 +1221,7 @@ fn place_callee(
                     module: *module,
                     declaration: *declaration,
                     generics: generics.clone(),
-                    type_packs: Vec::new(),
+                    type_packs: type_packs.clone(),
                     requirements: requirements.clone(),
                     test_candidates: instance.test_candidates,
                 };
@@ -1229,28 +1232,37 @@ fn place_callee(
         | Callee::DeferredOperator(_)
         | Callee::DeferredPackCall
         | Callee::DeferredValue
+        | Callee::UnreadWithConnection
         | Callee::Unread => {}
     }
 }
 
-/// Puts what `map` gives in place in an answer a call records. One the
-/// enclosing declaration states (GEN-7) is what answers that
-/// requirement of the declaration here.
-fn place_answer(answer: &mut Answer, map: &Map, answers: &[Answer]) {
+/// Places the instance's arguments in an answer, using its caller's
+/// evidence for any requirement the enclosing declaration states (GEN-7).
+fn place_answer(answer: &mut Answer, instance: &InstanceArguments<'_>) {
     match answer {
         Answer::Stated(index) => {
-            *answer = answers.get(*index).cloned().unwrap_or(Answer::Unread);
+            *answer = instance
+                .requirements
+                .get(*index)
+                .cloned()
+                .unwrap_or(Answer::Unread);
         }
         Answer::Candidate {
             generics,
+            type_packs,
             requirements,
             ..
         } => {
             for argument in generics {
-                *argument = placed(argument, map);
+                *argument = placed(argument, instance.types);
+            }
+            for pack in type_packs {
+                pack.place_types(|ty| instance.project(ty));
+                instance.packs.place_forwarded(pack);
             }
             for own in requirements {
-                place_answer(own, map, answers);
+                place_answer(own, instance);
             }
         }
         Answer::Unread => {}
