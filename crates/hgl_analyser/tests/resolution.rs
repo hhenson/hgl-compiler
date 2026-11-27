@@ -640,6 +640,64 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
     assert_eq!(checked.prelude_names("m"), ["unknown"]);
 }
 
+/// GEN-14 and LEX-27: an adjacent `<` opens a generic callable's
+/// arguments. A spaced comparison and a local value keep their reading.
+#[test]
+fn adjacent_less_than_starts_a_generic_callable_application() {
+    let checked = module(concat!(
+        "const fn alpha<T>(value: T) -> T => value\n",
+        "operator beta<T>(value: T) -> T\n",
+        "impl const fn beta<T>(value: T) -> T => value\n",
+        "const fn wrong_fn(x: i64) -> bool => alpha<x\n",
+        "const fn wrong_op(x: i64) -> bool => beta<x\n",
+        "const fn spaced(x: i64) -> bool => alpha < x\n",
+        "const fn shadow(alpha: i64, x: i64) -> bool => alpha<x\n",
+        "const fn applied() -> i64 => alpha<i64>(beta<i64>(2))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:38 type/generic.invalid_application GEN-14",
+            "m.hgl:6:38 type/generic.invalid_application GEN-14",
+        ]
+    );
+}
+
+/// GEN-14: a qualified application uses the resolved callable and the
+/// `<` adjoining its final identifier.
+#[test]
+fn a_qualified_generic_callable_does_not_fall_back_to_comparison() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export const fn alpha<T>(value: T) -> T => value\n",
+                "export operator beta<T>(value: T) -> T\n",
+                "impl const fn beta<T>(value: T) -> T => value\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib as l\n",
+                "const fn wrong_fn(x: i64) -> bool => l::alpha<x\n",
+                "const fn wrong_op(x: i64) -> bool => l::beta<x\n",
+                "const fn spaced(x: i64) -> bool => l::alpha < x\n",
+                "const fn applied() -> i64 => l::alpha<i64>(l::beta<i64>(2))\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:41 type/generic.invalid_application GEN-14",
+            "m.hgl:4:41 type/generic.invalid_application GEN-14",
+        ]
+    );
+}
+
 /// GEN-14: the same holds for a generic type reached as `alias::name`
 /// or through a selective import.
 #[test]

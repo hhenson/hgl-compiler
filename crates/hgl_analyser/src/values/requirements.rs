@@ -254,7 +254,7 @@ impl<'a> Typer<'a> {
     ) -> Option<Vec<Type>> {
         match condition.kind() {
             SyntaxKind::ConstraintRelation => {
-                let (at, members) = self.stated_membership(condition, own)?;
+                let (at, members) = self.stated_membership(condition, own, false)?;
                 if at != parameter {
                     return None;
                 }
@@ -302,6 +302,7 @@ impl<'a> Typer<'a> {
         &self,
         relation: &SyntaxNode,
         own: &[Location],
+        dependent_types: bool,
     ) -> Option<(Location, Vec<Argument>)> {
         let mut operands = relation.children();
         let (Some(left), Some(right), None) = (operands.next(), operands.next(), operands.next())
@@ -317,14 +318,18 @@ impl<'a> Typer<'a> {
             .generics
             .iter()
             .find(|generic| generic.name == name.trim())?;
-        // What the `read` pass said a type written here means: one that
-        // names no generic parameter of the declaration.
-        let type_at = |node: &SyntaxNode| -> Option<Type> {
-            let ty = self.written.get(&(self.file, node.span().start))?;
-            (whole(ty) && !mentions(ty, own)).then(|| (*ty).clone())
-        };
         let within = tokens(relation).any(|token| token.text() == "in")
             && right.kind() == SyntaxKind::ConstraintSet;
+        // A set can name another ordinary type parameter. Its alternatives
+        // are supplied by that parameter's own finite domain (GEN-3, GEN-7).
+        let type_at = |node: &SyntaxNode| -> Option<Type> {
+            let ty = self.written.get(&(self.file, node.span().start))?;
+            let ordinary = dependent_types
+                && within
+                && matches!(ty, Type::Parameter { at, .. }
+                if self.signature.generics.iter().any(|p| p.at == *at && matches!(p.kind, GenericKind::Type | GenericKind::Plain)));
+            (whole(ty) && (ordinary || !mentions(ty, own))).then(|| (*ty).clone())
+        };
         let equal = has_token(relation, SyntaxKind::EqEq);
         let members: Vec<Argument> = match &generic.kind {
             GenericKind::Type | GenericKind::Plain if within => right
@@ -728,7 +733,8 @@ impl<'a> Typer<'a> {
                     || (!choices.is_empty() && dependencies.contains(parameter))
             })
             .collect();
-        if memberships.iter().any(|(_, choices)| choices.is_empty()) {
+        let mut combinations = domains.ordinary_trials(&memberships);
+        if !memberships.is_empty() && combinations.is_empty() {
             self.diagnostics.emit(untold_with_reason(
                 program,
                 callee,
@@ -738,7 +744,6 @@ impl<'a> Typer<'a> {
             ));
             return !reflected;
         }
-        let mut combinations = domains.ordinary_trials(&memberships);
         if memberships.is_empty() {
             combinations.push(Vec::new());
         }
