@@ -441,6 +441,7 @@ impl<'a> Typer<'a> {
         };
         let otherwise = parts.next();
         let guard = ungrouped(condition.clone());
+        let mut checked_condition = None;
         let selected = if self.lexical_default_dependencies {
             None
         } else if guard.kind() == SyntaxKind::PackKeyMembership {
@@ -484,6 +485,19 @@ impl<'a> Typer<'a> {
         } else {
             self.active_field_condition(&condition)
                 .or_else(|| self.active_pack_condition(&condition))
+                .or_else(|| {
+                    if self.field_passes.is_empty() {
+                        return None;
+                    }
+                    // TYPE-18: check the guard in this pass's lexical scope
+                    // before asking for a constant that uses its type queries.
+                    let queries = self.type_query_locations.len();
+                    checked_condition = Some(self.condition(&condition));
+                    if self.type_query_locations.len() == queries {
+                        return None;
+                    }
+                    self.active_field_condition(&condition)
+                })
         };
         if let Some(selected) = selected {
             // CTRL-16: a constant condition in a concrete pass
@@ -517,7 +531,7 @@ impl<'a> Typer<'a> {
                 outcome,
             );
         }
-        let condition = self.condition(&condition);
+        let condition = checked_condition.unwrap_or_else(|| self.condition(&condition));
         // CTRL-1: "A wiring-time condition chooses which branch to
         // compose. A temporal condition in composition selects a child
         // graph at runtime."

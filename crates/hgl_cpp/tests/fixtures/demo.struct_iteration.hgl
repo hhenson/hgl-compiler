@@ -60,6 +60,23 @@ const fn reflected_types(quote: Quote) -> str {
     return text + convert<str>(type(quote.label))
 }
 
+const fn describe_by_type(quote: Quote) -> str {
+    var text = ""
+    for name, value in quote {
+        if type(value) == type(1) {
+            let size: i64 = value
+            text += convert<str>(size + 2)
+        } else {
+            let field = value
+            if type(field) == type("") {
+                let venue: str = field
+                text += venue + "!"
+            }
+        }
+    }
+    return text
+}
+
 const fn constant_labels(quote: Quote) -> i64 {
     var matches = 0
     for name in quote {
@@ -116,6 +133,7 @@ test field_types_and_order {
     assert constant_labels(quote) == 1
     assert reflected_types(quote) ==
         "f64 label=str:bool,i64,str bid=i64:bool,i64,i64 ask=f64:bool,i64,f64 open=bool:bool,i64,bool str"
+    assert describe_by_type(quote) == "first!9"
     for name, value in quote {
         let marked: FieldTag<type(value)> = FieldTag<type(value)>(mark: 0)
         if name == "bid" {

@@ -212,7 +212,8 @@ analyser: partial
 - A pack-key condition with a resolved module constant or generic value parameter checks only the selected branch. A generic pack supplies its keys in the making instance. Ordinary `const` and runtime parameters cannot supply the key (FN-1, GEN-17).
 - An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-10, TYPE-14).
 - In an ordinary struct pass, a resolved constant condition checks its
-  selected branch. A switch label can read the constant field name.
+  selected branch. Type queries in that condition read the current field
+  bindings (TYPE-18). A switch label can read the constant field name.
 - Left: A module constant computed by a call can remain unresolved in a generic
   value argument within a computed spread or in a pack-key condition (#240). Ordinary
   graph ranges can unroll a bound supplied by such a constant.
