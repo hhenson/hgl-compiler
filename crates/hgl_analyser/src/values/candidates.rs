@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 mod sequence_readings;
+use sequence_readings::CandidateGroup;
 pub(super) use sequence_readings::contains_sequence;
 
 /// The selected candidates, unsettled evidence and any callback diagnostics.
@@ -196,7 +197,7 @@ impl<'a> Typer<'a> {
         }
         self.admit_reading(
             operator,
-            candidates,
+            CandidateGroup::all(candidates),
             given,
             wanted,
             template_role,
@@ -208,7 +209,7 @@ impl<'a> Typer<'a> {
     fn admit_reading(
         &mut self,
         operator: OperatorRef,
-        candidates: &[Candidate<'a>],
+        group: CandidateGroup<'_, 'a>,
         given: &[Given],
         wanted: &Wanted,
         template_role: Option<Role>,
@@ -222,10 +223,9 @@ impl<'a> Typer<'a> {
             || given.iter().any(|argument| {
                 !argument.by_place && matches!(argument.value.ty, Type::Nullable(_))
             });
-        let function_trials = given
-            .iter()
-            .any(|argument| argument.by_function)
-            .then(|| self.function_trials(operator, candidates, given, wanted, pending_default));
+        let function_trials = given.iter().any(|argument| argument.by_function).then(|| {
+            self.function_trials(operator, group.candidates, given, wanted, pending_default)
+        });
         let forms = if has_forms {
             &[
                 ArgumentForms::Whole,
@@ -252,7 +252,7 @@ impl<'a> Typer<'a> {
                         });
                         let mut next = self.admitted_as(
                             operator,
-                            std::slice::from_ref(&trial.candidate),
+                            group.for_candidate(&trial.candidate),
                             &trial.given,
                             reflected.as_ref().unwrap_or(wanted),
                             widening,
@@ -268,7 +268,7 @@ impl<'a> Typer<'a> {
                     }
                     admitted
                 } else {
-                    self.admitted_as(operator, candidates, given, wanted, widening, form)
+                    self.admitted_as(operator, group, given, wanted, widening, form)
                 };
                 fits |= admitted.fits;
                 if has_checked_children || has_results && form != ArgumentForms::Whole {
@@ -328,7 +328,13 @@ impl<'a> Typer<'a> {
                 operand.value.ty = Type::Unknown;
             }
             trials.failed = self
-                .function_trials(operator, candidates, &operands, wanted, pending_default)
+                .function_trials(
+                    operator,
+                    group.candidates,
+                    &operands,
+                    wanted,
+                    pending_default,
+                )
                 .failed;
         }
         let errors = if trials.failed.len() == 1 {
@@ -467,14 +473,14 @@ impl<'a> Typer<'a> {
     fn admitted_as(
         &mut self,
         operator: OperatorRef,
-        candidates: &[(usize, usize, &'a Signature)],
+        group: CandidateGroup<'_, 'a>,
         given: &[Given],
         wanted: &Wanted,
         widening: bool,
         forms: ArgumentForms,
     ) -> Admissions<'a> {
         let mut admitted =
-            self.admitted_result_form(operator, candidates, given, wanted, (widening, forms), None);
+            self.admitted_result_form(operator, group, given, wanted, (widening, forms), None);
         // GEN-5, GEN-6: a complete fallible place may also receive a candidate
         // that guarantees its success. Infer each reading independently: the
         // same generic implementation may give a whole result in one instance
@@ -491,7 +497,7 @@ impl<'a> Typer<'a> {
             };
             admitted.include(self.admitted_result_form(
                 operator,
-                candidates,
+                group,
                 given,
                 &payload,
                 (widening, forms),
@@ -506,7 +512,7 @@ impl<'a> Typer<'a> {
     fn admitted_result_form(
         &mut self,
         operator: OperatorRef,
-        candidates: &[(usize, usize, &'a Signature)],
+        group: CandidateGroup<'_, 'a>,
         given: &[Given],
         wanted: &Wanted,
         (widening, forms): (bool, ArgumentForms),
@@ -523,7 +529,7 @@ impl<'a> Typer<'a> {
         };
         let mut admitted = Admissions::default();
         let converting = forms != ArgumentForms::Whole;
-        for &(module, declaration, signature) in candidates {
+        for &(module, declaration, signature) in group.candidates {
             let declared_in = &program.modules[module];
             let candidate = &declared_in.declarations[declaration];
             let Some(bound) = bound(
@@ -767,6 +773,9 @@ impl<'a> Typer<'a> {
                         super::candidate_contracts::guarantees_success(public, &taken, role, result)
                     })
                 {
+                    continue;
+                }
+                if !group.fits_reading(given, &bound, &taken, &type_packs) {
                     continue;
                 }
                 // FN-17: a function reference supplies a signature.

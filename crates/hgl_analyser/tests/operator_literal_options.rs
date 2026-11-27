@@ -475,6 +475,56 @@ fn a_viable_alternate_set_warns_at_the_selected_literal() {
     );
 }
 
+/// GEN-5: after choosing the bracket reading, parameter and result type fits
+/// settle the integer literal's precision before candidate conditions run.
+#[test]
+fn exact_integer_fits_count_within_the_selected_sequence_reading() {
+    let operator = "operator pick<const on:bool>(xs:any, n:any)->i64\n";
+    let exact = "impl const fn pick<const on:bool>(xs:list<i64>, n:i64)->i64 requires on => 1\n";
+    let list = "impl const fn pick<const on:bool>(xs:list<i64>, n:f64)->i64 => 2\n";
+    let set = "impl const fn pick<const on:bool>(xs:set<i64>, n:f64)->i64 => 3\n";
+    let calls = concat!(
+        "const fn inline()->i64 => pick{on:false}([3,8],11)\n",
+        "const fn stored(xs:list<i64>)->i64 => pick{on:false}(xs,11)\n",
+        "const fn floated()->i64 => pick{on:false}([3,8],11.0)\n",
+        "const fn enabled()->i64 => pick{on:true}([3,8],11)\n",
+    );
+    for implementations in [[exact, list, set], [set, list, exact]] {
+        let checked = common::module(&[operator, &implementations.concat(), calls].concat());
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:6:27 operator/operator.no_candidate GEN-5",
+                "m.hgl:7:39 operator/operator.no_candidate GEN-5",
+                "m.hgl:8:43 warning/operator.sequence_reading GEN-5",
+                "m.hgl:9:42 warning/operator.sequence_reading GEN-5",
+            ],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-5: an exact fit in a discarded set reading cannot block the widened
+/// list. Its condition can also leave the list as the only admitted reading.
+#[test]
+fn a_disabled_set_type_fit_does_not_set_the_lists_precision() {
+    let operator = "operator pick<const on:bool>(xs:any, n:any)->i64\n";
+    let exact = "impl const fn pick<const on:bool>(xs:set<i64>, n:i64)->i64 requires on => 1\n";
+    let list = "impl const fn pick<const on:bool>(xs:list<i64>, n:f64)->i64 => 2\n";
+    let set = "impl const fn pick<const on:bool>(xs:set<i64>, n:f64)->i64 => 3\n";
+    let call = "const fn chosen()->i64 => pick{on:false}([3,8],11)\n";
+    let both = common::module(&[operator, exact, set, list, call].concat());
+    assert_eq!(
+        both.summary(),
+        ["m.hgl:6:42 warning/operator.sequence_reading GEN-5"],
+        "{}",
+        both.report
+    );
+    let only = common::module(&[operator, exact, list, call].concat());
+    assert!(only.findings.is_empty(), "{}", only.report);
+}
+
 /// GEN-5: an unresolved list tie cannot fall through to the set candidate.
 /// Opposite choices at two independent arguments have no preferred ordering.
 #[test]

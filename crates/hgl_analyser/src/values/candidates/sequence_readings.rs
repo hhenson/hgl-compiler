@@ -2,12 +2,13 @@
 //! supply to the same written sequence (EXPR-9, GEN-5, WRITE-7).
 
 use super::{
-    Candidate, Chosen, Given, ReflectedCall, Specific, Typer, Wanted, not_null, parameter_type,
+    Candidate, Given, Place, ReflectedCall, Specific, Typer, Wanted, not_null, parameter_type,
     ungrouped, value_of_branch,
 };
+use crate::hir::TypePackArgument;
 use crate::program::{OperatorRef, Role};
 use crate::syntax::child;
-use crate::types::Type;
+use crate::types::{Signature, Type};
 use crate::values::{calls::arguments_of, expressions::result_constructor, results::tagged_side};
 use crate::{codes, warning};
 use hgl_diagnostics::{Category, Location};
@@ -89,11 +90,58 @@ impl Reading {
     }
 }
 
-fn readings(chosen: &Chosen, given: &[Given]) -> Vec<Reading> {
+/// The declarations to try, optionally within one selected combination of
+/// sequence readings. Numeric precision is settled by all type fits within it.
+#[derive(Clone, Copy)]
+pub(super) struct CandidateGroup<'g, 's> {
+    pub(super) candidates: &'g [Candidate<'s>],
+    required: &'g [Reading],
+}
+
+impl<'g, 's> CandidateGroup<'g, 's> {
+    /// An ordinary call or an independent trial for one declaration.
+    pub(super) fn all(candidates: &'g [Candidate<'s>]) -> Self {
+        Self {
+            candidates,
+            required: &[],
+        }
+    }
+
+    /// A reflected callback trial retains the enclosing call's reading.
+    pub(super) fn for_candidate<'t>(
+        &'t self,
+        candidate: &'t Candidate<'s>,
+    ) -> CandidateGroup<'t, 's> {
+        CandidateGroup {
+            candidates: std::slice::from_ref(candidate),
+            required: self.required,
+        }
+    }
+
+    /// Test the instantiated slots, including a generic supplied by a sibling,
+    /// before this arrangement can count as a type fit (GEN-5).
+    pub(super) fn fits_reading(
+        &self,
+        given: &[Given],
+        bound: &[Place],
+        signature: &Signature,
+        packs: &[TypePackArgument],
+    ) -> bool {
+        self.required.is_empty()
+            || compare(self.required, &readings(given, bound, signature, packs)) == Specific::Same
+    }
+}
+
+fn readings(
+    given: &[Given],
+    bound: &[Place],
+    signature: &Signature,
+    packs: &[TypePackArgument],
+) -> Vec<Reading> {
     let mut result = Vec::new();
-    for (arg, &place) in given.iter().zip(&chosen.bound) {
+    for (arg, &place) in given.iter().zip(bound) {
         if arg.by_place
-            && let Some(ty) = parameter_type(&chosen.taken, &chosen.type_packs, place)
+            && let Some(ty) = parameter_type(signature, packs, place)
         {
             collect(arg.value.at.file, &arg.node, ty, &mut result);
         }
@@ -201,7 +249,7 @@ impl<'a> Typer<'a> {
         for candidate in candidates {
             let ((choices, pending), _) = self.admit_reading(
                 operator,
-                std::slice::from_ref(candidate),
+                CandidateGroup::all(std::slice::from_ref(candidate)),
                 given,
                 wanted,
                 role,
@@ -209,7 +257,8 @@ impl<'a> Typer<'a> {
             );
             unknown |= pending;
             for chosen in choices {
-                let interpretation = readings(&chosen, given);
+                let interpretation =
+                    readings(given, &chosen.bound, &chosen.taken, &chosen.type_packs);
                 viable.push((chosen, interpretation));
             }
         }
@@ -218,7 +267,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .any(|(_, other)| compare(reading, other) != Specific::Same)
         });
-        if !differs {
+        if !differs && (unknown || viable.len() == candidates.len()) {
             return None;
         }
         // ERR-15: candidates taking fewer result payloads rank before any
@@ -226,7 +275,7 @@ impl<'a> Typer<'a> {
         let fewest = viable.iter().map(|(chosen, _)| chosen.result_reads).min()?;
         let mut excluded = Vec::new();
         viable.retain(|(chosen, _)| {
-            if chosen.result_reads == fewest {
+            if !differs || chosen.result_reads == fewest {
                 return true;
             }
             excluded.push((chosen.module, chosen.declaration));
@@ -259,19 +308,26 @@ impl<'a> Typer<'a> {
             let choices = viable.into_iter().map(|(chosen, _)| chosen).collect();
             return Some(((choices, unknown), Vec::new()));
         }
-        if excluded.is_empty() {
+        // A declaration whose condition failed still settles numeric precision
+        // when its parameter and result types fit the preferred reading.
+        let required: Vec<_> = viable
+            .into_iter()
+            .flat_map(|(_, readings)| readings)
+            .collect();
+        if required.is_empty() {
             return None;
         }
-        let ((mut selected, pending), diagnostics) = if viable.len() == 1 && !unknown {
-            ((vec![viable.pop()?.0], false), Vec::new())
-        } else {
-            let candidates: Vec<_> = candidates
-                .iter()
-                .copied()
-                .filter(|(m, d, _)| !excluded.contains(&(*m, *d)))
-                .collect();
-            self.admit_reading(operator, &candidates, given, wanted, role, default)
+        let candidates: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|(m, d, _)| !excluded.contains(&(*m, *d)))
+            .collect();
+        let group = CandidateGroup {
+            candidates: &candidates,
+            required: &required,
         };
+        let ((mut selected, pending), diagnostics) =
+            self.admit_reading(operator, group, given, wanted, role, default);
         if let [chosen] = selected.as_mut_slice()
             && !pending
             && !crate::syntax::suppresses_warning(
@@ -279,7 +335,10 @@ impl<'a> Typer<'a> {
                 codes::OPERATOR_SEQUENCE_READING,
             )
         {
-            for reading in readings(chosen, given).into_iter().filter(|r| !r.set()) {
+            for reading in readings(given, &chosen.bound, &chosen.taken, &chosen.type_packs)
+                .into_iter()
+                .filter(|r| !r.set())
+            {
                 if let Some((_, set)) = admitted_sets.iter().find(|(at, _)| *at == reading.at) {
                     let literal = self
                         .node_at(reading.at)

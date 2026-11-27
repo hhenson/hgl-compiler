@@ -132,3 +132,18 @@ test generated_collection_readings {
     assert generated((7, [for n in [2, 3]: [n, 5, 7]])) == 2
     assert generated<tuple<i64, list<set<i64>>>>((7, [for n in [2, 3]: [n, 5]])) == 2
 }
+
+# GEN-5: an exact integer type fit settles precision within its bracket reading.
+enum Market { open, closed }
+operator quote<const market: Market>(book: any, units: any) -> i64
+impl const fn quote<const market: Market>(book: list<i64>, units: i64) -> i64 requires market == .open => 42
+impl const fn quote<const market: Market>(book: set<i64>, units: f64) -> i64 => 87
+impl const fn quote<const market: Market>(book: list<i64>, units: f64) -> i64 => 63
+
+test collection_reading_and_literal_precision {
+    let stored: list<i64> = [3, 8]
+    assert quote{market: .open}([3, 8], 11) == 42
+    assert quote{market: .open}(stored, 11) == 42
+    assert quote{market: .closed}([3, 8], 11.0) == 63
+    assert quote{market: .closed}(stored, 11.0) == 63
+}
