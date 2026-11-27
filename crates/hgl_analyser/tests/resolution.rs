@@ -521,6 +521,34 @@ fn an_alias_qualifies_a_public_declaration() {
 
 // ---- GEN-1 and GEN-14: generics ----
 
+/// GEN-8 and GEN-14: a request names a callable and checks its written
+/// argument kinds. An underscore keeps a slot open.
+#[test]
+fn an_instantiate_request_checks_its_target_and_written_arguments() {
+    let checked = module(concat!(
+        "operator choose<T>(value: T) -> i64\n",
+        "operator pair<T, U>(first: T, second: U) -> i64\n",
+        "operator sized<const N: i64>(value: i64) -> i64\n",
+        "const value: i64 = 7\n",
+        "instantiate choose<7>\n",
+        "instantiate choose<i64, str>\n",
+        "instantiate value<i64>\n",
+        "instantiate pair<i64, _>, choose<i64>, sized<4>\n",
+        "instantiate sized<i64>\n",
+        "instantiate missing<i64>\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:20 type/generic.argument_kind GEN-14",
+            "m.hgl:7:13 type/generic.argument_count GEN-8",
+            "m.hgl:8:13 type/generic.invalid_application GEN-8",
+            "m.hgl:10:19 type/generic.argument_kind GEN-14",
+            "m.hgl:11:13 name/name.unknown UNIT-10",
+        ]
+    );
+}
+
 /// GEN-1: "Generic scope covers the whole declaration": the signature,
 /// the constraints, the body. An `each` constraint binds its name inside
 /// its braces.
