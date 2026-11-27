@@ -122,7 +122,7 @@ transpiler: partial
 
 ## EXPR-8
 
-parser and analyser: partial
+analyser: partial
 
 - Nonempty tuples and grouping work. The ordinary empty tuple expression `()` and type `tuple<>` remain open in [#992](https://github.com/hhenson/hgl-compiler/issues/992).
 
