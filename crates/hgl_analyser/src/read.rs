@@ -27,13 +27,13 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Diagnostics, Location};
-use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::constant::Constants;
 use crate::program::{Binding, DependentPack, Module, OperatorRef, Program};
 use crate::syntax::{test_statements, tokens};
-use crate::types::{CallArguments, DeltaInput, Detail, GenericParameter, Type, WrittenType};
+use crate::types::{CallArguments, DeltaInput, Detail, Field, GenericParameter, Type, WrittenType};
 
 use self::declarations::{Evidence, Kinds, declaration_kinds};
 
@@ -363,6 +363,19 @@ pub(crate) fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.children_with_tokens()
         .skip_while(|element| element.kind() != SyntaxKind::Eq)
         .find_map(|element| element.into_node())
+}
+
+/// The member that writes the initializer, identified by its first token.
+pub(crate) fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNode> {
+    declaration
+        .children()
+        .filter(|member| member.kind() == SyntaxKind::StructMember)
+        .find(|member| {
+            tokens(member)
+                .next()
+                .is_some_and(|name| name.span().start == field.at.span.start)
+        })
+        .and_then(|member| default_of(&member))
 }
 
 /// EXPR-9: an empty collection literal, optionally grouped in parentheses.

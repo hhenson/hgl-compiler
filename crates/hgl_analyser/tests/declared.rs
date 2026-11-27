@@ -1310,4 +1310,15 @@ fn empty_braced_default_ends_recursive_collection_fields() {
         "struct Index { children: atomic<dict<str, Index>> = {:} }\n",
     ));
     assert!(checked.findings.is_empty(), "{}", checked.report);
+    let wrong = common::module(concat!(
+        "struct Index { entries: atomic<dict<str, Index>> = {,} }\n",
+        "abstract struct Group { members: atomic<set<Group>> = {,} }\n",
+        "struct Child : Group { members = {:} }\n",
+    ));
+    let codes: Vec<_> = wrong
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(codes, ["type/field.recursive", "type/field.recursive"]);
 }

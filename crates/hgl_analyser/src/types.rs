@@ -1171,7 +1171,7 @@ pub struct Field {
     /// field may have it: one whose type is nullable, or an
     /// `atomic<...>` of a nullable type (TYPE-4).
     pub null_default: bool,
-    /// True when that default is the empty collection, `[]` (TYPE-6).
+    /// True when the default is an empty collection literal (TYPE-6, EXPR-9).
     pub empty_default: bool,
     /// Where the default is written.
     pub default_at: Option<Location>,

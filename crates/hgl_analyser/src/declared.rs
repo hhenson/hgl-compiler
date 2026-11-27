@@ -331,7 +331,7 @@ struct Introduced {
     /// is declared with, or the last a struct on the way down gives it
     /// (TYPE-4).
     null_default: bool,
-    /// True when that default is the empty collection `[]` (TYPE-6).
+    /// True when the default is an empty collection literal (TYPE-6, EXPR-9).
     empty_default: bool,
     /// Where the field that gives that default is written: the
     /// declaration, or the last `name = value` on the way down.
@@ -927,6 +927,34 @@ impl Structs<'_> {
 
     fn declaration(&self, id: Id) -> &Declaration {
         &self.program.modules[id.0].declarations[id.1]
+    }
+
+    /// TYPE-6: a recursive collection can start empty when the literal
+    /// constructs the field's own kind, including an inherited default.
+    fn has_empty_collection_default(&self, field: &Introduced) -> bool {
+        if !field.empty_default {
+            return false;
+        }
+        let Some((owner, index)) = field.default_of else {
+            return false;
+        };
+        let Some(initializer) = self.struct_type(owner).and_then(|declaration| {
+            crate::read::field_initializer(
+                &self.declaration(owner).syntax,
+                declaration.fields.get(index)?,
+            )
+        }) else {
+            return false;
+        };
+        let mut payload = &field.ty;
+        while let Type::Atomic(inner) | Type::Nullable(inner) = payload {
+            payload = inner;
+        }
+        match crate::syntax::ungrouped(initializer).kind() {
+            SyntaxKind::SetExpr => matches!(payload, Type::Set(_)),
+            SyntaxKind::KeyedExpr => matches!(payload, Type::Dict { .. }),
+            _ => true, // Empty brackets take their kind from the field.
+        }
     }
 
     /// What was read of the struct `id`.
@@ -1947,7 +1975,9 @@ impl Structs<'_> {
             for field in fields.all.iter().filter(|field| field.origin == *origin) {
                 // A null default that a struct below has replaced is
                 // reported as that.
-                let ends = !field.has_default || field.null_default || field.empty_default;
+                let ends = !field.has_default
+                    || field.null_default
+                    || self.has_empty_collection_default(field);
                 if ends || field.declared_null {
                     continue;
                 }
