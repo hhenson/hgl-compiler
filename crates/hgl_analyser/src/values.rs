@@ -77,9 +77,10 @@ mod children;
 mod collection_constants;
 mod constants;
 // Blocks, `if`, `while`, `for` and `switch` (CTRL-5, CTRL-10 to CTRL-15).
+mod braces;
+mod callback_evidence;
 mod control;
 // A delta as a type of its own: its properties and its construction (TYPE-16).
-mod callback_evidence;
 mod deltas;
 mod dependent_packs;
 pub(crate) use dependent_packs::PackTypes;
@@ -1039,6 +1040,9 @@ struct Typer<'a> {
     lexical_default_dependencies: bool,
     /// UNIT-7 names visited in a committed reading during the lexical default audit.
     default_name_visits: Option<Vec<Location>>,
+    /// For a possible capability capture, whether a braced literal was read
+    /// with a struct schema. Tentative argument readings are rolled back.
+    capture_key_reads: Option<Vec<(Location, bool)>>,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
@@ -1235,6 +1239,7 @@ impl<'a> Typer<'a> {
             pack_inputs: None,
             lexical_default_dependencies: false,
             default_name_visits: None,
+            capture_key_reads: None,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
             field_passes: Vec::new(),
@@ -1408,6 +1413,7 @@ impl<'a> Typer<'a> {
                 .resolved_written
                 .map_or(0, |target| target.borrow().len()),
             default_name_visits: self.default_name_visits.as_ref().map_or(0, Vec::len),
+            capture_key_reads: self.capture_key_reads.as_ref().map_or(0, Vec::len),
             probe_saw_temporal: self.probe_saw_temporal,
         }
     }
@@ -1422,6 +1428,9 @@ impl<'a> Typer<'a> {
     /// first to learn something and then where it stands, must leave
     /// one reading's worth of each.
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
+        if let Some(reads) = &mut self.capture_key_reads {
+            reads.truncate(mark.capture_key_reads);
+        }
         if let Some(visits) = &mut self.default_name_visits {
             visits.truncate(mark.default_name_visits);
         }
@@ -1639,6 +1648,7 @@ struct Mark {
     /// How many body-level resolved written types have been recorded.
     resolved_written: usize,
     default_name_visits: usize,
+    capture_key_reads: usize,
     /// Whether the active role probe already observed a temporal pair call.
     probe_saw_temporal: bool,
 }

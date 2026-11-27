@@ -125,7 +125,9 @@ transpiler: partial
 
 ## EXPR-8
 
-analyser: done
+analyser: partial
+
+- Nonempty tuples and grouping work. The ordinary empty tuple expression `()` and type `tuple<>` remain open in [#992](https://github.com/hhenson/hgl-compiler/issues/992).
 
 - A `_` stands in a trace of a test: in a sequence that is none it is `trace.placeholder`
 
@@ -133,13 +135,15 @@ analyser: done
 
 parser: done
 
-- Brackets delimit a sequence whose entries are all values or all pairs
+- Brackets delimit a sequence whose entries are all values or all pairs. Braces delimit a set when an entry is followed by a comma, or a keyed literal when followed by a colon. `{,}` and `{:}` are the two empty collection forms. `{}` and `{a}` remain blocks.
 
 analyser: partial
 
 - A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected
 - An inferred list with unfinished entries keeps its element type open until graph specialization can join them and widen eligible literals (EXPR-5, GEN-7).
-- Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
+- Bracketed colon entries in an ordinary list abbreviate ordered tuples, including repeated first elements. A dictionary context reads each key and value as its declared type.
+- Braces give a set or dictionary its kind. Their contents and the surrounding type determine the member, key and value types. An empty set or dictionary requires these types from its context.
+- A keyed brace can construct a known concrete struct with bare field names, with the same field defaults, validation and written evaluation order as a named construction. A dictionary evaluates bare keys as expressions.
 - A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
 - An inline operator argument uses a list reading before an admitted set reading (GEN-5). The public parameter can supply a set directly, including through a written type argument.
 - A dictionary key or set member already known to repeat when its source is checked reports at the later occurrence, with the first as a related location (`dict.duplicate_key`, `set.duplicate_member`, UNIT-13).

@@ -1385,3 +1385,89 @@ test fixed { eval sample("run.output", 1, false) }
         );
     }
 }
+
+/// TIME-8 and EXPR-9: either collection spelling retains its entries.
+/// Binding a capability and passing it to a capability parameter are uses.
+#[test]
+fn braced_collections_reject_retained_capabilities() {
+    let checked = module(concat!(
+        "const fn accepts(clock: Clock) -> i64 => 1\n",
+        "const fn uses(clock: Clock, flag: bool) -> i64 {\n",
+        "    let alias = {clock}\n",
+        "    let direct = {alias,}\n",
+        "    let nested = {if flag { clock } else { (alias) },}\n",
+        "    let mapped = {1: clock}\n",
+        "    let key = {clock: 1}\n",
+        "    return accepts(alias)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:19 injectable/capability.as_value TIME-8",
+            "m.hgl:6:29 injectable/capability.as_value TIME-8",
+            "m.hgl:6:45 injectable/capability.as_value TIME-8",
+            "m.hgl:7:22 injectable/capability.as_value TIME-8",
+            "m.hgl:8:16 injectable/capability.as_value TIME-8",
+        ]
+    );
+}
+
+/// EXPR-9, TIME-8: a field label in a closure constructs its expected
+/// struct without capturing the outer clock. A dictionary key reads it.
+#[test]
+fn a_contextual_struct_label_is_not_a_capability_capture() {
+    let source = r#"struct Quote { clock: i64 }
+const fn price(q: Quote) -> i64 => q.clock
+const fn make(clock: Clock) -> i64 {
+    let returned = fn() -> Quote => {clock: 1}
+    let passed = fn() -> i64 => price({clock: 2})
+    let constructed = fn() -> Quote => Quote(clock: 3)
+    return returned().clock
+}
+"#;
+    for positive in [
+        source.to_owned(),
+        source.replace("make(clock:", "make(other:"),
+    ] {
+        let checked = module(&positive);
+        assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    }
+    let dict = source.replace("price({clock: 2})", "{ let d = {clock: 2}\n 2 }");
+    let checked = module(&dict);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:44 injectable/capability.as_value TIME-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-19, TIME-8: an unexpanded pack pass keeps the lexical capture check.
+/// Its nested call can independently establish a struct schema.
+#[test]
+fn an_unread_pack_distinguishes_struct_labels_from_capability_keys() {
+    let source = r#"struct Quote { clock: i64 }
+const fn price(q: Quote) -> i64 => q.clock
+const fn count<...A>(items: ...A) -> i64 => 0
+const fn make<...A>(clock: Clock, items: ...A) -> i64 {
+    let pass = fn() -> i64 => count(...{for k in arg_keys(A): price({clock: 1})})
+    return 2
+}
+"#;
+    for body in [
+        "price({clock: 1})",
+        "{ let q: Quote = {clock: 1}\n q.clock }",
+        "{ var q: Quote = Quote(clock: 2)\n q = {clock: 1}\n q.clock }",
+    ] {
+        let checked = module(&source.replace("price({clock: 1})", body));
+        assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    }
+    let checked = module(&source.replace("price({clock: 1})", "{clock: 1}"));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:64 injectable/capability.as_value TIME-8"],
+        "{}",
+        checked.report
+    );
+}

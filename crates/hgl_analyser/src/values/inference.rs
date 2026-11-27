@@ -1277,7 +1277,26 @@ impl<'a> Typer<'a> {
                 }
                 _ => None,
             };
-            if takes_its_type(node) || !(mentions(pattern, &unfound) || widenable.is_some()) {
+            // TYPE-5: field names cannot decide a generic schema. A later
+            // argument may supply it; an earlier inferred struct is already
+            // the literal's expected type and cannot be widened by labels.
+            let keyed = ungrouped(node.clone());
+            let waits_for_schema = keyed.kind() == SyntaxKind::KeyedExpr
+                && (widenable.is_some()
+                    || keyed
+                        .children()
+                        .filter_map(|entry| entry.children().next())
+                        .any(|key| {
+                            crate::syntax::keyed_field_name(&key).is_some()
+                                && self
+                                    .module
+                                    .contextual_type_reports
+                                    .contains_key(&self.at(&key))
+                        }));
+            if takes_its_type(node)
+                || waits_for_schema
+                || !(mentions(pattern, &unfound) || widenable.is_some())
+            {
                 continue;
             }
             // What the argument's type says: a parameter not yet found,
@@ -1833,8 +1852,7 @@ impl<'a> Typer<'a> {
 /// Whether an argument has no complete type without its expected place.
 fn needs_argument_place(node: &SyntaxNode) -> bool {
     let node = ungrouped(node.clone());
-    takes_its_type(&node)
-        || node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+    takes_its_type(&node) || crate::syntax::is_empty_collection_literal(&node)
 }
 
 /// CTRL-10: a constructor supplies a block's tail with its field type.
@@ -1849,7 +1867,7 @@ fn field_needs_argument_place(node: &SyntaxNode) -> bool {
     }
     written_null(&tail)
         || tail.kind() == SyntaxKind::ImpliedMember
-        || (tail.kind() == SyntaxKind::SequenceExpr && tail.children().next().is_none())
+        || crate::syntax::is_empty_collection_literal(&tail)
 }
 
 /// Explicit arguments to ordinary generics and to the positional type

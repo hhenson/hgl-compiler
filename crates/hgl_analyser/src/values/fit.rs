@@ -50,6 +50,15 @@ pub(super) fn checked_child_result(value: &Expr) -> Option<Expr> {
 /// TYPE-10: when an operand or a component fits a public input pattern, keep
 /// its extents in the type it is fitted to. Leave conversions to `fit`.
 pub(super) fn fitted_input_pattern(supplied: &Expr, pattern: &Type) -> Option<Type> {
+    fitted_pattern(&supplied.ty, pattern, Some(supplied))
+}
+
+/// A candidate's declared type has no checked child expression of its own.
+pub(super) fn fits_declared_input_pattern(supplied: &Type, pattern: &Type) -> bool {
+    fitted_pattern(supplied, pattern, None).is_some()
+}
+
+fn fitted_pattern(supplied: &Type, pattern: &Type, expression: Option<&Expr>) -> Option<Type> {
     let matching = |ty: &Type| {
         if !whole(ty) || open(ty) {
             return None;
@@ -65,17 +74,17 @@ pub(super) fn fitted_input_pattern(supplied: &Expr, pattern: &Type) -> Option<Ty
         }
     };
     // A full result can itself match before an ordinary payload read.
-    matching(&supplied.ty)
+    matching(supplied)
         .or_else(|| {
             // ERR-14: a result slot can take a checked child whole. Its list
             // extents are still known even if the public pattern omits them.
             if matches!(pattern, Type::Result { error, .. } if **error == Type::Error) {
-                checked_child_result(supplied).and_then(|result| matching(&result.ty))
+                checked_child_result(expression?).and_then(|result| matching(&result.ty))
             } else {
                 None
             }
         })
-        .or_else(|| matching(received_type(&supplied.ty, |_| true)))
+        .or_else(|| matching(received_type(supplied, |_| true)))
 }
 
 impl<'a> Typer<'a> {

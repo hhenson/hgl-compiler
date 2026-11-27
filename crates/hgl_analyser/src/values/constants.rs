@@ -22,10 +22,10 @@ use crate::hir::{
     Body, Callee, DefaultExpr, Expr, ExprKind, TypePackArgument, Value, walk_statements_mut,
 };
 use crate::program::{Declaration, DeclarationKind, Program, Role};
-use crate::read::{default_of, parameters};
+use crate::read::{default_of, field_initializer, parameters};
 use crate::syntax::{child, name_token, pack_key_branches, tokens};
 use crate::types::{
-    Argument, CallArguments, Constant, ConstantValue, Detail, Field, FieldRef, GenericKind,
+    Argument, CallArguments, Constant, ConstantValue, Detail, FieldRef, GenericKind,
     GenericParameter, Parameter, Signature, StructType, Type,
 };
 use crate::{codes, error};
@@ -1045,19 +1045,6 @@ fn record_field_default_lambda_arguments(body: &mut Body, arguments: &[Argument]
             record_field_default_lambda_arguments(&mut function.body, arguments);
         }
     });
-}
-
-/// The member that writes the initializer, identified by its first token.
-fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNode> {
-    declaration
-        .children()
-        .filter(|member| member.kind() == SyntaxKind::StructMember)
-        .find(|member| {
-            tokens(member)
-                .next()
-                .is_some_and(|name| name.span().start == field.at.span.start)
-        })
-        .and_then(|member| default_of(&member))
 }
 
 /// UNIT-7 and FN-4/17: resolve an excluded name against the paired

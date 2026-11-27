@@ -313,9 +313,30 @@ impl<'a> Typer<'a> {
         // sequence written out, again as the parameter of the candidate
         // selected. EXPR-13: "left operand, configuration entries in
         // their written order, then right operand".
-        let left = match read.take() {
-            Some(value) => Given::read(0, left, value),
-            None => self.operand(0, left),
+        let left_place = if read.is_none()
+            && super::braces::contains_braced_literal(&left)
+            && !super::braces::contains_braced_literal(&right)
+            && let Some(identity) = identity
+        {
+            let mark = self.mark();
+            let entries = config
+                .as_ref()
+                .map(|config| self.configuration(operator.symbol(), config, identity).0)
+                .unwrap_or_default();
+            let other = self.operand(1, right.clone());
+            let found = self.braced_symbol_place(identity, (&left, 0), &other, &entries, place);
+            self.take_back(mark, false);
+            found
+        } else {
+            None
+        };
+        let left = match (read.take(), left_place) {
+            (Some(value), _) => Given::read(0, left, value),
+            (None, Some(ty)) => {
+                let value = self.expression(&left, Some(&ty));
+                Given::read(0, left, value)
+            }
+            (None, None) => self.operand(0, left),
         };
         let (entries, faulty) = match (&config, identity) {
             (Some(config), Some(identity)) => {
@@ -325,7 +346,16 @@ impl<'a> Typer<'a> {
             (Some(_), None) => return (ExprKind::Unread, Type::Unknown),
             (None, _) => (Vec::new(), false),
         };
-        let right = self.operand(1, right);
+        let right = if super::braces::contains_braced_literal(&right)
+            && let Some(identity) = identity
+            && let Some(ty) =
+                self.braced_symbol_place(identity, (&right, 1), &left, &entries, place)
+        {
+            let value = self.expression(&right, Some(&ty));
+            Given::read(1, right, value)
+        } else {
+            self.operand(1, right)
+        };
         self.symbol(
             (operator, operator_at),
             identity,
@@ -333,6 +363,95 @@ impl<'a> Typer<'a> {
             (entries, faulty, config.is_some()),
             place,
         )
+    }
+
+    /// EXPR-10 and TYPE-5: give a grouped brace operand a schema only if
+    /// the other operand alone determines the same place across signatures.
+    /// A differing candidate leaves the brace to its ordinary reading.
+    fn braced_symbol_place(
+        &mut self,
+        operator: OperatorRef,
+        (node, position): (&SyntaxNode, usize),
+        other: &Given,
+        entries: &[Given],
+        result: Option<&Type>,
+    ) -> Option<Type> {
+        let actual = other.ty();
+        if !whole(actual) || open(actual) {
+            return None;
+        }
+        let mut common = None;
+        let wanted = Wanted {
+            place: result,
+            among: None,
+            written: false,
+            callback: None,
+        };
+        for candidate_info @ (_, _, candidate) in self.value_candidates(operator) {
+            let mut inputs = candidate.positional_parameters();
+            let Some((_, left)) = inputs.next() else {
+                continue;
+            };
+            let Some((_, right)) = inputs.next() else {
+                continue;
+            };
+            let (given, needed) = if position == 1 {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            let mut found = vec![None; candidate.generics.len()];
+            super::inference::infer(&given.ty, actual, &candidate.generics, &mut found);
+            let bindings: Vec<_> = candidate
+                .generics
+                .iter()
+                .zip(&found)
+                .filter_map(|(slot, value)| Some((slot.at, value.as_ref()?)))
+                .collect();
+            let given = crate::declared::substitute_within(&given.ty, &bindings);
+            if !self.admits(&given, actual) {
+                continue;
+            }
+            let ty = crate::declared::substitute_within(&needed.ty, &bindings);
+            let missing: Vec<_> = candidate
+                .generics
+                .iter()
+                .zip(&found)
+                .filter_map(|(slot, v)| v.is_none().then_some(slot.at))
+                .collect();
+            if !whole(&ty) || open(&ty) || super::inference::mentions(&ty, &missing) {
+                return None;
+            }
+            // Test the shape without reading any field names. The ordinary
+            // matcher excludes unmet requirements and missing options.
+            let placeholder = Given::read(
+                position,
+                node.clone(),
+                Expr {
+                    at: self.at(node),
+                    ty: ty.clone(),
+                    kind: ExprKind::Unread,
+                    category: ValueCategory::Unsettled,
+                },
+            );
+            let mut operands = entries.to_vec();
+            if position == 0 {
+                operands.extend([placeholder, other.clone()]);
+            } else {
+                operands.extend([other.clone(), placeholder]);
+            }
+            let mark = self.mark();
+            let (admitted, _) = self.admitted(operator, &[candidate_info], &operands, &wanted);
+            self.take_back(mark, false);
+            if admitted.is_empty() {
+                continue;
+            }
+            if common.as_ref().is_some_and(|old| old != &ty) {
+                return None;
+            }
+            common = Some(ty);
+        }
+        common
     }
 
     /// EXPR-6: read the right operand with the facts that hold on the

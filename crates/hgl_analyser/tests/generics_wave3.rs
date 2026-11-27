@@ -4316,3 +4316,29 @@ fn null_allowed() -> bool => nullable("s")"#,
         "{nullable_calls:?}"
     );
 }
+
+/// TYPE-5, EXPR-9 and GEN-7: a settled generic sibling supplies the
+/// types of empty collection literals in the other constructor fields.
+#[test]
+fn inferred_struct_fields_settle_empty_braced_collections() {
+    let checked = module(
+        r#"operator positive<T>(input:T) -> bool
+impl const fn positive<T>(input:T) -> bool => true
+impl fn positive(input:i64) -> bool { when { return input > 0 } }
+enum Side { buy, sell }
+struct Book<U> {
+    first: U
+    tags: set<U>
+    entries: dict<str, U>
+}
+fn select_side<T>(const input:T) -> Side {
+    let chosen = if positive(input) { Side.buy }
+    let book = Book(first:chosen, tags:{,}, entries:{:})
+    return book.first
+}
+test temporal { assert eval select_side(input:1) == [.buy] }
+test constant { assert eval select_side(input:"x") == [.buy] }
+"#,
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}

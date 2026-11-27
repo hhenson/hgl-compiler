@@ -131,6 +131,8 @@ pub(crate) enum Choice {
     Assignment,
     /// A brace and `for` start a pack comprehension instead of a block (FN-19).
     PackComprehension,
+    /// A braced operand contains comma- or colon-delimited entries (EXPR-9).
+    BracedCollection,
 }
 
 /// The opening brackets that directly follow what they apply to (LEX-27).

@@ -489,10 +489,80 @@ impl Parser<'_> {
             LBrace if self.nth(1) == KwFor && self.pack_comprehension_ahead() => {
                 self.pack_comprehension();
             }
+            LBrace if self.braced_collection_ahead() => self.braced_collection(),
             LBrace => self.block(),
             _ => self.expected("an expression"),
         }
         false
+    }
+
+    /// EXPR-9, CTRL-10: only a delimiter after the first complete
+    /// expression distinguishes a collection from the expression of a block.
+    fn braced_collection_ahead(&mut self) -> bool {
+        if matches!(self.nth(1), Colon | Comma) || self.nth_member_name(1) && self.nth(2) == Colon {
+            return true;
+        }
+        if !can_start_expression(self.nth(1)) {
+            return false;
+        }
+        self.choose(Choice::BracedCollection, |parser| {
+            parser.bump();
+            let before = parser.errors;
+            parser.nested(Context::LIST, Self::expression);
+            if parser.errors == before && matches!(parser.current(), Colon | Comma) {
+                Verdict::Yes
+            } else {
+                Verdict::No
+            }
+        }) == Verdict::Yes
+    }
+
+    fn braced_collection(&mut self) {
+        let mark = self.mark();
+        self.bump();
+        let kind = self.nested(Context::LIST, |parser| {
+            if matches!(parser.current(), Colon | Comma) {
+                let keyed = parser.at(Colon);
+                parser.bump();
+                parser.close(RBrace);
+                return if keyed { KeyedExpr } else { SetExpr };
+            }
+            let mut keyed = None;
+            parser.list(RBrace, "a collection entry", true, |parser| {
+                let first = parser.position;
+                let mark = parser.mark();
+                // LEX-9: even a reserved word can name a struct field.
+                // Literal words retain their value in a dictionary key.
+                if parser.at_member_name()
+                    && parser.nth(1) == Colon
+                    && !matches!(parser.current(), KwTrue | KwFalse | KwNull)
+                {
+                    parser.leaf(NameExpr);
+                } else if can_start_expression(parser.current()) {
+                    parser.expression();
+                } else {
+                    return;
+                }
+                let pair = parser.eat(Colon);
+                if pair {
+                    parser.expression();
+                    parser.wrap(mark, SequencePair);
+                }
+                if *keyed.get_or_insert(pair) != pair {
+                    parser.error_behind(
+                        first,
+                        "a collection holds values or key/value entries, not both",
+                        "EXPR-9",
+                    );
+                }
+            });
+            if keyed == Some(true) {
+                KeyedExpr
+            } else {
+                SetExpr
+            }
+        });
+        self.wrap(mark, kind);
     }
 
     /// A brace and `for` can also open a block whose first statement is a loop.

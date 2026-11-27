@@ -38,6 +38,13 @@ use crate::types::{
 };
 use crate::{codes, error};
 
+/// Public input evidence known before candidate matching (GEN-2, TYPE-5).
+#[derive(Default)]
+struct OperatorContext<'a> {
+    generics: Option<&'a [Option<Argument>]>,
+    brace_schemas: &'a [Option<Type>],
+}
+
 /// A deferred named call's arguments and its place as written in the
 /// generic body. Requirement matching still uses that source place.
 #[derive(Clone, Copy)]
@@ -538,7 +545,10 @@ impl<'a> Typer<'a> {
                 let probe = self.read_operator_arguments(
                     signature,
                     written.iter().cloned(),
-                    Some(&inferred),
+                    OperatorContext {
+                        generics: Some(&inferred),
+                        ..Default::default()
+                    },
                     pack.as_ref(),
                     replay,
                     &[],
@@ -548,10 +558,14 @@ impl<'a> Typer<'a> {
             }
             context = Some(inferred);
         }
+        let brace_schemas = self.operator_brace_schemas(public, &found, &written);
         let mut given = self.read_operator_arguments(
             signature,
             written,
-            context.as_deref(),
+            OperatorContext {
+                generics: context.as_deref(),
+                brace_schemas: &brace_schemas,
+            },
             pack.as_ref(),
             replay,
             &candidates,
@@ -1252,7 +1266,10 @@ impl<'a> Typer<'a> {
             bool,
         ),
         written: impl IntoIterator<Item = (Key, SyntaxNode, Option<Expr>)>,
-        context: Option<&[Option<Argument>]>,
+        OperatorContext {
+            generics: context,
+            brace_schemas,
+        }: OperatorContext,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
         candidates: &[Candidate<'_>],
@@ -1276,12 +1293,8 @@ impl<'a> Typer<'a> {
                     .unwrap_or(Argument::Type(Type::Unknown))
             })
             .collect();
-        let map: Vec<_> = public
-            .generics
-            .iter()
-            .map(|generic| generic.at)
-            .zip(&resolved)
-            .collect();
+        let generic_places: Vec<_> = public.generics.iter().map(|generic| generic.at).collect();
+        let map: Vec<_> = generic_places.iter().copied().zip(&resolved).collect();
         let evidence = dependent.map(|_| {
             CallbackEvidence::from_callables(
                 self.program,
@@ -1545,6 +1558,8 @@ impl<'a> Typer<'a> {
                         explicit: Some(ty.clone()),
                         retried: false,
                     }
+                } else if let Some(schema) = public_slot.and_then(|slot| brace_schemas.get(slot)).and_then(Option::as_ref) {
+                    self.give_in(key, node, Some(schema))
                 } else {
                     self.give(key, node)
                 }
@@ -1864,9 +1879,16 @@ impl<'a> Typer<'a> {
     /// One argument of an operator's call, read with nothing expected
     /// of it: what it reports itself is reported here, once.
     pub(super) fn give(&mut self, key: Key, node: SyntaxNode) -> Given {
+        self.give_in(key, node, None)
+    }
+
+    fn give_in(&mut self, key: Key, node: SyntaxNode, schema: Option<&Type>) -> Given {
         let by_place = typed_by_place(&node);
         let mark = self.mark();
-        let value = self.expression(&node, Some(&Type::Unknown));
+        let value = match schema {
+            Some(schema) => self.expression_for_input_pattern(&node, schema),
+            None => self.expression(&node, Some(&Type::Unknown)),
+        };
         // An argument read as the type of its place is read again once
         // the candidate is known. Its first reading, when it reports
         // nothing, is taken back but for what it assigned, which a
@@ -1882,7 +1904,7 @@ impl<'a> Typer<'a> {
             type_evidence: true,
             dependent_callback: None,
             value,
-            explicit: None,
+            explicit: schema.cloned(),
             retried,
             node,
         }
@@ -2321,7 +2343,13 @@ impl<'a> Typer<'a> {
                 parameter: None,
                 pack: None,
                 value: if given.retried && !given.by_function {
-                    self.expression(&given.node, Some(&Type::Unknown))
+                    if let Some(schema) = &given.explicit
+                        && super::braces::contains_braced_literal(&given.node)
+                    {
+                        self.expression_for_input_pattern(&given.node, schema)
+                    } else {
+                        self.expression(&given.node, Some(&Type::Unknown))
+                    }
                 } else {
                     given.value
                 },
@@ -2422,8 +2450,20 @@ impl Typer<'_> {
         let store = &given[store];
         let value_type = match store.ty() {
             Type::Dict { value, .. } => Some(value.as_ref()),
-            // EXPR-9: these pairs take their types from the dictionary candidate.
-            _ if matches!(store.value.kind, ExprKind::Pairs(_)) => None,
+            // ERR-6, EXPR-9: a written colon bracket can take its key/value
+            // types from the dictionary candidate, even though without that
+            // context its provisional reading is an ordinary list of tuples.
+            _ if matches!(store.value.kind, ExprKind::Pairs(_)) || {
+                let node = ungrouped(store.node.clone());
+                node.kind() == SyntaxKind::SequenceExpr
+                    && node
+                        .children()
+                        .next()
+                        .is_some_and(|entry| entry.kind() == SyntaxKind::SequencePair)
+            } =>
+            {
+                None
+            }
             // GEN-7: the operations of every stated member are callable here.
             Type::Parameter { at, .. }
                 if self

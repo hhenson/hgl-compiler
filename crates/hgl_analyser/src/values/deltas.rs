@@ -298,7 +298,7 @@ impl<'a> Typer<'a> {
     }
 
     /// The entries of the properties `written` gives at `position` that
-    /// are written out, `[a, b]` or `[k: v]`: each member, or each key,
+    /// are written out in brackets or braces: each member, or each key,
     /// with what it is as a constant of the property's element or key
     /// type (`crate::constant`). One that is no constant is known only
     /// as the program runs, and is left out.
@@ -315,7 +315,7 @@ impl<'a> Typer<'a> {
                 _ => continue,
             };
             let value = ungrouped(value.clone());
-            if value.kind() != SyntaxKind::SequenceExpr {
+            if !crate::syntax::is_collection_literal(&value) {
                 continue;
             }
             for entry in value.children() {

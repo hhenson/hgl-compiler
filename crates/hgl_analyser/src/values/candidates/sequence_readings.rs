@@ -50,7 +50,13 @@ pub(in crate::values) fn contains_sequence(node: &SyntaxNode) -> bool {
             .children()
             .nth(1)
             .is_some_and(|entry| contains_sequence(&entry)),
-        SyntaxKind::TupleExpr => node.children().any(|entry| contains_sequence(&entry)),
+        SyntaxKind::SetExpr | SyntaxKind::TupleExpr => {
+            node.children().any(|entry| contains_sequence(&entry))
+        }
+        SyntaxKind::KeyedExpr => node
+            .children()
+            .flat_map(|pair| pair.children())
+            .any(|part| contains_sequence(&part)),
         SyntaxKind::Block => value_of_branch(&node).is_some_and(|value| contains_sequence(&value)),
         SyntaxKind::IfExpr => node
             .children()
@@ -156,19 +162,31 @@ fn collect(file: hgl_source::FileId, node: &SyntaxNode, ty: &Type, out: &mut Vec
         (SyntaxKind::SequenceExpr, Type::List { element, .. } | Type::Set(element)) => {
             if node
                 .children()
-                .any(|entry| matches!(entry.kind(), SyntaxKind::SequencePair | SyntaxKind::Hole))
+                .any(|entry| entry.kind() == SyntaxKind::Hole)
             {
                 return;
             }
-            out.push(Reading {
-                at: Location::new(file, node.span()),
-                ty: ty.clone(),
-            });
+            // A colon entry uses a tuple in its list context. Its children
+            // can still contain a disputed bracket, but the outer list cannot.
+            if !node
+                .children()
+                .any(|entry| entry.kind() == SyntaxKind::SequencePair)
+            {
+                out.push(Reading {
+                    at: Location::new(file, node.span()),
+                    ty: ty.clone(),
+                });
+            }
             for entry in node.children() {
                 collect(file, &entry, element, out);
             }
         }
-        (SyntaxKind::SequenceExpr, Type::Dict { key, value }) => {
+        (SyntaxKind::SetExpr, Type::Set(element)) => {
+            for entry in node.children() {
+                collect(file, &entry, element, out);
+            }
+        }
+        (SyntaxKind::SequenceExpr | SyntaxKind::KeyedExpr, Type::Dict { key, value }) => {
             for pair in node
                 .children()
                 .filter(|entry| entry.kind() == SyntaxKind::SequencePair)
@@ -188,7 +206,7 @@ fn collect(file: hgl_source::FileId, node: &SyntaxNode, ty: &Type, out: &mut Vec
                 collect(file, &payload, tagged_side(success, value, error).0, out);
             }
         }
-        (SyntaxKind::TupleExpr, Type::Tuple(elements)) => {
+        (SyntaxKind::TupleExpr | SyntaxKind::SequencePair, Type::Tuple(elements)) => {
             for (entry, ty) in node.children().zip(elements) {
                 collect(file, &entry, ty, out);
             }

@@ -1806,6 +1806,24 @@ fn the_full_comparison_sits_with_the_comparisons() {
 // ---- EXPR-9 ----
 
 #[test]
+fn operand_braces_preserve_blocks_and_identify_collections_by_their_delimiter() {
+    for (source, form) in [
+        ("let x = {}", "Block["),
+        ("let x = {a}", "Block["),
+        ("let x = {a,}", "SetExpr["),
+        ("let x = {,}", "SetExpr["),
+        ("let x = {:}", "KeyedExpr["),
+        ("let x = {f(a: 1): 2}", "KeyedExpr["),
+        ("let x = {if: 1}", "KeyedExpr["),
+    ] {
+        assert!(statements(source).contains(form), "{source}");
+    }
+    let errors = rejected(Entry::Statements, "let x = {a: 1, b}");
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("EXPR-9") && errors[0].contains("not both"));
+}
+
+#[test]
 fn a_sequence_holds_values_or_pairs() {
     // EXPR-9: "`[a]` has one value entry; `[a: b]` has one pair entry...
     // Empty brackets have no entries."

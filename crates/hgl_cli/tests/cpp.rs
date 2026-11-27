@@ -898,7 +898,12 @@ fn value_code_runs_on_the_sdk() {
         "src/demo.values.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.values.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let collections = write(
+        &root,
+        "src/demo.collections.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.collections.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &collections, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -907,7 +912,7 @@ fn value_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 19 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2641,7 +2646,7 @@ fn graph_list_literals_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

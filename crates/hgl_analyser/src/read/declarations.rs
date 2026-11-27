@@ -17,7 +17,7 @@ use crate::types::{
 use crate::{codes, error, local_error};
 
 use super::{
-    Id, Position, Reader, default_of, is_const, is_empty_sequence, is_null, is_type,
+    Id, Position, Reader, default_of, is_const, is_empty_collection, is_null, is_type,
     names_before_colon, type_child,
 };
 
@@ -611,7 +611,7 @@ impl Reader<'_> {
             // The default is the member's child that is no type.
             let written = member.children().find(|part| !is_type(part.kind()));
             let null_default = written.as_ref().is_some_and(is_null);
-            let empty_default = written.as_ref().is_some_and(is_empty_sequence);
+            let empty_default = written.as_ref().is_some_and(is_empty_collection);
             fields.push(Field {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
