@@ -283,6 +283,50 @@ fn selected_runtime_patterns_preserve_fixed_store_key_checks() {
     }
 }
 
+/// GEN-13: a recovered store-only read retains its lower budget priority
+/// when another ordinary const input is actually read for formatting.
+#[test]
+fn recovered_store_inputs_do_not_spend_the_formatting_read_budget_first() {
+    let body = concat!(
+        "operator keep<T>{const pattern: str = \"<{}>\"}(value: T) -> str\n",
+        "impl const fn keep{const pattern: str}(value: i64) -> str => pattern\n",
+        "operator shown<T>{const pattern: str}(value: T) -> str\n",
+        "impl const fn shown{const pattern: str}(value: i64) -> str => format(pattern, value)\n",
+        "impl const fn shown{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "const fn show<T>(const p: str, value: T) -> str requires T in {i64, f64} => shown{pattern:p}(value)\n",
+        "const fn save<T>(store: GlobalState, const key: str, const p: str, value: T) requires T in {i64, f64} && keep(T) -> str {\n",
+        "    let ignored = keep{pattern: key}(value)\n",
+        "    let message = show(p, value)\n",
+        "    put(store, key, 7)\n",
+        "}\n",
+        "fn node(const key: str) {\n",
+        "    inject global_state\n",
+        "    when {}\n",
+        "    stop { save(global_state, key, \"{:x}\", 1) }\n",
+        "}\n",
+    );
+    for reversed in [false, true] {
+        let body = if reversed {
+            body.replace(
+                "const key: str, const p: str",
+                "const p: str, const key: str",
+            )
+            .replace(
+                "save(global_state, key, \"{:x}\", 1)",
+                "save(global_state, \"{:x}\", key, 1)",
+            )
+        } else {
+            body.to_owned()
+        };
+        let source = format!(
+            "{body}test safe {{ eval node(key: \"{}\") }}\n",
+            "a".repeat(1 << 16),
+        );
+        let checked = with_core(&source);
+        assert!(!checked.rejected, "reversed={reversed}: {}", checked.report);
+    }
+}
+
 /// GEN-7: an independent const input rejects at its body call once.
 #[test]
 fn formatting_checks_independent_const_inputs_once() {
