@@ -135,8 +135,8 @@ impl Emitter<'_> {
             ExprKind::Call { text, .. } => text.as_deref(),
             _ => None,
         };
-        if let Some(signature) = hgl_analyser::formatting::value_signature(self.program, callee) {
-            return self.format_call(scope, callee, signature, arguments, text, whole);
+        if let Some(renderer) = hgl_analyser::formatting::renderer(self.program, callee) {
+            return self.format_call(scope, callee, renderer, arguments, text, whole);
         }
         if let Callee::Anonymous(function) = callee {
             if !function.template.value {
@@ -250,11 +250,21 @@ impl Emitter<'_> {
                 if Some(module) != program.core() || !(self.provides)(&name) {
                     return self.missing(at, &format!("the native function `{}`", declared.name));
                 }
-                let Some(templated) = self.templated(&names::native(&name), &[], generics, at)
-                else {
-                    return "0".to_string();
+                let name = names::native(&name);
+                // TIME-9: the adapter deduces its view types from the borrows.
+                let name = if declared_signature
+                    .parameters
+                    .iter()
+                    .any(|p| matches!(p.ty, Type::Endpoint(_)))
+                {
+                    name
+                } else {
+                    let Some(name) = self.templated(&name, &[], generics, at) else {
+                        return "0".to_string();
+                    };
+                    name
                 };
-                (templated, declared_signature)
+                (name, declared_signature)
             }
             _ => return self.missing(at, "a call of a temporal function"),
         };
@@ -360,6 +370,21 @@ impl Emitter<'_> {
             };
             let parameter = &signature.parameters[index];
             if let Type::Endpoint(payload) = &parameter.ty {
+                if callee.declaration().is_some_and(|(module, declaration)| {
+                    matches!(
+                        program.modules[module].declarations[declaration].kind,
+                        DeclarationKind::NativeFunction(_)
+                    )
+                }) {
+                    let view = self.expression(scope, &argument.value);
+                    written.push((
+                        index,
+                        view,
+                        self.may_fail_here(&argument.value),
+                        Held::Borrow,
+                    ));
+                    continue;
+                }
                 // A hidden FN-14 capture passes the selector itself,
                 // without checking its position or reading its payload (ERR-14).
                 let value = match argument.value.kind {
@@ -605,6 +630,7 @@ impl Emitter<'_> {
                     given[index] = value;
                     continue;
                 }
+                Held::Borrow => "const auto&".to_string(),
                 Held::Place => "auto&".to_string(),
                 Held::Reference(ty) if !changing => format!("const {ty}&"),
                 Held::Reference(ty) | Held::Value(ty) => format!("const {ty}"),
@@ -738,6 +764,8 @@ impl Emitter<'_> {
 /// call is made, with the C++ type of the value it holds.
 #[derive(Clone)]
 enum Held {
+    /// A native endpoint view, borrowed until return even if another argument writes.
+    Borrow,
     /// A place given to a `var` parameter: a reference to it.
     Place,
     /// A place given to a `var` parameter beside an argument that runs

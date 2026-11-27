@@ -219,6 +219,8 @@ parser: done
 
 analyser: done
 
+- Native value declarations accept an endpoint as the element of a positional or named endpoint pack under FN-8. Endpoint types in ordinary storage and results reject.
+
 - `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
 - A `signal` parameter marked `ref` is `ref.position` (FN-16)
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)

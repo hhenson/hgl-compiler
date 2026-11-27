@@ -3,8 +3,9 @@
 //! and typed values. Argument expressions run once in source order.
 //! Core's value `debug_print` calls this formatter and flushes the line
 //! through `write` (DBG-1, DBG-3, DBG-9).
-//! Graph calls currently lift this value formatter (FMT-6, FMT-8, FN-11),
-//! so whole inputs use value rendering until #434 supplies the graph body.
+//! The graph renderer borrows its input views (TIME-9) and reads their
+//! state for the requested places. Lifted value calls retain whole-value
+//! rendering on each admitted tick (FMT-6, FMT-8, FN-11).
 
 use std::fmt::Write;
 
@@ -25,11 +26,12 @@ impl Emitter<'_> {
         &mut self,
         scope: &mut Scope,
         callee: &Callee,
-        signature: &Signature,
+        renderer: formatting::Renderer<'_>,
         arguments: &[Argument],
         text: Option<&TextCall>,
         whole: &Expr,
     ) -> String {
+        let signature = renderer.signature;
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
             return self.missing(whole.at, "a format call without a pattern");
         };
@@ -57,7 +59,15 @@ impl Emitter<'_> {
             }
             let value = self.expression(scope, &argument.value);
             let name = temporary("format_argument", self.temporary());
-            let _ = write!(statements, "[[maybe_unused]] const auto {name} = {value}; ");
+            let held_type = if matches!(argument.value.ty, Type::Endpoint(_)) {
+                "const auto&"
+            } else {
+                "const auto"
+            };
+            let _ = write!(
+                statements,
+                "[[maybe_unused]] {held_type} {name} = {value}; "
+            );
             held.push(name);
         }
         let Some(not_valid) = self.format_option(
@@ -83,29 +93,33 @@ impl Emitter<'_> {
         let output = temporary("format_text", self.temporary());
         let _ = write!(statements, "::hglrt::str {output}; ");
         let mut wall_time = None;
+        // The graph format node passes its injected Clock (CAP-3).
+        // A lifted public format call has an output endpoint for that cycle.
+        let cycle_time = renderer
+            .clock_argument(arguments)
+            .map(|index| format!("{}.evaluation_time()", held[index]))
+            .or_else(|| {
+                (self.kind() == Some(Kind::Lifted)).then(|| format!("{OUT}.evaluation_time()"))
+            });
         let mut engine_time = None;
         let mut next_position = 0;
         for part in parts {
             match part {
                 Piece::Text(text) => append_text(&mut statements, &output, text),
                 Piece::Place(place) => {
-                    let (held, ty, at, conversion) = if matches!(
-                        place.name,
-                        "wall_time" | "engine_time"
-                    ) {
-                        // FMT-9: the lifted node already owns its cycle's
-                        // time through its output endpoint, not a native
-                        // argument. Read each reserved clock only once.
+                    let clock_place = matches!(place.name, "wall_time" | "engine_time");
+                    let (held, ty, at, conversion) = if clock_place {
+                        // FMT-9: read each requested clock once.
                         let (clock, source) = if place.name == "engine_time" {
-                            if self.kind() != Some(Kind::Lifted) {
+                            let Some(source) = cycle_time.as_ref() else {
                                 return self.missing(
-                                        pattern.value.at,
-                                        "an {engine_time} format place without a lifted node's cycle context",
-                                    );
-                            }
-                            (&mut engine_time, format!("{OUT}.evaluation_time()"))
+                                    pattern.value.at,
+                                    "an {engine_time} format place without a lifted node's cycle context",
+                                );
+                            };
+                            (&mut engine_time, source.as_str())
                         } else {
-                            (&mut wall_time, "::hglrt::format_wall_time()".to_string())
+                            (&mut wall_time, "::hglrt::format_wall_time()")
                         };
                         let held = clock.get_or_insert_with(|| {
                             let name = temporary(place.name, self.temporary());
@@ -133,19 +147,37 @@ impl Emitter<'_> {
                             conversions.get(index).and_then(Option::as_ref),
                         )
                     };
-                    if let Some(payload) = formatting::marked_payload(self.program, ty) {
-                        if place.marked {
-                            let _ = write!(
-                                statements,
-                                "if ({held}.ticked) {{ {output} += {ticked}; }} "
-                            );
+                    // FMT-7, FMT-9: a borrow supplies live metadata; an
+                    // ordinary Marked value carries the metadata as fields.
+                    let marked = match ty {
+                        Type::Endpoint(payload) => Some((
+                            payload.as_ref(),
+                            format!("::hglrt::fn_modified({held})"),
+                            format!("::hglrt::fn_valid({held})"),
+                            format!("::hglrt::checked_whole({held})"),
+                        )),
+                        ordinary => {
+                            formatting::marked_payload(self.program, ordinary).map(|payload| {
+                                (
+                                    payload,
+                                    format!("{held}.ticked"),
+                                    format!("{held}.value"),
+                                    format!("(*{held}.value)"),
+                                )
+                            })
                         }
-                        let _ = write!(statements, "if ({held}.value) {{ ");
+                    };
+                    if let Some((payload, modified, valid, value)) = marked {
+                        if place.marked {
+                            let _ =
+                                write!(statements, "if ({modified}) {{ {output} += {ticked}; }} ");
+                        }
+                        let _ = write!(statements, "if ({valid}) {{ ");
                         self.format_field(
                             scope,
                             &mut statements,
                             &output,
-                            &format!("(*{held}.value)"),
+                            &value,
                             (payload, at, conversion),
                             place.specifier,
                         );

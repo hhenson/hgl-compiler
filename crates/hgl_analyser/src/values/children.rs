@@ -640,7 +640,7 @@ impl Typer<'_> {
     /// The child is named and not read: an index in it is read, as any
     /// value is.
     pub(super) fn child_endpoint(&mut self, node: &SyntaxNode) -> Option<Option<Expr>> {
-        self.read_child_endpoint(node, false)
+        self.read_child_endpoint(node, false, false)
     }
 
     /// Like [`Typer::child_endpoint`], with deferral for endpoint operations
@@ -649,6 +649,7 @@ impl Typer<'_> {
         &mut self,
         node: &SyntaxNode,
         defer_child: bool,
+        borrow_pack_entry: bool,
     ) -> Option<Option<Expr>> {
         let named = super::endpoint_argument(node);
         let mut root = named.clone();
@@ -672,6 +673,11 @@ impl Typer<'_> {
         let child = self.expression(&named, None);
         self.naming = before;
         let has_child = self.child_of(&child).is_some()
+            || (borrow_pack_entry
+                && matches!(
+                    child.kind,
+                    ExprKind::PackEntry { .. } | ExprKind::DeferredPackRead
+                ))
             || (defer_child
                 && !matches!(child.kind, ExprKind::DeferredPackRead)
                 && self.deferred_pack_selection(&child).is_some());

@@ -2468,6 +2468,52 @@ fn a_capability_is_made_before_the_initializers_that_read_it() {
     assert!(made < read, "{start}");
 }
 
+/// FMT-9: a graph format call samples the injected clock only when requested.
+#[test]
+fn graph_format_reads_the_clock_once_for_repeated_places() {
+    for (pattern, expected, reads, marks) in [
+        ("{clock}", "7", 0, 0),
+        ("{*clock}", "*7", 0, 1),
+        (
+            "{clock} {engine_time:%S.6} {engine_time:%S.6}",
+            "7 00.000001 00.000001",
+            1,
+            0,
+        ),
+    ] {
+        let source = r#"module quote
+fn describe(value: i64) -> str => format{require_valid: false}("PATTERN", clock: value)
+test renders { assert eval describe(value: [7]) == ["EXPECTED"] }"#
+            .replace("PATTERN", pattern)
+            .replace("EXPECTED", expected);
+        let emitted = emit_with(&[("quote.hgl", &source)], &hgl_cpp::runtime::provides);
+        assert_eq!(emitted.blocked("renders"), None);
+        let unit = emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == "modules/mod-core.cpp")
+            .expect("the graph format node");
+        let render = unit
+            .text
+            .lines()
+            .find(|line| line.contains("format_text_") && line.contains("out_.set("))
+            .expect("the graph format return expression");
+        assert_eq!(
+            render.matches(".evaluation_time()").count(),
+            reads,
+            "{pattern}"
+        );
+        assert_eq!(render.matches("::hglrt::fn_modified(").count(), marks);
+        let valid = render.find("::hglrt::fn_valid(").expect("validity guard");
+        let read = render
+            .find("::hglrt::checked_whole(")
+            .expect("payload read");
+        assert!(valid < read, "{render}");
+        assert!(render.contains("const auto& format_argument"), "{render}");
+    }
+}
+
 /// TST-5, CEVAL-1: a temporal input given a stored eval trace is wired
 /// to the replay of its recording.
 #[test]
@@ -3815,4 +3861,46 @@ fn type_queries_of_untyped_primitive_calls_decline_cleanly() {
             "{operand}: {blocked}"
         );
     }
+}
+
+/// FN-8, FN-19, TIME-9: each native pack entry receives its own
+/// endpoint view, in binding order, even when the node admits invalid inputs.
+#[test]
+fn native_endpoint_packs_expand_to_views() {
+    let made = emit_with(
+        &[
+            (
+                "inspect.hgl",
+                r#"module core part inspection
+export native const fn inspect_views<...As, ...Ks>(
+    const label: str, args: ...endpoint<As>, kwargs: ...{endpoint<Ks>}) -> i64"#,
+            ),
+            (
+                "quote.hgl",
+                r#"module quote
+fn pass<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> i64 {
+    when valid([]) { return inspect_views("quote", ...args, ...kwargs) }
+}
+fn quote(px: i64, bid: str) -> i64 => pass(px, 7.0, side: bid)
+test views { assert eval quote(px: [7], bid: ["bid"]) == [1] }"#,
+            ),
+        ],
+        &|name| name == "fn_inspect_views" || hgl_cpp::runtime::provides(name),
+    );
+    assert_eq!(made.blocked("views"), None, "{:?}", made.reported);
+    let unit = made
+        .output
+        .files
+        .iter()
+        .find(|f| f.path == "modules/mod-quote.cpp")
+        .unwrap();
+    let call = unit
+        .text
+        .lines()
+        .find(|line| line.contains("::hglrt::fn_inspect_views("))
+        .unwrap();
+    for name in ["pack_0_0", "pack_0_1", "pack_1_0_side"] {
+        assert!(call.contains(name), "{call}");
+    }
+    assert!(!call.contains("checked_value"), "{call}");
 }

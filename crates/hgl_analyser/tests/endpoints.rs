@@ -404,3 +404,71 @@ fn all_valid_takes_a_collection_and_guards_it() {
         ["m.hgl:17:39 phase/endpoint.argument TIME-9"]
     );
 }
+
+/// FN-8, FN-19, TIME-9: a borrowed pack reflects the input payloads;
+/// each receiving formal decides whether the hook reads or borrows.
+#[test]
+fn native_packs_borrow_temporal_entries_and_reflect_their_payloads() {
+    let source = r#"
+native const fn inspect<...As, ...Ks>(
+    const tag: str, args: ...endpoint<As>, kwargs: ...{endpoint<Ks>}
+) -> i64
+    requires each k in arg_keys(As) { As[k] == i64 }
+          && each k in arg_keys(Ks) { Ks[k] == str }
+fn pass<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> i64 {
+    when valid([]) { return inspect("quote", ...args, ...kwargs) }
+}
+fn both(a: i64, b: str) -> i64 {
+    when valid([]) { return inspect("quote", a, bid: b) }
+}
+fn wired(a: i64) -> i64 => pass(a, label: "bid")
+fn empty(a: i64) -> i64 => pass()
+"#;
+    let checked = module(source);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let wrong = module(&source.replace("bid: b", "bid: a"));
+    assert_eq!(wrong.findings.len(), 1, "{}", wrong.report);
+    assert_eq!(wrong.findings[0].code, "constraint/requires.unmet");
+}
+
+#[test]
+fn an_ordinary_value_cannot_supply_a_borrowed_pack_and_a_value_pack_still_reads() {
+    for (declarations, error) in [
+        (
+            r#"native const fn inspect<...As>(args: ...endpoint<As>) -> i64
+fn read(tick: i64) -> i64 { when { return inspect(3) } }"#,
+            "phase/endpoint.argument",
+        ),
+        (
+            r#"native const fn inspect<...As>(args: ...endpoint<As>) -> i64
+const fn pass<...As>(args: ...As) -> i64 => inspect(...args)
+const fn call() -> i64 => pass(3)"#,
+            "phase/endpoint.argument",
+        ),
+        (
+            r#"native const fn inspect<...Ks>(payload: i64, args: ...{endpoint<Ks>}) -> i64
+fn pass<...As>(args: ...As) -> i64 { when valid([]) { return inspect(...args) } }
+fn call(a: i64) -> i64 => pass(a)"#,
+            "phase/payload.unguarded",
+        ),
+        (
+            r#"native const fn inspect(args: ...endpoint<str>) -> i64
+fn read(tick: i64) -> i64 { when valid([]) { return inspect(tick) } }"#,
+            "type/type.mismatch",
+        ),
+        (
+            r#"native const fn inspect<...As>(args: ...endpoint<As>) -> i64
+fn read<...As>(args: ...As) -> i64 { when { return inspect(...{for k in arg_keys(As): args[k]}) } }
+fn call(a: i64) -> i64 => read(a)"#,
+            "phase/endpoint.argument",
+        ),
+        (
+            "const fn read<...As>(args: ...endpoint<As>) -> i64 => 1",
+            "type/endpoint.position",
+        ),
+    ] {
+        let checked = module(declarations);
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, error, "{}", checked.report);
+    }
+}

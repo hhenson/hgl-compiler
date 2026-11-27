@@ -87,6 +87,8 @@ pub(crate) fn defer_pack_branch_reports(
 pub(super) struct ForwardedArgument {
     /// The source pack key before binding to the destination.
     pub(super) key: PackKey,
+    /// The node's temporal input pack when forwarding its entries wholesale.
+    pub(super) input: Option<LocalId>,
     /// Where the spread's pack expression is written.
     pub(super) source: SyntaxNode,
     /// The typed read of the entry in the enclosing instance.
@@ -751,6 +753,7 @@ impl<'a> Typer<'a> {
                 let at = self.at(&source);
                 forwarded.extend(entries.iter().map(|(key, entry)| ForwardedArgument {
                     key: key.clone(),
+                    input: None,
                     source: source.clone(),
                     value: Expr {
                         kind: ExprKind::Local(*entry),
@@ -762,6 +765,7 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let category = self.locals[local].category;
+            let temporal = (self.hook.is_some() && self.is_temporal_input(local)).then_some(local);
             for input in inputs
                 .values
                 .iter()
@@ -779,6 +783,7 @@ impl<'a> Typer<'a> {
                 };
                 forwarded.push(ForwardedArgument {
                     key,
+                    input: temporal,
                     source: source.clone(),
                     value,
                 });
@@ -815,7 +820,12 @@ impl<'a> Typer<'a> {
                         .push((name.text().to_string(), key.clone()));
                     self.report_pack_branch(&source);
                     let value = self.expression(&source, None);
-                    forwarded.push(ForwardedArgument { key, source, value });
+                    forwarded.push(ForwardedArgument {
+                        key,
+                        input: None,
+                        source,
+                        value,
+                    });
                     self.pack_passes.pop();
                     self.bound.truncate(before);
                 }
@@ -1264,7 +1274,9 @@ impl crate::Program {
                     },
                     &|constant| constant.value.key().is_none(),
                 );
-                let ty = if unresolved {
+                let ty = if matches!(declared.ty, Type::Endpoint(_)) {
+                    argument.value.ty.clone()
+                } else if unresolved {
                     argument
                         .value
                         .ty
@@ -1528,15 +1540,15 @@ pub(super) fn check_instances(
     forwarding.extend(&program.deferred_list_sizes);
     let mut callers = HashMap::<_, Vec<_>>::new();
     // GEN-5 and GEN-7: a call whose candidate each instance selects may
-    // select one that forwards; each candidate of its operator is called.
-    let mut candidates = HashMap::<(usize, usize), Vec<(usize, usize)>>::new();
+    // select one that forwards; keep its operator's candidates and their roles.
+    let mut candidates = HashMap::<_, Vec<_>>::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, declared) in unit.declarations.iter().enumerate() {
-            if let Some((_, Some(operator))) = declared.kind.candidate() {
+            if let Some((role, Some(operator))) = declared.kind.candidate() {
                 candidates
                     .entry((operator.module, operator.declaration))
                     .or_default()
-                    .push((module, declaration));
+                    .push((role, (module, declaration)));
             }
         }
     }
@@ -1554,8 +1566,13 @@ pub(super) fn check_instances(
             });
             for selected in unit.selecting.get(declaration).into_iter().flatten() {
                 let operator = (selected.operator.module, selected.operator.declaration);
-                for &candidate in candidates.get(&operator).into_iter().flatten() {
-                    callers.entry(candidate).or_default().push(owner);
+                for &(role, candidate) in candidates.get(&operator).into_iter().flatten() {
+                    // GEN-5: a call outside graph composition can only run a
+                    // value candidate. An unrelated temporal pack body cannot
+                    // make this declaration a forwarding body.
+                    if selected.graph || role == crate::Role::Value {
+                        callers.entry(candidate).or_default().push(owner);
+                    }
                 }
             }
         }

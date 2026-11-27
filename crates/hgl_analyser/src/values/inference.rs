@@ -1621,6 +1621,10 @@ impl<'a> Typer<'a> {
                             .get(pack.as_ref()?.0)
                     });
                 let ty = match (written_type, pattern) {
+                    (Some(ty), Type::Endpoint(_)) => Type::Endpoint(Box::new(ty.clone())),
+                    (None, Type::Endpoint(_)) if slots[index].type_pack.is_some() => {
+                        Type::Endpoint(Box::new(Type::Unknown))
+                    }
                     (Some(ty), Type::Trace { .. }) => trace_input_type(ty.clone()),
                     (Some(ty), _) => ty.clone(),
                     // TST-5 and GEN-17: form the publication type after a
@@ -1672,7 +1676,7 @@ impl<'a> Typer<'a> {
                     None => mentions(patterns[index], &unfound),
                 };
                 let placeless = *settled
-                    && !matches!(slot.ty, Type::Function(_))
+                    && !matches!(slot.ty, Type::Endpoint(_) | Type::Function(_))
                     && !(reflected_trace || traced && pack.is_some())
                     && !takes_its_type(node)
                     && !depends_on_instance
@@ -1884,7 +1888,11 @@ pub(super) struct ExplicitGenerics {
 /// The generic parameter of a heterogeneous value pack (FN-8).
 pub(super) fn type_pack(parameter: &Parameter, generics: &[GenericParameter]) -> Option<usize> {
     parameter.pack?;
-    bare_parameter(&parameter.ty, generics)
+    let payload = match &parameter.ty {
+        Type::Endpoint(payload) => payload.as_ref(),
+        ordinary => ordinary,
+    };
+    bare_parameter(payload, generics)
         .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
 }
 

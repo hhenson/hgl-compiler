@@ -55,10 +55,11 @@ pub(super) fn retry_module_patterns(program: &mut crate::Program, diagnostics: &
                 else {
                     return;
                 };
-                let Some(signature) = formatting::value_signature(program, callee) else {
+                let Some(renderer) = formatting::renderer(program, callee) else {
                     return;
                 };
-                if let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                if let Some(pattern) =
+                    formatting::argument(renderer.signature, arguments, "fmt_str")
                     && pending.contains_key(&pattern.value.at)
                     && formatting::constant_pattern_in(program, &pattern.value, &[]).is_ok()
                 {
@@ -82,8 +83,9 @@ pub(super) fn retry_module_patterns(program: &mut crate::Program, diagnostics: &
                     text: None,
                     ..
                 } = &value.kind
-                    && let Some(signature) = formatting::value_signature(typer.program, callee)
-                    && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                    && let Some(renderer) = formatting::renderer(typer.program, callee)
+                    && let Some(pattern) =
+                        formatting::argument(renderer.signature, arguments, "fmt_str")
                     && ready.contains(&pattern.value.at)
                     && let Some(&(graph, value_code)) = pending.get(&pattern.value.at)
                 {
@@ -206,10 +208,10 @@ impl Typer<'_> {
             return;
         };
         *planned = None;
-        let Some(signature) = formatting::value_signature(self.program, callee) else {
+        let Some(renderer) = formatting::renderer(self.program, callee) else {
             return;
         };
-        let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
+        let Some(pattern) = formatting::argument(renderer.signature, arguments, "fmt_str") else {
             return;
         };
         if pattern.value.ty == Type::Unknown || matches!(pattern.value.kind, ExprKind::Unread) {
@@ -268,6 +270,7 @@ impl Typer<'_> {
         let Some(parts) = self.checked_places(&pattern.value, &text) else {
             return;
         };
+        let clock = renderer.clock_argument(arguments);
         let mut used = vec![false; arguments.len()];
         let mut conversions = vec![None; arguments.len()];
         let mut next_position = 0;
@@ -278,7 +281,7 @@ impl Typer<'_> {
             };
             // TST-3 temporarily reads an eval's target as composition,
             // but its trace cells and const operands remain value code.
-            if place.name == "engine_time" && (!self.graph || self.value_code) {
+            if place.name == "engine_time" && clock.is_none() && (!self.graph || self.value_code) {
                 missing = true;
                 self.format_fault(
                     &pattern.value,
@@ -317,7 +320,10 @@ impl Typer<'_> {
                 used[index] = true;
                 (&arguments[index].value.ty, Some(index))
             };
-            let payload = formatting::marked_payload(self.program, ty);
+            let payload = match ty {
+                Type::Endpoint(payload) => Some(payload.as_ref()),
+                ordinary => formatting::marked_payload(self.program, ordinary),
+            };
             let effective = payload.unwrap_or(ty);
             let text_type = not_null(Some(effective)).unwrap_or(effective);
             if names_parameter(effective) || effective == &Type::Unknown {

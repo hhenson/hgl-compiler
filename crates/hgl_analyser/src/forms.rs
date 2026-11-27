@@ -268,8 +268,14 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         // by its bare name.
         if let Some(named) = child(&parameter, SyntaxKind::PackType) {
             let inner = named.children().next();
-            let pack_name = inner
+            let payload = inner.as_ref().and_then(|ty| {
+                (ty.kind() == SyntaxKind::EndpointType)
+                    .then(|| ty.children().next())
+                    .flatten()
+            });
+            let pack_name = payload
                 .as_ref()
+                .or(inner.as_ref())
                 .filter(|inner| {
                     inner.kind() == SyntaxKind::NamedType && inner.children().next().is_none()
                 })

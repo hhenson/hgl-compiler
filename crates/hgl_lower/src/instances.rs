@@ -119,6 +119,7 @@ impl NativePack {
         if !matches!(
             owner.declarations[declaration].kind,
             DeclarationKind::NativeCandidate(Role::Value, _)
+                | DeclarationKind::NativeFunction(Role::Value)
         ) {
             return None;
         }
