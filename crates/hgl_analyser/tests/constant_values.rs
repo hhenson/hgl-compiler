@@ -833,6 +833,536 @@ fn integer_division_and_mixed_comparison_are_exact() {
     );
 }
 
+/// TYPE-10, TIME-2 and CTRL-13: a graph's local fixed extent cannot
+/// take a connection. Type-only queries and ordinary construction-time
+/// values retain their existing behavior.
+#[test]
+fn a_graph_locals_list_size_cannot_be_a_connection() {
+    expect(
+        concat!(
+            "fn direct(size: i64) -> i64 {\n",
+            "    var held: list<i64, size>\n",
+            "    return 0\n",
+            "}\n",
+            "fn computed(size: i64) -> i64 {\n",
+            "    let held: list<i64, size + 1> = [1, 2]\n",
+            "    return 0\n",
+            "}\n",
+            "fn nested(size: i64) -> i64 {\n",
+            "    var held: tuple<str, list<i64, size>>\n",
+            "    return 0\n",
+            "}\n",
+            "fn aliased(size: i64) -> i64 {\n",
+            "    let extent = size + 1\n",
+            "    var held: list<i64, (extent)>\n",
+            "    return 0\n",
+            "}\n",
+            "fn branched(size: i64) -> i64 {\n",
+            "    var held: list<i64, if false { size } else { 2 }>\n",
+            "    return 0\n",
+            "}\n",
+        ),
+        &[
+            "3 list.size",
+            "7 list.size",
+            "11 list.size",
+            "16 list.size",
+            "20 list.size",
+        ],
+    );
+    expect(
+        concat!(
+            "const LENGTH: i64 = 2\n",
+            "fn sized<const N: i64>(const configured: i64, input: i64) -> i64 {\n",
+            "    let fixed: list<i64, LENGTH> = [4, 5]\n",
+            "    var generic: list<i64, N>\n",
+            "    var ordinary: list<i64, configured>\n",
+            "    var typed: list<i64, if type(input) == type(0) { 2 } else { 1 }>\n",
+            "    return input + fixed[0]\n",
+            "}\n",
+        ),
+        &[],
+    );
+}
+
+/// TYPE-10 and TIME-2: an immediate call used as a size also reads its
+/// lexical captures. A body that is only formed contributes no read.
+#[test]
+fn a_local_list_size_checks_immediate_anonymous_captures() {
+    expect(
+        concat!(
+            "fn captured(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => input + x)(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn passed(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => x + 3)(input)>\n",
+            "    return input\n",
+            "}\n",
+            "fn nested(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => (fn(y: i64) => input + y)(x))(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn local(input: i64) -> i64 {\n",
+            "    let length = (fn(x: i64) => input + x)(3)\n",
+            "    var held: list<i64, length>\n",
+            "    return input\n",
+            "}\n",
+            "fn selected(input: i64) -> i64 {\n",
+            "    let length = (fn(flag: bool) => if flag { input } else { 3 })(true)\n",
+            "    var held: list<i64, length>\n",
+            "    return input\n",
+            "}\n",
+            "fn live_choice(input: bool) -> i64 {\n",
+            "    let length = (fn() -> i64 {\n",
+            "        if input { return 3 }\n",
+            "        return 4\n",
+            "    })()\n",
+            "    var held: list<i64, length>\n",
+            "    return 0\n",
+            "}\n",
+        ),
+        &[
+            "3 list.size",
+            "7 list.size",
+            "11 list.size",
+            "16 list.size",
+            "21 list.size",
+            "29 list.size",
+        ],
+    );
+    expect(
+        concat!(
+            "fn ordinary(input: i64) -> i64 {\n",
+            "    let ordinary_call = (fn(x: i64) => input + x)(3)\n",
+            "    let count: i64 = 4\n",
+            "    var held: list<i64, (fn(x: i64) => count + x)(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn unused(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) -> i64 {\n",
+            "        fn(y: i64) => (fn(z: i64) => input + z)(y)\n",
+            "        return x + 3\n",
+            "    })(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn cold(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => if type((fn(y: i64) => input + y)(x)) == type(0) { 2 } else { 1 })(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn cold_branch(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => if false { input + x } else { 3 })(2)>\n",
+            "    return input\n",
+            "}\n",
+            "fn cold_return(input: i64) -> i64 {\n",
+            "    let length = (fn(flag: bool) -> i64 {\n",
+            "        if flag { return input }\n",
+            "        return 3\n",
+            "    })(false)\n",
+            "    var held: list<i64, length>\n",
+            "    return input\n",
+            "}\n",
+            "fn cold_local(input: i64) -> i64 {\n",
+            "    let length = (fn(x: i64) -> i64 {\n",
+            "        let flag = false\n",
+            "        let selected = if flag { input + x } else { 3 }\n",
+            "        return selected\n",
+            "    })(2)\n",
+            "    var held: list<i64, length>\n",
+            "    return input\n",
+            "}\n",
+            "fn after_return(input: i64) -> i64 {\n",
+            "    let length = (fn(flag: bool) -> i64 {\n",
+            "        if flag { return 3 }\n",
+            "        return input\n",
+            "    })(true)\n",
+            "    var held: list<i64, length>\n",
+            "    return input\n",
+            "}\n",
+            "fn graph_result(input: i64) -> i64 {\n",
+            "    let output = (fn(x: i64) => input + x)(3)\n",
+            "    return output\n",
+            "}\n",
+        ),
+        &[],
+    );
+}
+
+/// TYPE-10, EXPR-3 and FN-17: the immediate call preserves the category
+/// of a reached supplied callback, including through a local binding.
+#[test]
+fn a_local_list_size_checks_immediately_invoked_supplied_callbacks() {
+    expect(
+        concat!(
+            "fn work(f: const fn(i64) -> i64, input: i64) -> i64 {\n",
+            "    let length = (fn(x: i64) => f(x))(3)\n",
+            "    var held: list<i64, length>\n",
+            "    return input\n",
+            "}\n",
+            "fn cold(f: const fn(i64) -> i64, input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => if false { f(x) } else { 3 })(2)>\n",
+            "    return input\n",
+            "}\n",
+            "fn live(n: i64) -> i64 => work(fn(x) => x + n, n)\n",
+            "fn capture_free(n: i64) -> i64 => work(fn(x) => x + 1, n)\n",
+            "fn unused(n: i64) -> i64 => cold(fn(x) => x + n, n)\n",
+        ),
+        &["11 list.size"],
+    );
+}
+
+/// CTRL-13, CTRL-15 and TYPE-10: a live selection can choose the result
+/// of an immediate call even where each return gives an ordinary value.
+#[test]
+fn a_local_list_size_checks_the_reached_return_of_an_immediate_call() {
+    let inline = |body| {
+        format!(
+            "fn measured(input: i64, const fixed: i64) -> i64 {{\n\
+             var held: list<i64, (fn(k: i64) -> i64 {{ {body} }})(2)>\n\
+             return input\n}}\n"
+        )
+    };
+    for body in [
+        "switch input { case 0: return 3\ndefault: return 4 }",
+        "if input > 0 { return 3 }\nreturn 4",
+        "while input > 0 { return 3 }\nreturn 4",
+        "switch fixed { case 0: return 3\ndefault: return input }",
+        "for i in 0..<input { return 3 }\nreturn 4",
+        "for i in input..<4 { return 3 }\nreturn 4",
+    ] {
+        expect(&inline(body), &["3 list.size"]);
+    }
+    for body in [
+        "switch fixed { case 0: return 3\ndefault: return 4 }",
+        "let selector = k\nswitch selector { case 0: return input\ndefault: return 3 }",
+        "switch k { case 0: return 3\ndefault: return 4 }\nreturn input",
+        "if false { return input }\nreturn 4",
+        "while false { return input }\nreturn 4",
+        "while true { return 3 }\nreturn input",
+        "for i in 0..<0 { return input }\nreturn 4",
+        "for i in 0..<fixed { return 3 }\nreturn 4",
+        "for i in 0..<k { return 3 }\nreturn input",
+    ] {
+        expect(&inline(body), &[]);
+    }
+    expect(
+        concat!(
+            "fn measured(input: i64) -> i64 {\n",
+            "    let width = (fn() -> i64 {\n",
+            "        switch input { case 0: return 3\n",
+            "                       default: return 4 }\n",
+            "    })()\n",
+            "    var held: list<i64, width>\n",
+            "    return input\n",
+            "}\n",
+        ),
+        &["7 list.size"],
+    );
+    expect(
+        concat!(
+            "fn measured(input: i64) -> i64 {\n",
+            "    let width = (fn() -> i64 {\n",
+            "        for i in 0..<input { return 3 }\n",
+            "        return 4\n",
+            "    })()\n",
+            "    var held: list<i64, width>\n",
+            "    return input\n",
+            "}\n",
+        ),
+        &["4 connection.as_constant", "7 list.size"],
+    );
+}
+
+/// EXPR-16 and TYPE-10: fixed range bindings decide which returns are
+/// reached, including nested bounds and the first return in range order.
+#[test]
+fn a_local_list_size_uses_reached_fixed_range_values() {
+    let program = |body: &str| {
+        format!(
+            "fn measured(input: i64) -> i64 {{\n\
+                 let width = (fn() -> i64 {{\n\
+                     {body}\n\
+                     return 3\n\
+                 }})()\n\
+                 var held: list<i64, width>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for body in [
+        "for n in 2..<4 { if n == 4 { return input } }",
+        "for n in 4..<4 { return input }",
+        "for n in 4..<2 { return input }",
+        "for n in 2..<4 { let m = n + 1\nif m == 5 { return input } }",
+        "for n in 2..<4 { for m in n..<(n + 2) { if m == n + 2 { return input } } }",
+        "for n in 2..<4 { return if n == 4 { input } else { 3 } }",
+        "for n in 2..<4 { if n == 2 { return 3 }\nif n == 3 { return input } }",
+        "for n in 0..<100 { for m in 0..<3 { if n == 100 && m == 2 { return input } } }",
+        "for n in 0..<1000000000000 { if n == 1000000000000 { return input } }",
+        "for n in 0..<1000000000000 { if n == 0 { return 3 }\nif n == 1 { return input } }",
+        "for n in 10..<150 { if n == 11 { return 3 }\nif n == 12 { return input } }",
+        "for n in 10..<210 { if n == 160 { return 3 }\nif n == 161 { return input } }",
+        "for n in 10..<210 { let index = n\nif index == 160 { return 3 }\nif index == 161 { return input } }",
+        "for n in 10..<1000000000000 { if n == 999999999998 { return 3 }\nif n == 999999999999 { return input } }",
+        "for n in 10..<210 { switch n { case 160: return 3\ncase 161: return input } }",
+        "for n in 10..<210 { let index = n\nswitch index { case 161: return input\ncase 160: return 3 } }",
+        "for n in 0..<1000000000000 { for m in 2..<4 { if 1000000000000 <= n { return input } } }",
+    ] {
+        expect(&program(body), &[]);
+    }
+    for body in [
+        "for n in 2..<4 { if n == 3 { return input } }",
+        "for n in 2..<4 { let m = n + 1\nif m == 4 { return input } }",
+        "for n in 2..<4 { for m in n..<(n + 2) { if m == n + 1 { return input } } }",
+        "for n in 2..<4 { return if n == 2 { input } else { 3 } }",
+        "for n in 0..<100 { for m in 0..<3 { if n == 99 && m == 2 { return input } } }",
+        "for n in 0..<1000000000000 { if n == 999999999999 { return input } }",
+        "for n in 0..<1000000000000 { if n == 500000000000 { return input } }",
+        "for n in 10..<150 { if n == 13 { return 3 }\nif n == 12 { return input } }",
+        "for n in 10..<210 { if n == 162 { return 3 }\nif n == 161 { return input } }",
+        "for n in 10..<210 { let index = n\nif index == 162 { return 3 }\nif index == 161 { return input } }",
+        "for n in 10..<1000000000000 { if n == 999999999999 { return 3 }\nif n == 999999999998 { return input } }",
+        "for n in 10..<210 { switch n { case 161: return input\ncase 162: return 3 } }",
+        "for n in 10..<210 { let index = n\nswitch index { case 161: return input\ncase 162: return 3 } }",
+    ] {
+        let line = 6 + body.lines().count();
+        expect(&program(body), &[&format!("{line} list.size")]);
+    }
+}
+
+/// EXPR-16 and TYPE-10: an immediate call inside a fixed iteration reads
+/// the enclosing bindings from the pass in which it is reached.
+#[test]
+fn a_local_list_size_checks_nested_calls_with_reached_range_bindings() {
+    let program = |body: &str| {
+        format!(
+            "fn measured(tick: i64) -> i64 {{\n\
+                 let span = (fn() -> i64 {{\n\
+                     for idx in 7..<9 {{\n\
+                         {body}\n\
+                     }}\n\
+                     return 2\n\
+                 }})()\n\
+                 var row: list<i64, span>\n\
+                 return tick\n\
+             }}\n"
+        )
+    };
+    for selected in [11, 7] {
+        let branch = format!("if idx == {selected} {{ return tick }}\nreturn 6");
+        let nested = format!("return (fn() -> i64 {{ {branch} }})()");
+        let through_parameter = format!(
+            "return (fn(n: i64) -> i64 {{\n\
+                 let key = n\n\
+                 return (fn() -> i64 {{ if key == {selected} {{ return tick }}\nreturn 6 }})()\n\
+             }})(idx)"
+        );
+        for body in [branch, nested, through_parameter] {
+            if selected == 11 {
+                expect(&program(&body), &[]);
+            } else {
+                let extent = body.lines().count() + 8;
+                expect(&program(&body), &[&format!("{extent} list.size")]);
+            }
+        }
+    }
+}
+
+/// CTRL-13, CTRL-15 and TYPE-10: an initializer's reached category is
+/// what a later capture or loop binding reads at a fixed range step.
+#[test]
+fn a_local_list_size_uses_the_reached_category_of_an_initializer() {
+    let program = |body: &str, step: u32| {
+        format!(
+            "fn measured(input: i64) -> i64 {{\n\
+                 let width = (fn() -> i64 {{\n\
+                     for step in 3..<5 {{ {} }}\n\
+                     return 5\n\
+                 }})()\n\
+                 var held: list<i64, width>\n\
+                 return input\n\
+             }}\n",
+            body.replace("STEP", &step.to_string()),
+        )
+    };
+    for body in [
+        "let width = if step == STEP { input } else { 6 }\nreturn width",
+        "let width = if step == STEP { input } else { 6 }\nlet other = width\nreturn other",
+        "let items: list<i64, 1> = if step == STEP { [input] } else { [6] }\nfor item in items { return item }",
+    ] {
+        expect(&program(body, 9), &[]);
+        let line = 6 + body.lines().count();
+        expect(&program(body, 3), &[&format!("{line} list.size")]);
+    }
+
+    let body = "let items: list<i64, 1> = if step == 4 { [input] } else { [6] }\n\
+                for item in items { if step == STEP { return item } }";
+    expect(&program(body, 3), &[]);
+    expect(&program(body, 4), &["8 list.size"]);
+}
+
+/// EXPR-3, CTRL-14 and TYPE-10: a reached write can supply a later
+/// return, including across passes of a loop or via a live case.
+#[test]
+fn a_local_list_size_checks_reached_writes_to_the_returned_binding() {
+    let inline = |body| {
+        format!(
+            "fn measured(input: i64, const fixed: i64) -> i64 {{\n\
+             var held: list<i64, (fn() -> i64 {{ var n = 3\n{body} }})()>\n\
+             return input\n}}\n"
+        )
+    };
+    for body in [
+        "n = input + 2\nreturn n",
+        "if input > 0 { n = 4 }\nreturn n",
+        "switch input { case 0: n = 4\ndefault: n = 5 }\nreturn n",
+        "while input > n { n += 1 }\nreturn n",
+        "var m = 3\nvar i = 0\nwhile i < 2 { n = m\nm = input\ni += 1 }\nreturn n",
+    ] {
+        expect(&inline(body), &["3 list.size"]);
+    }
+    for body in [
+        "n = fixed + 2\nreturn n",
+        "n = input\nreturn 3",
+        "switch fixed { case 0: n = 4\ndefault: n = 5 }\nreturn n",
+        "while false { n = input }\nreturn n",
+        "var m = 3\nvar i = 0\nwhile i < 2 { n = m\nm = fixed\ni += 1 }\nreturn n",
+    ] {
+        expect(&inline(body), &[]);
+    }
+}
+
+/// CTRL-15 and UNIT-13: a module constant or checked arithmetic selects
+/// one switch case just as its literal does, including through a local.
+#[test]
+fn a_local_list_size_uses_the_resolved_value_of_a_switch_selector() {
+    let program = |selector: &str, label: &str, argument: &str| {
+        format!(
+            "const INDEX: i64 = 7\n\
+             const SIDE: str = \"west\"\n\
+             fn measured(input: i64) -> i64 {{\n\
+                 let count = (fn(k: i64) -> i64 {{\n\
+                     switch {selector} {{ case {label}: return 3\n\
+                                         default: return input }}\n\
+                 }})({argument})\n\
+                 var held: list<i64, count>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for (selector, label, argument) in [
+        ("INDEX", "7", "0"),
+        ("INDEX - 1", "6", "0"),
+        ("1 + 2", "3", "0"),
+        ("k + INDEX", "9", "1 + 1"),
+        ("SIDE", "\"west\"", "0"),
+        ("SIDE + \"erly\"", "\"westerly\"", "0"),
+    ] {
+        expect(&program(selector, label, argument), &[]);
+    }
+    expect(&program("INDEX - 1", "7", "0"), &["9 list.size"]);
+
+    let aliases = |initializer: &str, selector: &str| {
+        format!(
+            "const INDEX: i64 = 7\n\
+             fn measured(input: i64) -> i64 {{\n\
+                 let configured = {initializer}\n\
+                 let selected = configured\n\
+                 let count = (fn(key: i64) -> i64 {{\n\
+                     switch {selector} {{ case 7: return 3\n\
+                                         default: return input }}\n\
+                 }})(selected)\n\
+                 var held: list<i64, count>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for initializer in ["INDEX", "7", "INDEX + 0"] {
+        expect(&aliases(initializer, "key"), &[]);
+        expect(&aliases(initializer, "selected"), &[]);
+    }
+    expect(&aliases("INDEX - 1", "key"), &["10 list.size"]);
+    expect(&aliases("input", "key"), &["10 list.size"]);
+}
+
+/// CTRL-10, CTRL-15 and EXPR-7: an immutable block value or a known
+/// ordinary dictionary entry can select the reached case.
+#[test]
+fn a_local_list_size_resolves_ordinary_block_and_dictionary_selectors() {
+    let selector = |before: &str, value: &str| {
+        format!(
+            "const NUMBER: i64 = 8\n\
+             const WORDS: dict<str, i64> = [\"primary\": 8, \"secondary\": 9]\n\
+             const NUMBERS: dict<i64, i64> = [0: 8, 1: 9]\n\
+             fn measured(input: i64) -> i64 {{\n\
+                 let first = {before}\n\
+                 let second = first + 1\n\
+                 let width = (fn() -> i64 {{\n\
+                     switch {value} {{ case 7: return 3\n\
+                                      default: return input }}\n\
+                 }})()\n\
+                 var held: list<i64, width>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for value in [
+        "NUMBER - 2",
+        "{ let item = NUMBER - 2\nitem }",
+        "WORDS[\"primary\"] - 2",
+        "NUMBERS[0] - 2",
+    ] {
+        expect(&selector(value, "second"), &[]);
+    }
+    expect(
+        &selector("WORDS[\"secondary\"] - 2", "second"),
+        &["12 list.size"],
+    );
+    expect(&selector("NUMBERS[input] - 2", "second"), &["12 list.size"]);
+}
+
+/// TYPE-10 and FN-17: a static callback can still capture a connection.
+/// Report the instance that supplies the live callback and keep the
+/// capture-free and ordinary named callbacks admissible.
+#[test]
+fn a_local_list_size_rechecks_static_callback_captures() {
+    expect(
+        concat!(
+            "const fn count(x: i64) -> i64 => x + 1\n",
+            "fn relay(f: const fn(i64) -> i64, input: i64) -> i64 {\n",
+            "    var held: tuple<str, list<i64, f(2)>>\n",
+            "    return input\n",
+            "}\n",
+            "fn forwarded(f: const fn(i64) -> i64, n: i64) -> i64 => relay(f, n)\n",
+            "fn captured(n: i64) -> i64 => forwarded(fn(x) => x + n, n)\n",
+            "fn direct(n: i64) -> i64 => relay(fn(x) => x + n, n)\n",
+            "fn named(n: i64) -> i64 => relay(count, n)\n",
+            "fn capture_free(n: i64) -> i64 => relay(fn(x) => x + 1, n)\n",
+        ),
+        &["8 list.size", "9 list.size"],
+    );
+}
+
+/// TYPE-10 and GEN-7: the same extent can take its category from the
+/// operator candidate chosen for the concretely supplied type.
+#[test]
+fn a_local_list_size_rechecks_the_selected_operator_category() {
+    expect(
+        concat!(
+            "operator length_of<T>(x: T) -> i64\n",
+            "impl const fn length_of(x: i64) -> i64 => 2\n",
+            "impl fn length_of(x: str) -> i64 { when modified(x) { return 3 } }\n",
+            "fn relay<T>(const x: T, n: i64) -> i64 requires T in {i64, str} {\n",
+            "    var held: list<i64, length_of(x)>\n",
+            "    return n\n",
+            "}\n",
+            "fn dynamic(n: i64) -> i64 => relay(\"q\", n)\n",
+            "fn ordinary(n: i64) -> i64 => relay(1, n)\n",
+        ),
+        &["9 list.size"],
+    );
+}
+
 /// A constant's type may name a constant, as a list's size: the one
 /// reader follows it with the constants it is following, so that one
 /// whose type names itself is `constant.cycle` and ends (UNIT-13). A

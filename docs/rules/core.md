@@ -989,6 +989,7 @@ analyser: partial
 - The current compile-time pattern reader builds up to 64 KiB of text per result. The C++ target declines calls whose patterns exceed that support limit (#695).
 - The analyser checks demanded const inputs and concrete argument conversions after selecting the value candidate. GEN-7 reports failures that depend on the instance at its outside call. Lowering uses the same concrete values to select the checked body.
 - A pattern reached through forwarded calls is checked in the instance the entries make, and a failure is reported at the call outside every generic body that makes it, with the code of the same direct call (GEN-7, #706).
+- The same conditional demand reaches calls through a named operator requirement and an indexed pack entry (#710, #755). A selected candidate that only returns the pattern at run time does not require its compile-time value.
 - Left: patterns made by general constant function evaluation (#695).
 
 ## FMT-4

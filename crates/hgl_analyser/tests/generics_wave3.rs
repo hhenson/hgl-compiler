@@ -46,6 +46,7 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
             | Callee::DeferredOperator(_)
             | Callee::DeferredPackCall
             | Callee::DeferredValue
+            | Callee::UnreadWithConnection
             | Callee::Unread => {
                 found.push("none".to_string());
                 return;

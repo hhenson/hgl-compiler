@@ -34,9 +34,25 @@ impl Typer<'_> {
         let mut relations = Vec::new();
         conjoined_relations(&condition, &mut relations);
         let mut present = Vec::new();
+        let mut dependent = Vec::new();
         for relation in relations {
-            if let Some((at, choices)) = self.stated_membership(&relation, &own) {
-                domains.restrict(FiniteSlot::Parameter(at), choices);
+            if let Some((at, choices)) = self.stated_membership(&relation, &own, true) {
+                let ordinary = |choice: &Argument| match choice {
+                    Argument::Type(Type::Parameter { at, .. }) if own.contains(at) => Some(*at),
+                    _ => None,
+                };
+                if choices.iter().any(|choice| ordinary(choice).is_some()) {
+                    let alternatives = choices
+                        .into_iter()
+                        .map(|choice| match ordinary(&choice) {
+                            Some(at) => TypeAlternative::Parameter(at),
+                            None => TypeAlternative::Fixed(choice),
+                        })
+                        .collect();
+                    dependent.push((at, alternatives));
+                } else {
+                    domains.restrict(FiniteSlot::Parameter(at), choices);
+                }
                 continue;
             }
             let mut operands = relation.children();
@@ -82,6 +98,7 @@ impl Typer<'_> {
         if !present.is_empty() {
             self.apply_present_member_bounds(&mut domains, &present, &own);
         }
+        domains.add_dependent_memberships(dependent);
         domains
     }
 
@@ -174,7 +191,7 @@ impl FiniteSlot {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct FiniteDomain {
     slots: Vec<FiniteSlot>,
     choices: Option<Vec<Argument>>,
@@ -219,14 +236,23 @@ fn equal_members(left: &Argument, right: &Argument) -> Option<bool> {
     }
 }
 
+/// A bare type parameter in this declaration depends on its own domain.
+enum TypeAlternative {
+    Parameter(Location),
+    Fixed(Argument),
+}
+
 /// A conjunction's finite bounds on ordinary parameters and named members.
 /// Absence of a finite bound differs from an empty intersection (GEN-3, GEN-7).
 #[derive(Default)]
-pub(in crate::values) struct FiniteDomains(Vec<FiniteDomain>);
+pub(in crate::values) struct FiniteDomains {
+    groups: Vec<FiniteDomain>,
+    dependent: Vec<(Location, Vec<TypeAlternative>)>,
+}
 
 impl FiniteDomains {
     fn group(&self, slot: &FiniteSlot) -> Option<usize> {
-        self.0
+        self.groups
             .iter()
             .position(|domain| domain.slots.iter().any(|member| member.same(slot)))
     }
@@ -235,11 +261,11 @@ impl FiniteDomains {
         if let Some(group) = self.group(&slot) {
             return group;
         }
-        self.0.push(FiniteDomain {
+        self.groups.push(FiniteDomain {
             slots: vec![slot],
             choices: None,
         });
-        self.0.len() - 1
+        self.groups.len() - 1
     }
 
     fn join(&mut self, left: FiniteSlot, right: FiniteSlot) {
@@ -249,22 +275,149 @@ impl FiniteDomains {
             return;
         }
         let (first, second) = (first.min(second), first.max(second));
-        let other = self.0.remove(second);
-        self.0[first].slots.extend(other.slots);
+        let other = self.groups.remove(second);
+        self.groups[first].slots.extend(other.slots);
         if let Some(choices) = other.choices {
-            FiniteDomain::intersect(&mut self.0[first].choices, choices);
+            FiniteDomain::intersect(&mut self.groups[first].choices, choices);
         }
     }
 
     fn restrict(&mut self, slot: FiniteSlot, choices: Vec<Argument>) {
         let index = self.insert(slot);
-        FiniteDomain::intersect(&mut self.0[index].choices, choices);
+        FiniteDomain::intersect(&mut self.groups[index].choices, choices);
+    }
+
+    /// Expand T in {U, f64} only when every named alternative has a
+    /// nonempty finite domain. Repeated intersections can narrow a source
+    /// after it was first read, so propagate until all bounds are stable.
+    fn add_dependent_memberships(
+        &mut self,
+        mut memberships: Vec<(Location, Vec<TypeAlternative>)>,
+    ) {
+        if memberships.is_empty() {
+            return;
+        }
+        let independent = self.groups.clone();
+        loop {
+            self.propagate_memberships(&memberships);
+            // An impossible source supplies no evidence. If a later
+            // intersection ruled it out, withdraw all bounds that relied
+            // on it. Independent facts about the subject still hold.
+            let before = memberships.len();
+            memberships.retain(|(_, alternatives)| {
+                !alternatives.iter().any(|alternative| {
+                    self.alternative_choices(alternative)
+                        .is_some_and(<[_]>::is_empty)
+                })
+            });
+            if before == memberships.len() {
+                break;
+            }
+            self.groups.clone_from(&independent);
+        }
+        self.dependent = memberships;
+    }
+
+    fn propagate_memberships(&mut self, memberships: &[(Location, Vec<TypeAlternative>)]) {
+        loop {
+            let mut changed = false;
+            for (parameter, alternatives) in memberships {
+                if let Some(other) = self.only_possible_parameter(*parameter, alternatives) {
+                    let left = self.insert(FiniteSlot::Parameter(*parameter));
+                    let right = self.insert(FiniteSlot::Parameter(other));
+                    if left != right {
+                        self.join(
+                            FiniteSlot::Parameter(*parameter),
+                            FiniteSlot::Parameter(other),
+                        );
+                        changed = true;
+                    }
+                }
+                let Some(choices) = self.expand_alternatives(alternatives) else {
+                    continue;
+                };
+                let index = self.insert(FiniteSlot::Parameter(*parameter));
+                let bound = &mut self.groups[index].choices;
+                let before = bound.as_ref().map(Vec::len);
+                FiniteDomain::intersect(bound, choices);
+                changed |= before != bound.as_ref().map(Vec::len);
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// If T cannot be any alternative other than U, this membership
+    /// establishes T == U. In particular T in {U} always links them.
+    fn only_possible_parameter(
+        &self,
+        at: Location,
+        alternatives: &[TypeAlternative],
+    ) -> Option<Location> {
+        let choices = self.parameter_choices(at);
+        let mut required = None;
+        for alternative in alternatives {
+            let values = self.alternative_choices(alternative);
+            if let (Some(choices), Some(values)) = (choices, values)
+                && !choices.iter().any(|ty| {
+                    values
+                        .iter()
+                        .any(|other| equal_members(ty, other) != Some(false))
+                })
+            {
+                continue;
+            }
+            let TypeAlternative::Parameter(at) = alternative else {
+                return None;
+            };
+            let at = *at;
+            if required.is_some_and(|prior| prior != at) {
+                return None;
+            }
+            required = Some(at);
+        }
+        required
+    }
+
+    fn parameter_choices(&self, at: Location) -> Option<&[Argument]> {
+        let index = self.group(&FiniteSlot::Parameter(at))?;
+        self.groups[index].choices.as_deref()
+    }
+
+    fn alternative_choices<'a>(
+        &'a self,
+        alternative: &'a TypeAlternative,
+    ) -> Option<&'a [Argument]> {
+        match alternative {
+            TypeAlternative::Parameter(at) => self.parameter_choices(*at),
+            TypeAlternative::Fixed(other) => Some(std::slice::from_ref(other)),
+        }
+    }
+
+    fn expand_alternatives(&self, alternatives: &[TypeAlternative]) -> Option<Vec<Argument>> {
+        let mut choices = Vec::new();
+        for alternative in alternatives {
+            let values = self.alternative_choices(alternative)?;
+            if values.is_empty() {
+                return None;
+            }
+            for value in values {
+                if !choices
+                    .iter()
+                    .any(|known| equal_members(known, value) == Some(true))
+                {
+                    choices.push(value.clone());
+                }
+            }
+        }
+        Some(choices)
     }
 
     /// The finite alternatives of each ordinary parameter relevant to a trial.
     pub(in crate::values) fn memberships(&self) -> Vec<(Location, Vec<Argument>)> {
         let mut result = Vec::new();
-        for domain in &self.0 {
+        for domain in &self.groups {
             if let Some(choices) = &domain.choices {
                 for slot in &domain.slots {
                     if let FiniteSlot::Parameter(at) = slot {
@@ -295,7 +448,7 @@ impl FiniteDomains {
             })
         };
         let mut projected = Self::default();
-        for domain in &self.0 {
+        for domain in &self.groups {
             let mut slots = domain.slots.iter().map(|slot| match slot {
                 FiniteSlot::Member(pack, key) => FiniteSlot::Member(
                     *pack,
@@ -326,7 +479,7 @@ impl FiniteDomains {
         given: &[(Location, &Argument)],
         relevant: &[Location],
     ) -> Option<()> {
-        for domain in &self.0 {
+        for domain in &self.groups {
             if domain.slots.len() < 2
                 || !domain
                     .slots
@@ -379,11 +532,44 @@ impl FiniteDomains {
         &self,
         choices: &[(Location, Vec<Argument>)],
     ) -> Vec<Vec<(Location, Argument)>> {
-        self.trials(
+        if choices.iter().any(|(_, values)| values.is_empty()) {
+            return Vec::new();
+        }
+        let mut trials = self.trials(
             choices,
             |at| self.group(&FiniteSlot::Parameter(*at)),
             equal_members,
-        )
+        );
+        // An over-limit product is incomplete. Leave its sentinel intact
+        // for the caller's existing limit diagnostic.
+        if !self.dependent.is_empty() && trials.len() <= crate::INSTANCES {
+            trials.retain(|trial| {
+                let value = |at| {
+                    let group = self.group(&FiniteSlot::Parameter(at))?;
+                    trial.iter().find_map(|(other, value)| {
+                        let member = FiniteSlot::Parameter(*other);
+                        self.groups[group]
+                            .slots
+                            .iter()
+                            .any(|slot| slot.same(&member))
+                            .then_some(value)
+                    })
+                };
+                self.dependent.iter().all(|(subject, alternatives)| {
+                    let Some(subject) = value(*subject) else {
+                        return true;
+                    };
+                    alternatives.iter().any(|alternative| {
+                        let other = match alternative {
+                            TypeAlternative::Parameter(at) => value(*at),
+                            TypeAlternative::Fixed(other) => Some(other),
+                        };
+                        other.is_none_or(|other| equal_members(subject, other) != Some(false))
+                    })
+                })
+            });
+        }
+        trials
     }
 
     /// Joint bindings of the reflected members the call reads.

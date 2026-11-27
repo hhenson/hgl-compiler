@@ -3,31 +3,52 @@
 //! (FN-14). Part of the typing pass ([`super`]).
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
+use super::lifting::ImmediateValues;
 use crate::declared::substitute_within;
 use crate::hir::{
-    Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, PackKey, Stmt, ValueCategory,
-    walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
+    Argument, Body, Callee, Expr, ExprKind, Form, LocalId, Node, NodeMut, PackKey, Stmt,
+    ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::LocalKind;
 use crate::read::is_type;
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, tokens, ungrouped};
 use crate::types::Type;
 
+mod flow;
+
+/// Ordinary fixed values known by an immediate call, by their lexical local.
+pub(super) type ImmediateBindings = Vec<(LocalId, Rc<Expr>)>;
+
 /// What belongs to the anonymous function currently being checked.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(super) struct Anonymous {
     /// The result the body must give, if any.
     pub(super) result: Option<Type>,
     /// FN-17: infer whether a complete, unwritten result exists.
     pub(super) infer_result: bool,
+    /// Known ordinary values of a direct call's inputs and immutable locals.
+    pub(super) immediate_values: Option<ImmediateBindings>,
     /// The first of its own locals. Earlier locals would be captures.
     pub(super) first_local: LocalId,
+    /// Direct calls whose category can be revisited along a reached path.
+    pub(super) immediate_calls: Vec<(Location, Rc<flow::ImmediateCall>)>,
+}
+
+impl PartialEq for Anonymous {
+    fn eq(&self, other: &Self) -> bool {
+        // Recorded bodies are output of a read, rather than its scope.
+        self.result == other.result
+            && self.infer_result == other.infer_result
+            && self.immediate_values == other.immediate_values
+            && self.first_local == other.first_local
+    }
 }
 
 pub(super) struct AnonymousDefinition {
@@ -37,6 +58,47 @@ pub(super) struct AnonymousDefinition {
 }
 
 impl Typer<'_> {
+    /// Keep an immutable value that later direct calls can read. A graph
+    /// with no such call needs no additional constant evaluation.
+    pub(super) fn remember_immediate_local(&mut self, local: LocalId, value: &Expr) {
+        if !self.graph
+            || self.type_query
+            || self.locals[local].category == ValueCategory::Connection
+        {
+            return;
+        }
+        let known = match self
+            .anonymous
+            .as_mut()
+            .and_then(|scope| scope.immediate_values.as_mut())
+        {
+            Some(known) => Some(known),
+            None => {
+                self.graph_immediate_values.get_or_init(|| {
+                    self.declaration
+                        .syntax
+                        .descendants()
+                        .any(|node| {
+                            node.kind() == SyntaxKind::CallExpr
+                                && super::calls::call_callee(&node).is_some_and(|callee| {
+                                    ungrouped(callee).kind() == SyntaxKind::FnExpr
+                                })
+                        })
+                        .then(Vec::new)
+                });
+                self.graph_immediate_values
+                    .get_mut()
+                    .and_then(Option::as_mut)
+            }
+        };
+        if let Some(known) = known
+            && let Some(value) =
+                ImmediateValues::new(self.program, &self.instance, known).read(value)
+        {
+            known.push((local, Rc::new(value)));
+        }
+    }
+
     /// A name from an enclosing scope is captured (FN-14).
     pub(super) fn is_capture(&self, local: LocalId) -> bool {
         self.anonymous
@@ -100,7 +162,7 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: &Type,
     ) -> bool {
-        self.checked_anonymous(function, parameters, (Some(result), false), None)
+        self.checked_anonymous(function, parameters, (Some(result), false), None, None)
             .1
     }
 
@@ -112,7 +174,7 @@ impl Typer<'_> {
         result: (Option<&Type>, bool),
         temporal: bool,
     ) -> Option<AnonymousDefinition> {
-        self.checked_anonymous(function, parameters, result, Some(temporal))
+        self.checked_anonymous(function, parameters, result, Some(temporal), None)
             .0
     }
 
@@ -122,15 +184,40 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         (result, infer_result): (Option<&Type>, bool),
         specialization: Option<bool>,
-    ) -> (Option<AnonymousDefinition>, bool) {
+        direct_call: Option<(Location, &[Argument])>,
+    ) -> (Option<AnonymousDefinition>, bool, bool) {
         // CTRL-5: a return belongs to this function alone.
         self.check_capability_captures(function);
         let mut mark = self.mark();
         let first_local = mark.locals;
+        let immediate_values =
+            direct_call
+                .filter(|_| self.graph && !self.type_query)
+                .map(|(_, arguments)| {
+                    let mut known = self
+                        .anonymous
+                        .as_ref()
+                        .and_then(|outer| outer.immediate_values.as_ref())
+                        .or_else(|| self.graph_immediate_values.get().and_then(Option::as_ref))
+                        .cloned()
+                        .unwrap_or_default();
+                    for argument in arguments {
+                        if let Some(parameter) = argument.parameter
+                            && let Some(value) =
+                                ImmediateValues::new(self.program, &self.instance, &known)
+                                    .read(&argument.value)
+                        {
+                            known.push((first_local + parameter, Rc::new(value)));
+                        }
+                    }
+                    known
+                });
         let outer = self.anonymous.replace(Anonymous {
             result: result.cloned(),
             infer_result,
+            immediate_values,
             first_local,
+            immediate_calls: Vec::new(),
         });
         let temporal = self.temporal.take();
         let dynamic = self.dynamic.take();
@@ -151,16 +238,45 @@ impl Typer<'_> {
                 self.locals[local].category = ValueCategory::Connection;
             }
         }
-        let statements = self.check_body(
+        let mut statements = self.check_body(
             function,
             result,
             self.at(function),
             "this anonymous function",
         );
+        let live_result = self.graph
+            && !self.type_query
+            && self
+                .anonymous
+                .as_ref()
+                .zip(statements.as_deref())
+                .is_some_and(|(scope, body)| {
+                    scope.immediate_values.as_deref().is_some_and(|known| {
+                        flow::result_is_live(self, body, known, &scope.immediate_calls)
+                    })
+                });
         let needs_pack_inputs = specialization.is_none()
             && statements
                 .as_deref()
                 .is_some_and(super::forwarded_packs::statements_need_pack_inputs);
+        let nested_call = direct_call
+            .filter(|_| {
+                !needs_pack_inputs
+                    && self.graph
+                    && !self.type_query
+                    && outer
+                        .as_ref()
+                        .is_some_and(|scope| scope.immediate_values.is_some())
+            })
+            .and_then(|(at, _)| {
+                let body = flow::ImmediateCall {
+                    first_local,
+                    locals: self.locals.clone(),
+                    statements: statements.take()?,
+                    calls: std::mem::take(&mut self.anonymous.as_mut()?.immediate_calls),
+                };
+                Some((at, Rc::new(body)))
+            });
         let output = specialization.and(statements).map(|statements| {
             // GEN-7: a deferred selection survives closing over its
             // lexical scope. Diagnostics still use the local IDs from
@@ -184,10 +300,13 @@ impl Typer<'_> {
         });
         self.restore_read(mark, false);
         self.anonymous = outer;
+        if let Some((call, scope)) = nested_call.zip(self.anonymous.as_mut()) {
+            scope.immediate_calls.push(call);
+        }
         self.temporal = temporal;
         self.dynamic = dynamic;
         self.must_return = must_return;
-        (output, needs_pack_inputs)
+        (output, needs_pack_inputs, live_result)
     }
 
     /// The direct call `(fn(x) => x + 1)(7)` supplies the parameter
@@ -200,6 +319,7 @@ impl Typer<'_> {
         keyword: &SyntaxToken,
         list: &SyntaxNode,
         expected: Option<&Type>,
+        at: Location,
     ) -> (ExprKind, Type) {
         if let Some(unread) = self.unread_pack_call(list) {
             return unread;
@@ -231,11 +351,19 @@ impl Typer<'_> {
             .and_then(|annotation| self.anonymous_type(&annotation))
             .or_else(|| expected.cloned())
             .unwrap_or(Type::Unknown);
-        let needs_pack_inputs = self.anonymous_body(function, parameters, &result);
+        let (_, needs_pack_inputs, live_result) = self.checked_anonymous(
+            function,
+            parameters,
+            (Some(&result), false),
+            None,
+            Some((at, &arguments)),
+        );
         // A later instance must still check the body even though the
         // direct anonymous call has no native representation (CTRL-16).
         let callee = if needs_pack_inputs {
             Callee::DeferredPackCall
+        } else if live_result {
+            Callee::UnreadWithConnection
         } else {
             Callee::Unread
         };
