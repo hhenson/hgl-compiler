@@ -485,3 +485,75 @@ test unequal_keys_keep_the_existing_publication {
     assert eval observe_nan_dictionary(step: [1, 2]) == [true, true]
     assert eval observe_nan_set(step: [1, 2]) == [true, true]
 }
+
+# TIME-7: a whole assignment replaces the provisional delta. Only its net
+# result reaches readers, and a later write sees the replacement in order.
+fn whole_dictionary_assignment(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [] }
+        out = delta<dict<i64, i64>>(updated: [8: step])
+        if step == 2 {
+            let empty: dict<i64, i64> = []
+            out = empty
+        } else {
+            let book: dict<i64, i64> = [3: 10]
+            out = book
+            if step == 4 && all_valid(out) && delta_value(out) == delta<dict<i64, i64>>(updated: [3: 10]) {
+                out = delta<dict<i64, i64>>(updated: [4: 20], removed: [3])
+            }
+        }
+    }
+}
+
+fn see_whole_dictionary(step: i64) -> bool => dictionary_wake(whole_dictionary_assignment(step))
+
+test whole_dictionary_assignment_replaces_earlier_writes {
+    assert eval whole_dictionary_assignment(step: [1, 2, 3, 3, 4]) == [
+        [], _, [3: 10], delta<dict<i64, i64>>(updated: [3: 10]),
+        delta<dict<i64, i64>>(updated: [4: 20], removed: [3]),
+    ]
+    assert eval see_whole_dictionary(step: [1, 2, 3, 3, 4]) == [true, _, true, true, true]
+}
+
+fn whole_set_assignment(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 1 { return [5] }
+        out = delta<set<i64>>(added: [8])
+        let replacement: set<i64> = [5]
+        out = replacement
+        if step == 3 && !modified(out) {
+            out = delta<set<i64>>(added: [3], removed: [5])
+        }
+    }
+}
+
+fn see_whole_set(step: i64) -> bool => set_wake(whole_set_assignment(step))
+
+test whole_set_assignment_restores_membership_before_a_later_write {
+    assert eval whole_set_assignment(step: [1, 2, 3]) == [[5], _, [3]]
+    assert eval see_whole_set(step: [1, 2, 3]) == [true, _, true]
+}
+
+fn replace_nested_members(step: i64) -> dict<i64, set<i64>> {
+    inject out
+    when {
+        if step == 1 { return [1: [2, 3], 9: [8]] }
+        out = delta<dict<i64, set<i64>>>(removed: [1])
+        let book: dict<i64, set<i64>> = [1: [3, 4], 2: []]
+        out = book
+        out = delta<dict<i64, set<i64>>>(updated: [1: delta<set<i64>>(added: [5], removed: [4])])
+    }
+}
+
+# A whole replacement of a nested collection discards the staged withdrawal.
+# Omitted original keys are still removed; a new empty child becomes valid.
+test whole_nested_assignment_and_later_delta_apply_in_order {
+    assert eval replace_nested_members(step: [1, 2]) == [
+        [1: [2, 3], 9: [8]],
+        delta<dict<i64, set<i64>>>(
+            updated: [1: delta<set<i64>>(added: [5], removed: [2]), 2: delta<set<i64>>()],
+            removed: [9]),
+    ]
+}

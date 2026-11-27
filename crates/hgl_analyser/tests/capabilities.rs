@@ -839,3 +839,549 @@ test unused { eval hook(key: "run.output", depth: 1) }
         checked.report
     );
 }
+
+/// The #885 route, with a key the text fixes.
+const SAME_KEY_ROUTES: &str = r#"module m
+const fn sa(store: GlobalState, depth: i64, flag: bool, const k: str) {
+    put(store, k, 1)
+    if depth > 0 { sb(store, depth - 1, flag, k, k) }
+}
+const fn sb(store: GlobalState, depth: i64, flag: bool, const p: str, const q: str) {
+    if flag { sa(store, depth, flag, p) } else { sa(store, depth, flag, q) }
+}
+fn node(const key: str) {
+    inject global_state
+    when {}
+    stop { sa(global_state, 1, true, key) }
+}
+test src {
+    eval node(key: "run.output")
+}
+"#;
+
+/// The #885 route, with a key the text fixes.
+const SELECTED_KEY_ROUTE: &str = r#"module m
+operator w<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn w(store: GlobalState, const key: str, value: i64) { relay(store, key + "put", 1.5) }
+impl const fn w(store: GlobalState, const key: str, value: f64) { put(store, key, value) }
+const fn relay<T>(store: GlobalState, const key: str, value: T) requires T in {i64, f64} { w(store, key, value) }
+fn node(const key: str) {
+    inject global_state
+    when {}
+    stop { w(global_state, key, 1) }
+}
+test src {
+    eval node(key: "run.out")
+}
+"#;
+
+/// TIME-8, CAP-6: this route fixes its one key in source (GEN-7).
+#[test]
+fn one_key_forwarded_to_two_const_slots_stays_fixed() {
+    let checked = check(&[("m.hgl", SAME_KEY_ROUTES)]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:5 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8, CAP-6: this route fixes its one key in source (GEN-7).
+#[test]
+fn a_selected_store_candidate_does_not_close_another_instances_cycle() {
+    let checked = check(&[("m.hgl", SELECTED_KEY_ROUTE)]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:12:5 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8, CAP-6: the same routes admit a nonreserved effective key.
+#[test]
+fn fixed_store_routes_admit_their_nonreserved_key() {
+    for source in [
+        SAME_KEY_ROUTES.replace("\"run.output\"", "\"user.key\""),
+        SELECTED_KEY_ROUTE.replace("\"run.out\"", "\"run.output\""),
+    ] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6 and UNIT-13: two stable reads before a swapping cycle
+/// still supply one fixed key; a helper need not receive a bare local.
+#[test]
+fn stable_store_entry_expressions_share_their_key() {
+    for (declarations, parameter, argument, key) in [
+        (
+            "const reserved: str = \"run.output\"",
+            "const k: str",
+            "\"unused\"",
+            "reserved",
+        ),
+        ("", "const k: str", "\"run.out\"", "k + \"put\""),
+        (
+            "struct Keys { name: str }",
+            "const k: Keys",
+            "Keys(name: \"run.output\")",
+            "k.name",
+        ),
+        (
+            "",
+            "const k: list<str, 2>",
+            "[\"unused\", \"run.output\"]",
+            "k[1]",
+        ),
+        (
+            "",
+            "const k: tuple<str, str>",
+            "(\"unused\", \"run.output\")",
+            "k[1]",
+        ),
+    ] {
+        let source = format!(
+            r#"module m
+{declarations}
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    put(s, left, n)
+    if n > 0 {{ rotate(s, n - 1, right, left) }}
+}}
+fn node({parameter}) {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 2, {key}, {key}) }}
+}}
+test source {{ eval node({argument}) }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(checked.summary().len(), 1, "key {key}: {}", checked.report);
+        assert!(
+            checked.summary()[0].ends_with("injectable/store.reserved_key TIME-8"),
+            "{}",
+            checked.report
+        );
+        let benign = source
+            .replace("run.output", "user.key")
+            .replace("run.out", "user.");
+        let checked = check(&[("m.hgl", &benign)]);
+        assert!(checked.summary().is_empty(), "{}", checked.report);
+    }
+}
+
+/// TIME-8: different fields, indexes or expressions remain different ports;
+/// swapping them defers the reserved-key check to the reached operation.
+#[test]
+fn distinct_store_entry_expressions_keep_operation_checks() {
+    for (declarations, parameter, argument, left, right) in [
+        (
+            "struct Keys {\nleft: str\nright: str\n}",
+            "const k: Keys",
+            "Keys(left: \"run.output\", right: \"safe\")",
+            "k.left",
+            "k.right",
+        ),
+        (
+            "",
+            "const k: list<str, 2>",
+            "[\"run.output\", \"safe\"]",
+            "k[0]",
+            "k[1]",
+        ),
+        (
+            "",
+            "const k: tuple<str, str>",
+            "(\"run.output\", \"safe\")",
+            "k[0]",
+            "k[1]",
+        ),
+        (
+            "",
+            "const k: str",
+            "\"run.out\"",
+            "k + \"put\"",
+            "k + \"safe\"",
+        ),
+    ] {
+        let source = format!(
+            r#"module m
+{declarations}
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    if n == 0 {{ put(s, left, n) }}
+    else {{ rotate(s, n - 1, right, left) }}
+}}
+fn node({parameter}) {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 1, {left}, {right}) }}
+}}
+test source {{ eval node({argument}) }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert!(
+            checked.summary().is_empty(),
+            "{left} / {right}: {}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6, UNIT-13: a constant, its aliases and its known literal
+/// supply one key, while another incoming string still permits a change.
+#[test]
+fn named_store_entry_aliases_and_literals_share_their_value() {
+    for right in [
+        "alias_key",
+        "alias_again",
+        "same_text",
+        "same_expression",
+        "\"run.output\"",
+        "\"safe\"",
+    ] {
+        let source = format!(
+            r#"module m
+const original: str = "run.output"
+const alias_key: str = original
+const alias_again: str = alias_key
+const same_text: str = "run.output"
+const same_expression: str = "run.out" + "put"
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    if n == 0 {{ put(s, left, n) }}
+    else {{ rotate(s, n - 1, right, left) }}
+}}
+fn node() {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 1, original, {right}) }}
+}}
+test source {{ eval node() }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        if right == "\"safe\"" {
+            assert!(checked.summary().is_empty(), "{}", checked.report);
+        } else {
+            assert_eq!(checked.summary().len(), 1, "{right}: {}", checked.report);
+            assert!(
+                checked.summary()[0].ends_with("injectable/store.reserved_key TIME-8"),
+                "{right}: {}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// TIME-8, CAP-6, UNIT-13: entry equality is symmetric and independent of
+/// spelling. Exercise every ordered pair, plus benign and unequal values.
+#[test]
+fn source_known_store_entries_share_one_symmetric_partition() {
+    let spellings = [
+        "\"run.output\"",
+        "reserved",
+        "alias_key",
+        "root_text + suffix",
+        "root_alias + suffix",
+        "composed",
+        "composed_alias",
+    ];
+    let source = |left: &str, right: &str| {
+        format!(
+            r#"module m
+const reserved: str = "run.output"
+const alias_key: str = reserved
+const root_text: str = "run."
+const root_alias: str = root_text
+const suffix: str = "output"
+const composed: str = root_text + suffix
+const composed_alias: str = composed
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    put(s, left, n)
+    if n > 0 {{ rotate(s, n - 1, right, left) }}
+}}
+fn node() {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 1, {left}, {right}) }}
+}}
+test source {{ eval node() }}
+"#
+        )
+    };
+    for left in spellings {
+        for right in spellings {
+            let program = source(left, right);
+            let checked = check(&[("m.hgl", &program)]);
+            assert_eq!(
+                checked.summary().len(),
+                1,
+                "{left} / {right}: {}",
+                checked.report
+            );
+            assert!(
+                checked.summary()[0].ends_with("injectable/store.reserved_key TIME-8"),
+                "{left} / {right}: {}",
+                checked.report
+            );
+            let benign = program
+                .replace("run.output", "tenant.value")
+                .replace("run.", "tenant.")
+                .replace("\"output\"", "\"value\"");
+            let checked = check(&[("m.hgl", &benign)]);
+            assert!(
+                checked.summary().is_empty(),
+                "{left} / {right}: {}",
+                checked.report
+            );
+        }
+        for (a, b) in [(left, "\"tenant.distinct\""), ("\"tenant.distinct\"", left)] {
+            let program = source(a, b);
+            let checked = check(&[("m.hgl", &program)]);
+            assert!(
+                checked.summary().is_empty(),
+                "{a} / {b}: {}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// TIME-8, CAP-6: a helper computes the key at graph build, not in source.
+#[test]
+fn fixed_store_routes_leave_computed_keys_to_the_build() {
+    for (source, literal) in [
+        (SAME_KEY_ROUTES, "run.output"),
+        (SELECTED_KEY_ROUTE, "run.out"),
+    ] {
+        let source = source
+            .replacen(
+                "module m\n",
+                "module m\nconst fn supply_key(key: str) -> str => key\n",
+                1,
+            )
+            .replace(
+                &format!("key: \"{literal}\""),
+                &format!("key: supply_key(\"{literal}\")"),
+            );
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6: an unrelated forwarding graph must not erase a fixed-key
+/// proof. Core's explicitly supplied documentation contains this map form.
+#[test]
+fn unrelated_forwarding_graph_does_not_hide_fixed_store_routes() {
+    let unrelated = r#"
+fn line_total(price: i64, quantity: i64) -> i64 => price * quantity
+fn totals(prices: list<i64, 2>, quantities: list<i64, 2>) -> list<i64, 2> =>
+    map{join: .outer}(line_total, prices, quantities)
+test unrelated_map {
+    assert eval totals(prices: [[2, 3]], quantities: [[5, 7]]) == [[10, 21]]
+}
+"#;
+    for (source, line) in [(SAME_KEY_ROUTES, 15), (SELECTED_KEY_ROUTE, 12)] {
+        let source = format!("{source}{unrelated}");
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            [format!(
+                "m.hgl:{line}:5 injectable/store.reserved_key TIME-8"
+            )],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8: observers in both functions do not make two exchanged keys one.
+/// The effective key at depth one is safe, so source must leave the cycle to
+/// its runtime operation rather than reject the first key.
+#[test]
+fn two_readers_exchanging_keys_remain_dynamic() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn first(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { second(store, depth - 1, next, key) }
+}
+const fn second(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { first(store, depth - 1, next, key) }
+}
+fn node(const key: str, const next: str) {
+    inject global_state
+    when {}
+    stop { first(global_state, 1, key, next) }
+}
+test t { eval node(key: "run.output", next: "user.next") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8, CAP-6: an uncalled exported helper has no fixed entry route.
+/// Reaching the same changing cycle must preserve the declaration's admission.
+#[test]
+fn exported_changing_store_cycle_keeps_runtime_keys_without_an_entry() {
+    let helper = r#"module m
+export const fn helper(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { helper(store, depth - 1, "run.output") }
+}
+"#;
+    let caller = r#"
+fn node() {
+    inject global_state
+    when {}
+    stop { helper(global_state, 1, "safe") }
+}
+test source { eval node() }
+"#;
+    for source in [helper.to_owned(), format!("{helper}{caller}")] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6: selecting one member does not inspect its coarse-cycle peers.
+#[test]
+fn unvisited_members_of_a_reached_store_cycle_keep_runtime_keys() {
+    let source = r#"module m
+operator w<S,T>(store:S, const key:str, value:T) requires S in {GlobalState}
+impl const fn w(store:GlobalState, const key:str, value:i64) {
+    put(store, key, value)
+    relay(store, key + "put", 1.5)
+    w(store, "run.output", 1)
+}
+impl const fn w(store:GlobalState, const key:str, value:f64) { put(store,key,value) }
+const fn relay<T>(store:GlobalState, const key:str, value:T) requires T in {i64,f64} { w(store,key,value) }
+fn node(const key:str) {
+    inject global_state
+    when {}
+    stop { relay(global_state,key,1.5) }
+}
+test source { eval node(key:"safe") }
+"#;
+    for source in [
+        source.to_owned(),
+        source.replace("relay(global_state,key,1.5)", "relay(global_state,key,1)"),
+    ] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6: unrelated entry routes cannot change a fixed call's stage.
+#[test]
+fn an_unused_specialization_does_not_delay_a_fixed_store_key() {
+    let source = r#"module m
+const fn computed(s: str) -> str => s
+operator dispatch_k<S,T>(s: S, depth: i64, const label: str, tag: T) requires S in {GlobalState}
+impl const fn dispatch_k(s: GlobalState, depth: i64, const label: str, tag: f64) { put(s, label, tag) }
+impl const fn dispatch_k(s: GlobalState, depth: i64, const label: str, tag: i64) {
+    put(s, label, tag)
+    if depth > 0 { via(s, depth - 1, label + "put", tag) }
+}
+const fn via<T>(s: GlobalState, depth: i64, const label: str, tag: T) requires T in {f64, i64} {
+    dispatch_k(s, depth, label, tag)
+}
+fn stable(const label: str, const d: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { via(global_state, 2, label, 3.5) }
+}
+test fixed { eval stable("run.output", 1) }
+"#;
+    let unused = r#"fn moving(const label: str, const d: i64, const n: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { via(global_state, n, label, 7) }
+}
+"#;
+    for source in [source.to_owned(), format!("{source}{unused}")] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked
+                .summary()
+                .iter()
+                .filter(|s| s.contains("store.reserved_key"))
+                .count(),
+            1,
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6: unrelated entry routes cannot change a fixed call's stage.
+#[test]
+fn an_unused_distinct_alias_entry_does_not_delay_a_fixed_store_key() {
+    let source = r#"module m
+const fn copied(s: GlobalState, n: i64, flag: bool, const key: str) {
+    put(s, key, n)
+    if n > 0 { choose_key(s, n - 1, flag, key, key) }
+}
+const fn choose_key(s: GlobalState, n: i64, flag: bool, const left: str, const right: str) {
+    if flag { copied(s, n, flag, right) } else { copied(s, n, flag, left) }
+}
+fn sample(const key: str, const divisor: i64, const flag: bool) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { copied(global_state, 3, flag, key) }
+}
+const fn computed(s: str) -> str => s
+test fixed { eval sample("run.output", 1, false) }
+"#;
+    let unused = r#"fn other(const p: str, const q: str) {
+    inject global_state
+    when {}
+    stop { choose_key(global_state, 1, false, p, q) }
+}
+"#;
+    for source in [source.to_owned(), format!("{source}{unused}")] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked
+                .summary()
+                .iter()
+                .filter(|s| s.contains("store.reserved_key"))
+                .count(),
+            1,
+            "{}",
+            checked.report
+        );
+    }
+}

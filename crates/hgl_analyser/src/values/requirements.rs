@@ -3198,6 +3198,10 @@ pub(super) fn instances_hold(
         let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
         while let Some((made, parent, making)) = waiting.pop_front() {
+            // TIME-8: source locations shared by other instances do not erase
+            // the fixed store inputs of this making call. The guard restores
+            // the outer context on every exit from this iteration.
+            let _store_inputs = program.store_input_scope(made.callee, &made.constants.values);
             let root_calls: Vec<InstanceRoot> =
                 making.iter().map(|&call| all_calls[call].clone()).collect();
             let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
@@ -6004,7 +6008,16 @@ fn each_holds(
                     value,
                 }),
             });
-            let checked = holds_with_packs(&body, of, Some(scope), &nested);
+            // GEN-17: written operands such as Field<key> take this
+            // pass's key before falling back to an enclosing type binding.
+            let written = |operand: &SyntaxNode| {
+                (scope.written)(operand, &nested).or_else(|| (of.written)(operand))
+            };
+            let here = Condition {
+                written: &written,
+                ..*of
+            };
+            let checked = holds_with_packs(&body, &here, Some(scope), &nested);
             nested.pop();
             match checked {
                 Some(value) if value == existential => return Some(value),
