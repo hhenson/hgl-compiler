@@ -33,7 +33,7 @@
 //! it was found, and never again where it is used (ERR-9).
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
@@ -45,7 +45,7 @@ use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
 };
 use crate::types::{Argument, CallArguments, Detail, Scalar, Signature, Type};
-use anonymous::Anonymous;
+use anonymous::{Anonymous, ImmediateBindings};
 use control::label;
 use dependent_packs::MemberFault;
 use endpoints::endpoint_argument;
@@ -215,6 +215,7 @@ pub(crate) fn check(
         let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
         let mut deferred_type_fits = Vec::new();
         let mut callback_phase_bodies = Vec::new();
+        let mut deferred_list_sizes = Vec::new();
         for (position, declaration) in module.declarations.iter().enumerate() {
             let mut check_return = None;
             let deferred_fit = Cell::new(false);
@@ -273,6 +274,9 @@ pub(crate) fn check(
                     if typer.unsettled_callback_pair {
                         callback_phase_bodies.push((index, position));
                         typer.check_open_pair_reports(found, reported);
+                    }
+                    if typer.unsettled_list_size {
+                        deferred_list_sizes.push((index, position));
                     }
                     check_return = pending;
                     body
@@ -432,6 +436,7 @@ pub(crate) fn check(
         program.modules[index].graph_return_checks = graph_return_checks;
         program.deferred_type_fits.extend(deferred_type_fits);
         program.callback_phase_bodies.extend(callback_phase_bodies);
+        program.deferred_list_sizes.extend(deferred_list_sizes);
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
@@ -828,6 +833,9 @@ struct Typer<'a> {
     signature: &'a Signature,
     /// Absent while reading the enclosing declaration itself.
     anonymous: Option<Anonymous>,
+    /// Known immutable graph bindings needed by direct anonymous calls.
+    /// Initialized only for a graph that writes such a call.
+    graph_immediate_values: OnceCell<Option<ImmediateBindings>>,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// Locations where the instance has no type for a written generic.
@@ -845,6 +853,8 @@ struct Typer<'a> {
     pair_phases: Option<calls::PairPhases>,
     /// An open callback can change a committed named-pair selection (FN-4).
     unsettled_callback_pair: bool,
+    /// A local size needs the concrete graph body to decide its category.
+    unsettled_list_size: bool,
     /// Hypothetical capture categories used only to check an open graph declaration.
     callback_captures: Vec<ValueCategory>,
     /// Nesting depth of `anonymous_pair_category` role probes; lets nested
@@ -1154,6 +1164,7 @@ impl<'a> Typer<'a> {
             declaration,
             signature,
             anonymous: None,
+            graph_immediate_values: OnceCell::new(),
             bindings: tables.bindings,
             written: tables.written,
             absent_type_uses: None,
@@ -1163,6 +1174,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             pair_phases: None,
             unsettled_callback_pair: false,
+            unsettled_list_size: false,
             callback_captures: Vec::new(),
             probing_pair_role: 0,
             probe_saw_temporal: false,
@@ -1383,7 +1395,12 @@ impl<'a> Typer<'a> {
             type_queries: self.type_query_locations.len(),
             nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
+            immediate_calls: self
+                .anonymous
+                .as_ref()
+                .map_or(0, |scope| scope.immediate_calls.len()),
             unsettled_callback_pair: self.unsettled_callback_pair,
+            unsettled_list_size: self.unsettled_list_size,
             selected_pack_branches: self
                 .selected_pack_branches
                 .map_or(0, |selected| selected.borrow().len()),
@@ -1410,6 +1427,7 @@ impl<'a> Typer<'a> {
         }
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
+        self.unsettled_list_size = mark.unsettled_list_size;
         if let Some(selected) = self.selected_pack_branches {
             selected.borrow_mut().truncate(mark.selected_pack_branches);
         }
@@ -1459,6 +1477,9 @@ impl<'a> Typer<'a> {
         // A call the reading put to be selected for each instance goes
         // with it: the reading that stands puts its own.
         self.selecting.borrow_mut().truncate(mark.selecting);
+        if let Some(scope) = self.anonymous.as_mut() {
+            scope.immediate_calls.truncate(mark.immediate_calls);
+        }
         // A reading that declared nothing has nothing of its own in the
         // tables of locals, and they are not walked: a reading taken
         // back costs what was read, not what the function holds.
@@ -1473,6 +1494,20 @@ impl<'a> Typer<'a> {
             self.bound_children.retain(|local, _| *local < mark.locals);
             self.bound_packs.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
+            if let Some(known) = self
+                .anonymous
+                .as_mut()
+                .and_then(|scope| scope.immediate_values.as_mut())
+            {
+                known.retain(|(local, _)| *local < mark.locals);
+            }
+            if let Some(known) = self
+                .graph_immediate_values
+                .get_mut()
+                .and_then(Option::as_mut)
+            {
+                known.retain(|(local, _)| *local < mark.locals);
+            }
         }
         self.present.truncate(mark.present);
         if keep_flow {
@@ -1595,7 +1630,10 @@ struct Mark {
     nested_query_selects: bool,
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
+    /// Number of direct-call bodies kept by the enclosing immediate read.
+    immediate_calls: usize,
     unsettled_callback_pair: bool,
+    unsettled_list_size: bool,
     /// Number of selected pack branches before a tentative read (CTRL-16).
     selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.
