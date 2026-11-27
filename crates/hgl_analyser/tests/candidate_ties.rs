@@ -107,6 +107,67 @@ fn a_candidate_default_does_not_replace_required_public_configuration() {
     )));
 }
 
+/// FN-18 and GEN-6: supplying required public configuration can witness
+/// a tie while an optional candidate-only option is omitted.
+#[test]
+fn public_configuration_can_witness_a_tie_with_candidate_defaults() {
+    let definitions = concat!(
+        "operator paint<A, B>{scale: i64}(x: A, y: B) -> i64\n",
+        "impl const fn paint<B>{scale: i64 = 1, raw: bool = false}(x: i64, y: B) -> i64 => 4\n",
+        "impl const fn paint<A>{raw: bool = false, scale: i64 = 2}(x: A, y: i64) -> i64 => 5\n",
+        "impl const fn paint{raw: bool, scale: i64}(x: i64, y: i64) -> i64 => scale\n",
+    );
+    let checked = module(definitions);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let checked = module(&format!(
+        "{definitions}test tied {{ assert paint{{scale: 9}}(1, 2) == 4 }}"
+    ));
+    assert_ambiguous(&checked);
+
+    let checked = module(&format!(
+        "{definitions}test winner {{ assert paint{{raw: true, scale: 9}}(1, 2) == 9 }}"
+    ));
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let checked = module(&format!(
+        "{definitions}test omitted {{ assert paint(1, 2) == 4 }}"
+    ));
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| finding.code == "type/argument.missing"),
+        "{}",
+        checked.report
+    );
+
+    let required_raw = definitions.replace("raw: bool = false", "raw: bool");
+    let checked = module(&format!(
+        "{required_raw}test winner {{ assert paint{{raw: true, scale: 9}}(1, 2) == 9 }}"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let checked = module(&format!(
+        "{required_raw}test omitted_raw {{ assert paint{{scale: 9}}(1, 2) == 4 }}"
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+}
+
 /// GEN-6: a structured witness can use the exact list type. A more specific
 /// candidate for the complete call still prevents a declaration warning.
 #[test]

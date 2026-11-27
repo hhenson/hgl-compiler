@@ -415,12 +415,18 @@ fn configuration_witnesses<'a>(
         let Some(ty) = witness_type(&left.ty, &right.ty, fallback, generics) else {
             continue;
         };
-        let has_default = (left.has_default && right.has_default)
-            || public.parameters.iter().any(|parameter| {
-                parameter.configuration && parameter.name == left.name && parameter.has_default
-            });
+        let public_option = public
+            .parameters
+            .iter()
+            .find(|parameter| parameter.configuration && parameter.name == left.name);
+        // FN-18: both candidates may default a slot the operator still requires.
+        let needs_argument = match public_option {
+            Some(parameter) if parameter.has_default => false,
+            Some(parameter) if !matches!(parameter.ty, Type::Nullable(_)) => true,
+            _ => !left.has_default || !right.has_default,
+        };
         let name = left.name.as_str();
-        if !has_default {
+        if needs_argument {
             required.push((name, ty.clone()));
         }
         shared.push((name, ty));
