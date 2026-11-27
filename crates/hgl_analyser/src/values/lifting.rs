@@ -47,10 +47,15 @@ pub(super) struct ReachedLocals {
 }
 
 impl ReachedLocals {
-    /// A reached write, or a loop binding from a reached collection.
-    pub(super) fn set(&mut self, local: LocalId, category: ValueCategory) {
+    /// A fresh lexical binding has no facts from a prior reached pass.
+    pub(super) fn clear(&mut self, local: LocalId) {
         self.connections.remove(&local);
         self.ordinary.remove(&local);
+    }
+
+    /// A reached write, or a loop binding from a reached collection.
+    pub(super) fn set(&mut self, local: LocalId, category: ValueCategory) {
+        self.clear(local);
         match category {
             ValueCategory::Connection => {
                 self.connections.insert(local);

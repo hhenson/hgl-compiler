@@ -1156,6 +1156,11 @@ fn a_local_list_size_uses_the_reached_category_of_an_initializer() {
         let line = 6 + body.lines().count();
         expect(&program(body, 3), &[&format!("{line} list.size")]);
     }
+
+    let body = "let items: list<i64, 1> = if step == 4 { [input] } else { [6] }\n\
+                for item in items { if step == STEP { return item } }";
+    expect(&program(body, 3), &[]);
+    expect(&program(body, 4), &["8 list.size"]);
 }
 
 /// EXPR-3, CTRL-14 and TYPE-10: a reached write can supply a later

@@ -171,6 +171,11 @@ impl Flow<'_, '_> {
                     ..
                 } => {
                     self.expression(sequence, controlled)?;
+                    for &local in names {
+                        // A nested loop can be entered with a different
+                        // collection on the next outer pass.
+                        self.reached.clear(local);
+                    }
                     // A fixed-size connection supplies live items, but its
                     // extent does not choose which passes run (CTRL-15). A
                     // range's bounds do choose them and must be known during
