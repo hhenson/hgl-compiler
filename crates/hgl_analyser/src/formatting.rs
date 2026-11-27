@@ -370,12 +370,6 @@ pub fn renderer<'a>(program: &'a Program, callee: &Callee) -> Option<Renderer<'a
     })
 }
 
-/// The signature of Core's public native value candidate, when selected.
-pub fn value_signature<'a>(program: &'a Program, callee: &Callee) -> Option<&'a Signature> {
-    let renderer = renderer(program, callee)?;
-    renderer.clock_slot.is_none().then_some(renderer.signature)
-}
-
 /// An argument supplied to the requested declaration slot, excluding packs.
 pub fn argument<'a>(
     signature: &Signature,

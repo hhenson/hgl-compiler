@@ -1214,6 +1214,39 @@ fn formatting_helper_patterns_wait_for_later_module_bodies() {
     assert!(checked.findings[0].at.starts_with("b.hgl:4:"));
 }
 
+/// FMT-4: a private renderer in an uncalled Core hook checks a helper's
+/// pattern against the borrowed endpoint payload once that helper is typed.
+#[test]
+fn private_formatter_checks_a_late_pattern_in_an_uncalled_hook() {
+    let mut files = hgl_analyser::CORE_FILES.to_vec();
+    files.push((
+        "borrowed.hgl",
+        r#"module core part borrowed_pattern
+const HEX: str = identity_pattern("{:x}")
+fn sample(input: f64) -> str {
+    inject clock
+    when valid([]) { return _format(HEX, clock, input) }
+}
+const fn identity_pattern(text: str) -> str {
+    let copy = text
+    return copy
+}
+"#,
+    ));
+    let checked = check(&files);
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|f| (f.code.as_str(), f.rule))
+            .collect::<Vec<_>>(),
+        [("type/format.specifier", "FMT-4")],
+        "{}",
+        checked.report
+    );
+    assert!(checked.findings[0].at.starts_with("borrowed.hgl:5:"));
+}
+
 /// FMT-5: an implicit conversion reaches the same instance and
 /// dependency checks as a written call (GEN-7, UNIT-13).
 #[test]

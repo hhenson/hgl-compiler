@@ -55,10 +55,11 @@ pub(super) fn retry_module_patterns(program: &mut crate::Program, diagnostics: &
                 else {
                     return;
                 };
-                let Some(signature) = formatting::value_signature(program, callee) else {
+                let Some(renderer) = formatting::renderer(program, callee) else {
                     return;
                 };
-                if let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                if let Some(pattern) =
+                    formatting::argument(renderer.signature, arguments, "fmt_str")
                     && pending.contains_key(&pattern.value.at)
                     && formatting::constant_pattern_in(program, &pattern.value, &[]).is_ok()
                 {
@@ -82,8 +83,9 @@ pub(super) fn retry_module_patterns(program: &mut crate::Program, diagnostics: &
                     text: None,
                     ..
                 } = &value.kind
-                    && let Some(signature) = formatting::value_signature(typer.program, callee)
-                    && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                    && let Some(renderer) = formatting::renderer(typer.program, callee)
+                    && let Some(pattern) =
+                        formatting::argument(renderer.signature, arguments, "fmt_str")
                     && ready.contains(&pattern.value.at)
                     && let Some(&(graph, value_code)) = pending.get(&pattern.value.at)
                 {
