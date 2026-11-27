@@ -290,7 +290,7 @@ impl Program {
         // FN-19: the entries a call gives a pack decide which calls a
         // forwarding body makes, and so which of its consts they read.
         let pack_inputs = pack_inputs_of(self, callee, signature, arguments);
-        let store_route = (check_store
+        let mut store_route = (check_store
             && (demand.values().any(|d| *d == Demand::StoreKey)
                 || self
                     .changing_store_slots
@@ -304,6 +304,29 @@ impl Program {
             .filter(|mode| check_store || *mode != Demand::StoreKey)
             .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
         for (&slot, &demand) in ordered {
+            // CAP-6/TIME-8: conditional discovery can supersede StoreKey
+            // in the declaration's demand map. A candidate that does not
+            // read this value for formatting must still retain a separate
+            // fixed-store proof, using the store reader's staging rules.
+            let demand = if demand == Demand::IfSelected
+                && !self.instance_reads_const(callee, pack_inputs.clone(), slot)
+            {
+                if !check_store {
+                    continue;
+                }
+                if store_route.is_none() {
+                    store_route = self.store_route(callee, arguments);
+                }
+                if !store_route
+                    .as_ref()
+                    .is_some_and(|route| route.fixed.contains(&slot))
+                {
+                    continue;
+                }
+                Demand::StoreKey
+            } else {
+                demand
+            };
             if demand == Demand::StoreKey
                 && store_route.as_ref().map_or_else(
                     || {
@@ -312,11 +335,6 @@ impl Program {
                     },
                     |route| !route.fixed.contains(&slot),
                 )
-            {
-                continue;
-            }
-            if demand == Demand::IfSelected
-                && !self.instance_reads_const(callee, pack_inputs.clone(), slot)
             {
                 continue;
             }

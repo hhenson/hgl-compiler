@@ -241,6 +241,48 @@ fn selected_operator_patterns_can_remain_runtime_values() {
     assert!(!checked.rejected, "{}", checked.report);
 }
 
+/// CAP-6 and TIME-8: a runtime-only selected use must not erase the
+/// separate store-key demand of the same ordinary const parameter.
+#[test]
+fn selected_runtime_patterns_preserve_fixed_store_key_checks() {
+    for call in ["keep{pattern: key}(value)", "keep{pattern: key}(values[0])"] {
+        let parameter = if call.contains("values[0]") {
+            "<...As>(store: GlobalState, const key: str, values: ...As)"
+        } else {
+            "<T>(store: GlobalState, const key: str, value: T) requires keep(T) -> str"
+        };
+        let source = format!(
+            "operator keep<T>{{const pattern: str = \"<{{}}>\"}}(value: T) -> str\n\
+             impl const fn keep{{const pattern: str}}(value: i64) -> str => pattern\n\
+             const fn save{parameter} {{\n\
+                 let ignored = {call}\n\
+                 put(store, key, 7)\n\
+             }}\n\
+             fn node(const key: str) {{\n\
+                 inject global_state\n\
+                 when {{}}\n\
+                 stop {{ save(global_state, key, 1) }}\n\
+             }}\n\
+             test bad {{ eval node(key: \"run.output\") }}\n\
+             test safe {{ eval node(key: \"user.key\") }}\n\
+             const fn grow(store: GlobalState, depth: i64, const key: str) {{\n\
+                 if depth == 0 {{ save(store, key, 1) }}\n\
+                 else {{ grow(store, depth - 1, key + \".output\") }}\n\
+             }}\n\
+             fn dynamic(const key: str) {{\n\
+                 inject global_state\n\
+                 when {{}}\n\
+                 stop {{ grow(global_state, 1, key) }}\n\
+             }}\n\
+             test changing {{ eval dynamic(key: \"run\") }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        assert_eq!(checked.findings[0].code, "injectable/store.reserved_key");
+        assert_eq!(checked.findings[0].at, "m.hgl:13:12");
+    }
+}
+
 /// GEN-7: an independent const input rejects at its body call once.
 #[test]
 fn formatting_checks_independent_const_inputs_once() {
