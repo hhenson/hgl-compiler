@@ -693,6 +693,8 @@ struct Reader<'a> {
     steps_left: usize,
     text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
+    /// Completed proofs share this read's budget, never another read's.
+    proven_helpers: HashSet<Declaration>,
     read_string_helpers: bool,
 }
 
@@ -735,6 +737,7 @@ impl<'a> Reader<'a> {
             steps_left: INPUT_BUDGET,
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
+            proven_helpers: HashSet::new(),
             read_string_helpers: true,
         }
     }
@@ -1124,7 +1127,7 @@ impl<'a> Reader<'a> {
     /// still reports failures and handles the rest of the language.
     fn helper_dependencies(&mut self, root: Declaration) -> Result<(), ConstInputFault> {
         use ConstInputFault::{ReaderLimit, Unread};
-        if self.program.proven_module_helpers.borrow().contains(&root) {
+        if self.proven_helpers.contains(&root) {
             return Ok(());
         }
         let mut active = HashSet::new();
@@ -1148,7 +1151,7 @@ impl<'a> Reader<'a> {
             pending.push((declaration, depth, true));
             pending.extend(dependencies.into_iter().map(|dep| (dep, next, false)));
         }
-        self.program.proven_module_helpers.borrow_mut().insert(root);
+        self.proven_helpers.insert(root);
         Ok(())
     }
 
@@ -1284,11 +1287,13 @@ impl<'a> Reader<'a> {
             steps_left: self.steps_left,
             text_left: self.text_left,
             reading: self.reading.clone(),
+            proven_helpers: self.proven_helpers.clone(),
             read_string_helpers: self.read_string_helpers,
         };
         let read = scope.read(expression, depth, &[]);
         self.steps_left = scope.steps_left;
         self.text_left = scope.text_left;
+        self.proven_helpers = scope.proven_helpers;
         read
     }
 
@@ -2854,6 +2859,51 @@ mod tests {
 
     use super::*;
     use crate::{ParsedFile, analyse};
+
+    /// UNIT-13's bounded helper reads have the same support boundary on
+    /// every check; another check must not have prepaid their proof work.
+    #[test]
+    fn module_helper_read_budgets_do_not_depend_on_previous_checks() {
+        let mut sources = SourceMap::new();
+        let mut diagnostics = Diagnostics::new();
+        let file = sources.add("m.hgl", "module m\nconst fn pattern(s: str) -> str {\nlet text = s\nreturn text\n}\nconst P: str = pattern(\"{}\")\n").unwrap();
+        let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+        let tree = parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            Limits::default(),
+            &mut diagnostics,
+        );
+        let program = analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics);
+        assert!(!diagnostics.has_errors(), "{diagnostics:?}");
+        let declaration = program.modules[0].scope["P"][0];
+        let value = Expr {
+            kind: ExprKind::Constant {
+                module: 0,
+                declaration,
+            },
+            at: program.modules[0].declarations[declaration].at,
+            ty: Type::Scalar(Scalar::Str),
+            category: ValueCategory::Value,
+        };
+        let read = |budget| {
+            let mut reader = Reader::new(&program);
+            reader.steps_left = budget;
+            let value = reader.read(&value, INPUT_DEPTH, &[]);
+            (value, budget - reader.steps_left)
+        };
+        let (first, spent) = read(INPUT_BUDGET);
+        assert!(
+            matches!(first.unwrap().kind, ExprKind::Literal(Value::Str(ref text)) if text == "{}")
+        );
+        assert_eq!(read(INPUT_BUDGET).1, spent);
+        for _ in 0..2 {
+            assert_eq!(read(spent - 1).0, Err(ConstInputFault::ReaderLimit));
+            assert!(read(spent).0.is_ok());
+        }
+    }
 
     /// Equal composite values have the same identity even when their named
     /// fields are given in a different order. Floating keys keep their bits.
