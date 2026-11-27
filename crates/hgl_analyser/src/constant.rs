@@ -928,6 +928,24 @@ pub(crate) fn named(name: &SyntaxToken, scope: &Scope) -> Result<Typed, Fault> {
             });
             Ok(Typed::of(value, (scope.parameter)(*at)))
         }
+        // CTRL-16: only an iteration binding given a value by this
+        // constant scope can be a struct field name.
+        Binding::Local {
+            at,
+            kind: LocalKind::Iteration,
+        } => scope
+            .arguments
+            .iter()
+            .find_map(|(binding, argument)| match argument {
+                Argument::Constant(given) if at == binding => match &given.value {
+                    ConstantValue::Str(name) => {
+                        Some(Typed::scalar(ConstantValue::Str(name.clone()), Scalar::Str))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .ok_or(Fault::NotConstant),
         Binding::Local { .. } => Err(Fault::NotConstant),
         // "a constant (UNIT-13)".
         Binding::Declarations {
