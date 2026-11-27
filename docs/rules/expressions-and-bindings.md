@@ -138,6 +138,7 @@ analyser: partial
 - An inferred list with unfinished entries keeps its element type open until graph specialization can join them and widen eligible literals (EXPR-5, GEN-7).
 - Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
 - A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
+- An inline operator argument uses a list reading before an admitted set reading (GEN-5). The public parameter can supply a set directly, including through a written type argument.
 - A dictionary key or set member already known to repeat when its source is checked reports at the later occurrence, with the first as a related location (`dict.duplicate_key`, `set.duplicate_member`, UNIT-13).
 - In a trace, timed pairs have explicit publications. `_` is admitted in a dense
   trace and rejected in a timed trace or ordinary sequence (EXPR-8, TST-7).

@@ -30,3 +30,120 @@ fn nested_lists(value: i64) -> list<list<i64, 2>, 2> =>
 test entries_can_be_fixed_list_connections {
     assert eval nested_lists([2]) == [[[2, 3], [4, 2]]]
 }
+
+# GEN-5 and EXPR-9: a viable list reading takes precedence; a typed
+# set and a call that admits only a set use the set candidate.
+operator collection<T>(items: T) -> i64
+impl const fn collection(items: list<i64, 2>) -> i64 => 1
+impl const fn collection(items: set<i64>) -> i64 => 2
+
+operator reversed<T>(items: T) -> i64
+impl const fn reversed(items: set<i64>) -> i64 => 2
+impl const fn reversed(items: list<i64, 2>) -> i64 => 1
+
+operator limited<T>(items: T) -> i64
+impl const fn limited<const N: i64>(items: list<i64, N>) -> i64 requires N == 3 => 1
+impl const fn limited(items: set<i64>) -> i64 => 2
+
+operator combined<A, B, C>(a: A, b: B, c: C) -> i64
+impl const fn combined(a: list<i64>, b: set<i64>, c: i64) -> i64 => 1
+impl const fn combined(a: set<i64>, b: list<i64>, c: i64) -> i64 => 2
+impl const fn combined(a: list<i64>, b: list<i64>, c: f64) -> i64 => 3
+
+# ERR-15: taking a result whole takes precedence over GEN-5.
+operator retained<A, B>(items: A, outcome: B) -> i64
+impl const fn retained(items: list<i64, 1>, outcome: i64) -> i64 => 1
+impl const fn retained(items: set<i64>, outcome: result<i64, error>) -> i64 => 2
+
+const fn keep(outcome: result<i64, error>) -> i64 => retained([5], outcome)
+const fn set_only(items: set<i64>) -> i64 => 2
+
+test contextual_collections {
+    let members: set<i64> = [8, 13]
+    assert collection([8, 13]) == 1 && reversed([8, 13]) == 1
+    assert collection(members) == 2 && set_only([8, 13]) == 2
+    assert collection<set<i64>>([8, 13]) == 2
+    assert collection([8, 13, 21]) == 2
+    assert collection([8, 8]) == 1
+    assert combined([1], [2], 7) == 3
+    assert keep(ok(7)) == 2
+    assert limited([8, 13]) == 2 && limited([8, 13, 21]) == 1
+}
+
+# GEN-5, TYPE-10, RED-1: inline entries give the fixed reducer its extent.
+fn inline_sum(a: i64, b: i64) -> i64 => reduce(add_, [a, b])
+fn bound_sum(a: i64, b: i64) -> i64 {
+    let pair: list<i64, 2> = [a, b]
+    return reduce(add_, pair)
+}
+
+test reduced_inline_connections {
+    assert eval inline_sum([3, 5, _], [4, _, 9]) == [7, 9, 14]
+    assert eval bound_sum([3, 5, _], [4, _, 9]) == [7, 9, 14]
+}
+
+# GEN-5, GEN-8 and TYPE-10: a written public collection determines the
+# reading while fixed row extents remain available to the candidate.
+operator rows<T>(items: T) -> i64
+impl const fn rows<const N: i64>(items: list<list<i64, N>, 2>) -> i64 => 1
+impl const fn rows(items: set<list<i64, 2>>) -> i64 => 2
+
+operator table<T>(items: T) -> i64
+impl const fn table(items: dict<str, list<i64, 2>>) -> i64 => 1
+impl const fn table(items: dict<str, set<i64>>) -> i64 => 2
+
+operator keyed<T>(items: T) -> i64
+impl const fn keyed(items: dict<list<i64, 2>, str>) -> i64 => 1
+impl const fn keyed(items: dict<set<i64>, str>) -> i64 => 2
+
+test nested_collection_readings {
+    let row: list<i64, 2> = [3, 4]
+    assert rows<list<list<i64>>>([row, row]) == 1
+    assert rows<set<list<i64>>>([row]) == 2
+    assert table(["entry": [83, 84]]) == 1
+    assert table<dict<str, set<i64>>>(["entry": [83, 84]]) == 2
+    assert keyed([[83, 84]: "entry"]) == 1
+    assert keyed<dict<set<i64>, str>>([[83, 84]: "entry"]) == 2
+}
+
+# ERR-2: the constructor's expected result supplies its payload context.
+operator success<T>(v: T) -> i64
+impl const fn success(v: result<list<i64, 2>, error>) -> i64 => 1
+impl const fn success(v: result<set<i64>, error>) -> i64 => 2
+operator failure<T>(v: T) -> i64
+impl const fn failure(v: result<bool, set<i64>>) -> i64 => 2
+impl const fn failure(v: result<bool, list<i64, 2>>) -> i64 => 1
+
+test tagged_collection_readings {
+    assert success(ok([2, 3])) == 1
+    assert failure(err([2, 3])) == 1
+    assert success(ok([2, 3, 4])) == 2
+    assert failure<result<bool, set<i64>>>(err([2, 3])) == 2
+}
+
+# EXPR-17: the iterable retains its own context. Each candidate supplies
+# its expected element type for the inner bracketed literal.
+operator generated<T>(items: T) -> i64
+impl const fn generated(items: tuple<i64, list<list<i64, 2>>>) -> i64 => 1
+impl const fn generated(items: tuple<i64, list<set<i64>>>) -> i64 => 2
+
+test generated_collection_readings {
+    assert generated((7, [for n in [2, 3]: [n, 5]])) == 1
+    assert generated((7, [for n in [2, 3]: [n, 5, 7]])) == 2
+    assert generated<tuple<i64, list<set<i64>>>>((7, [for n in [2, 3]: [n, 5]])) == 2
+}
+
+# GEN-5: an exact integer type fit settles precision within its bracket reading.
+enum Market { open, closed }
+operator quote<const market: Market>(book: any, units: any) -> i64
+impl const fn quote<const market: Market>(book: list<i64>, units: i64) -> i64 requires market == .open => 42
+impl const fn quote<const market: Market>(book: set<i64>, units: f64) -> i64 => 87
+impl const fn quote<const market: Market>(book: list<i64>, units: f64) -> i64 => 63
+
+test collection_reading_and_literal_precision {
+    let stored: list<i64> = [3, 8]
+    assert quote{market: .open}([3, 8], 11) == 42
+    assert quote{market: .open}(stored, 11) == 42
+    assert quote{market: .closed}([3, 8], 11.0) == 63
+    assert quote{market: .closed}(stored, 11.0) == 63
+}

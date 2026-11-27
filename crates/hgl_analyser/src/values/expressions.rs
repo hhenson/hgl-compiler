@@ -1532,17 +1532,21 @@ pub(super) fn takes_its_type(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
-        // ERR-13: the callee `ok` or `err` is the constructor, whatever
-        // else is in scope.
-        SyntaxKind::CallExpr => node
-            .children()
-            .next()
-            .filter(|callee| {
-                callee.kind() == SyntaxKind::NameExpr
-                    && child(callee, SyntaxKind::QualifiedName).is_none()
-            })
-            .and_then(|callee| name_token(&callee))
-            .is_some_and(|name| matches!(name.text(), "ok" | "err")),
+        SyntaxKind::CallExpr => result_constructor(node).is_some(),
         _ => false,
+    }
+}
+
+/// ERR-13: an unqualified `ok` or `err` call is always a result constructor.
+pub(super) fn result_constructor(call: &SyntaxNode) -> Option<bool> {
+    let callee = call.children().next()?;
+    if callee.kind() != SyntaxKind::NameExpr || child(&callee, SyntaxKind::QualifiedName).is_some()
+    {
+        return None;
+    }
+    match name_token(&callee)?.text() {
+        "ok" => Some(true),
+        "err" => Some(false),
+        _ => None,
     }
 }

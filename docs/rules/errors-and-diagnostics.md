@@ -156,6 +156,7 @@ parser: done
 
 analyser: partial
 
+- `operator.sequence_reading` warns at the literal when a unique list winner and a set reading both fit. It shows a typed set binding and can be acknowledged on the declaration.
 - `@suppress_warning("node.no_activation")` before a function acknowledges its dormant-node warning
 - Left: An unknown suppression string and a dropped expression with no call,
   assignment or return both pass without a diagnostic (#898).

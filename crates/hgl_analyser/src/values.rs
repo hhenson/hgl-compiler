@@ -1373,6 +1373,7 @@ impl<'a> Typer<'a> {
     fn mark(&self) -> Mark {
         Mark {
             diagnostics: self.diagnostics.len(),
+            warnings: self.diagnostics.warning_mark(),
             locals: self.locals.len(),
             assigned: self.assigned.clone(),
             returned: self.returned,
@@ -1415,6 +1416,7 @@ impl<'a> Typer<'a> {
         if let Some(deferred) = self.deferred_type_fit {
             deferred.set(mark.deferred_type_fit);
         }
+        self.diagnostics.restore_warnings(mark.warnings);
         let clean = self.diagnostics.len() == mark.diagnostics;
         // A construct's spent allowance is reported once, and the report
         // stands though the reading it was spent in is taken back.
@@ -1571,6 +1573,8 @@ const BOOL: Type = Type::Scalar(Scalar::Bool);
 
 /// What a reading may change, at one moment: see [`Typer::take_back`].
 struct Mark {
+    /// Pending warnings from successful argument readings.
+    warnings: usize,
     /// How many diagnostics there are.
     diagnostics: usize,
     /// How many locals there are.

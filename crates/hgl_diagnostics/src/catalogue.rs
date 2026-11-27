@@ -264,6 +264,7 @@ pub const WARNING_CODES: &[&str] = &[
     "node.no_activation",
     // GEN-6: registered with the specification pin. Emission is tracked by #466.
     "operator.candidates_tie",
+    "operator.sequence_reading",
     "statement.no_effect",
 ];
 
