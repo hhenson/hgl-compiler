@@ -3059,7 +3059,9 @@ pub(super) fn instances_hold(
                     .bodies
                     .get(position)
                     .and_then(Option::as_ref)
-                    .is_some_and(super::has_dependent_index)
+                    .is_some_and(|body| {
+                        super::has_dependent_index(program, (index, position), body)
+                    })
             {
                 dependent_indices.insert((index, position));
             }
@@ -3457,7 +3459,8 @@ pub(super) fn instances_hold(
             {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
-                    if (recheck_values || recheck_tests) && diagnostics.as_slice().contains(report)
+                    if (recheck_indices || recheck_values || recheck_tests)
+                        && diagnostics.as_slice().contains(report)
                     {
                         continue;
                     }
