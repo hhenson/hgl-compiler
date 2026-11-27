@@ -7,6 +7,12 @@ use common::{Checked, check, module};
 const CROSS: &str = "operator amb<A, B>(a: A, b: B) -> i64\n\
 impl const fn amb<B>(a: i64, b: B) -> i64 => 1\n\
 impl const fn amb<A>(a: A, b: i64) -> i64 => 2\n";
+const PAINT: &str = concat!(
+    "operator paint<A, B>{scale: i64}(x: A, y: B) -> i64\n",
+    "impl const fn paint<B>{scale: i64 = 1, raw: bool = false}(x: i64, y: B) -> i64 => 4\n",
+    "impl const fn paint<A>{raw: bool = false, scale: i64 = 2}(x: A, y: i64) -> i64 => 5\n",
+    "impl const fn paint{raw: bool, scale: i64}(x: i64, y: i64) -> i64 => scale\n",
+);
 
 fn warnings(checked: &Checked) -> Vec<&str> {
     checked
@@ -111,12 +117,7 @@ fn a_candidate_default_does_not_replace_required_public_configuration() {
 /// a tie while an optional candidate-only option is omitted.
 #[test]
 fn public_configuration_can_witness_a_tie_with_candidate_defaults() {
-    let definitions = concat!(
-        "operator paint<A, B>{scale: i64}(x: A, y: B) -> i64\n",
-        "impl const fn paint<B>{scale: i64 = 1, raw: bool = false}(x: i64, y: B) -> i64 => 4\n",
-        "impl const fn paint<A>{raw: bool = false, scale: i64 = 2}(x: A, y: i64) -> i64 => 5\n",
-        "impl const fn paint{raw: bool, scale: i64}(x: i64, y: i64) -> i64 => scale\n",
-    );
+    let definitions = PAINT;
     let checked = module(definitions);
     assert_eq!(
         warnings(&checked),
@@ -166,6 +167,48 @@ fn public_configuration_can_witness_a_tie_with_candidate_defaults() {
     ));
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+}
+
+/// GEN-6: a candidate that narrows an optional public option cannot
+/// inherit its written null default, so the witness must supply a value.
+#[test]
+fn narrowed_configuration_requires_a_value_instead_of_a_null_default() {
+    let declarations = PAINT
+        .replacen("scale: i64}", "scale: i64? = (null)}", 1)
+        .replace("scale: i64 = 1", "scale: i64")
+        .replace("scale: i64 = 2", "scale: i64");
+    let checked = module(&declarations);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let tied = "test tied { assert paint{scale: 9}(1, 2) == 4 }";
+    assert_ambiguous(&module(&format!("{declarations}{tied}")));
+
+    let omitted = "test omitted { assert paint(1, 2) == 4 }";
+    let checked = module(&format!("{declarations}{omitted}"));
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| finding.code == "operator/operator.no_candidate"),
+        "{}",
+        checked.report
+    );
+
+    let winner = "test winner { assert paint{raw: true, scale: 9}(1, 2) == 9 }";
+    let checked = module(&format!("{declarations}{winner}"));
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let defaulted = declarations.replace("(null)", "7");
+    assert_ambiguous(&module(&format!("{defaulted}{omitted}")));
 }
 
 /// GEN-6: a structured witness can use the exact list type. A more specific

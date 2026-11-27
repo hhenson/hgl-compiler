@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::{HasSpan, SyntaxKind, ast::Item};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, ast::Item};
 use hgl_source::{FileId, Span};
 
 use super::declaration_has_error;
@@ -18,6 +18,8 @@ use crate::program::{
 use crate::syntax::child;
 use crate::types::{ConstantValue, Detail, Scalar, Signature, Type};
 use crate::values::candidates::{Chosen, Given, Key, Wanted};
+use crate::values::constants::default_at;
+use crate::values::expressions::written_null;
 use crate::values::fit::{open, whole};
 use crate::values::operators::{from_place, public_inputs};
 use crate::values::{Candidate, Tables, Typer, tables};
@@ -302,8 +304,14 @@ fn witness_ties<'a>(
                             witness_type(&left.ty, &right.ty, fallback, &generics)
                         })
                         .collect();
-                    let configurations =
-                        configuration_witnesses(public, left.2, right.2, fallback, &generics);
+                    let configurations = configuration_witnesses(
+                        public,
+                        &declaration.syntax,
+                        left.2,
+                        right.2,
+                        fallback,
+                        &generics,
+                    );
                     for arity in 0..=positional.len() {
                         for configuration in &configurations {
                             let witness = Witness {
@@ -393,6 +401,7 @@ fn witness_type(
 /// slots, keeping the number of trials independent of the number of subsets.
 fn configuration_witnesses<'a>(
     public: &Signature,
+    syntax: &SyntaxNode,
     left: &'a Signature,
     right: &Signature,
     fallback: Scalar,
@@ -420,9 +429,16 @@ fn configuration_witnesses<'a>(
             .iter()
             .find(|parameter| parameter.configuration && parameter.name == left.name);
         // FN-18: both candidates may default a slot the operator still requires.
+        // GEN-6: a written public null cannot fill a narrowed required slot.
         let needs_argument = match public_option {
-            Some(parameter) if parameter.has_default => false,
-            Some(parameter) if !matches!(parameter.ty, Type::Nullable(_)) => true,
+            Some(parameter) if !matches!(parameter.ty, Type::Nullable(_)) => !parameter.has_default,
+            Some(parameter)
+                if parameter.has_default
+                    && default_at(syntax, parameter)
+                        .is_none_or(|default| !written_null(&default)) =>
+            {
+                false
+            }
             _ => !left.has_default || !right.has_default,
         };
         let name = left.name.as_str();
