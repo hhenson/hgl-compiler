@@ -7,6 +7,12 @@ use common::{Checked, check, module};
 const CROSS: &str = "operator amb<A, B>(a: A, b: B) -> i64\n\
 impl const fn amb<B>(a: i64, b: B) -> i64 => 1\n\
 impl const fn amb<A>(a: A, b: i64) -> i64 => 2\n";
+const PAINT: &str = concat!(
+    "operator paint<A, B>{scale: i64}(x: A, y: B) -> i64\n",
+    "impl const fn paint<B>{scale: i64 = 1, raw: bool = false}(x: i64, y: B) -> i64 => 4\n",
+    "impl const fn paint<A>{raw: bool = false, scale: i64 = 2}(x: A, y: i64) -> i64 => 5\n",
+    "impl const fn paint{raw: bool, scale: i64}(x: i64, y: i64) -> i64 => scale\n",
+);
 
 fn warnings(checked: &Checked) -> Vec<&str> {
     checked
@@ -38,6 +44,204 @@ fn concrete_overlap_warns_until_a_more_specific_candidate_takes_it() {
     let checked = module(&format!(
         "{CROSS}impl const fn amb(a: i64, b: i64) -> i64 => 3\n\
          const fn use_pair() -> i64 => amb(1, 1)\n"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// GEN-6 and FN-18: a shared required configuration option can witness
+/// a tie. Options with different names cannot be supplied to both candidates.
+#[test]
+fn required_configuration_can_witness_a_tie() {
+    let definitions = concat!(
+        "operator choose<T>(x: T) -> i64\n",
+        "impl const fn choose{extra: bool}(x: i64) -> i64 => 1\n",
+        "impl const fn choose{extra: bool}(x: i64) -> i64 => 2\n",
+    );
+    let checked = module(definitions);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    let checked = module(&format!(
+        "{definitions}test tied {{ assert choose{{extra: true}}(1) == 1 }}"
+    ));
+    assert_ambiguous(&checked);
+
+    let checked = module(&definitions.replacen("extra: bool", "other: bool", 1));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let checked = module(concat!(
+        "operator choose<T, C>{flag: C}(x: T) -> i64 requires C in {bool}\n",
+        "impl const fn choose{flag: bool, extra: i64}(x: i64) -> i64 => 1\n",
+        "impl const fn choose{extra: i64, flag: bool}(x: i64) -> i64 => 2\n",
+        "test tied { assert choose{flag: true, extra: 0}(1) == 1 }\n",
+    ));
+    assert_ambiguous(&checked);
+}
+
+/// FN-18: a candidate default cannot make it legal to omit a required
+/// public configuration argument. Supplying it can admit a concrete winner.
+#[test]
+fn a_candidate_default_does_not_replace_required_public_configuration() {
+    let crossed = concat!(
+        "operator amb<A, B>{flag: bool}(a: A, b: B) -> i64\n",
+        "impl const fn amb<B>{flag: bool = true}(a: i64, b: B) -> i64 => 1\n",
+        "impl const fn amb<A>{flag: bool = true}(a: A, b: i64) -> i64 => 2\n",
+    );
+    let definitions =
+        format!("{crossed}impl const fn amb{{flag: bool}}(a: i64, b: i64) -> i64 => 3\n");
+    let checked = module(&definitions);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let checked = module(&format!(
+        "{definitions}test omitted {{ assert amb(1, 1) == 3 }}"
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/argument.missing");
+
+    let checked = module(&format!(
+        "{definitions}test supplied {{ assert amb{{flag: true}}(1, 1) == 3 }}"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let defaults = crossed.replacen("flag: bool}", "flag: bool = true}", 1);
+    assert_ambiguous(&module(&format!(
+        "{defaults}test defaults {{ assert amb(1, 1) == 1 }}"
+    )));
+}
+
+/// FN-18 and GEN-6: supplying required public configuration can witness
+/// a tie while an optional candidate-only option is omitted.
+#[test]
+fn public_configuration_can_witness_a_tie_with_candidate_defaults() {
+    let definitions = PAINT;
+    let checked = module(definitions);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let checked = module(&format!(
+        "{definitions}test tied {{ assert paint{{scale: 9}}(1, 2) == 4 }}"
+    ));
+    assert_ambiguous(&checked);
+
+    let checked = module(&format!(
+        "{definitions}test winner {{ assert paint{{raw: true, scale: 9}}(1, 2) == 9 }}"
+    ));
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let checked = module(&format!(
+        "{definitions}test omitted {{ assert paint(1, 2) == 4 }}"
+    ));
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| finding.code == "type/argument.missing"),
+        "{}",
+        checked.report
+    );
+
+    let required_raw = definitions.replace("raw: bool = false", "raw: bool");
+    let checked = module(&format!(
+        "{required_raw}test winner {{ assert paint{{raw: true, scale: 9}}(1, 2) == 9 }}"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let checked = module(&format!(
+        "{required_raw}test omitted_raw {{ assert paint{{scale: 9}}(1, 2) == 4 }}"
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+}
+
+/// GEN-6: a candidate that narrows an optional public option cannot
+/// inherit its written null default, so the witness must supply a value.
+#[test]
+fn narrowed_configuration_requires_a_value_instead_of_a_null_default() {
+    let declarations = PAINT
+        .replacen("scale: i64}", "scale: i64? = (null)}", 1)
+        .replace("scale: i64 = 1", "scale: i64")
+        .replace("scale: i64 = 2", "scale: i64");
+    let checked = module(&declarations);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let tied = "test tied { assert paint{scale: 9}(1, 2) == 4 }";
+    assert_ambiguous(&module(&format!("{declarations}{tied}")));
+
+    let omitted = "test omitted { assert paint(1, 2) == 4 }";
+    let checked = module(&format!("{declarations}{omitted}"));
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| finding.code == "operator/operator.no_candidate"),
+        "{}",
+        checked.report
+    );
+
+    let winner = "test winner { assert paint{raw: true, scale: 9}(1, 2) == 9 }";
+    let checked = module(&format!("{declarations}{winner}"));
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    assert!(!checked.rejected, "{}", checked.report);
+
+    let defaulted = declarations.replace("(null)", "7");
+    assert_ambiguous(&module(&format!("{defaulted}{omitted}")));
+}
+
+/// GEN-6: a structured witness can use the exact list type. A more specific
+/// candidate for the complete call still prevents a declaration warning.
+#[test]
+fn structured_inputs_can_witness_a_tie() {
+    let definitions = concat!(
+        "operator choose<T>(x: T) -> i64\n",
+        "impl const fn choose(x: list<i64, 2>) -> i64 => 1\n",
+        "impl const fn choose(x: list<i64, 2>) -> i64 => 2\n",
+    );
+    let checked = module(definitions);
+    assert_eq!(
+        warnings(&checked),
+        ["m.hgl:3", "m.hgl:4"],
+        "{}",
+        checked.report
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    let checked = module(&format!(
+        "{definitions}test tied {{ let fixed: list<i64, 2> = [7, 9]\nassert choose(fixed) == 1 }}"
+    ));
+    assert_ambiguous(&checked);
+
+    let crossed = concat!(
+        "operator select_pair<A, B>(a: A, b: B) -> i64\n",
+        "impl const fn select_pair<B>(a: list<i64, 2>, b: B) -> i64 => 1\n",
+        "impl const fn select_pair<A>(a: A, b: tuple<bool, str>) -> i64 => 2\n",
+    );
+    let checked = module(crossed);
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+    let checked = module(&format!(
+        "{crossed}impl const fn select_pair(a: list<i64, 2>, b: tuple<bool, str>) -> i64 => 3"
     ));
     assert!(checked.findings.is_empty(), "{}", checked.report);
 }
