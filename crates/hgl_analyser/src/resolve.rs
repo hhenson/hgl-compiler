@@ -31,8 +31,8 @@ use crate::program::{
     Program, RUN_CONFIG,
 };
 use crate::syntax::{
-    child, has_token, is_arg_keys_call, leads_its_test, pack_for_names, parent_outside_grouping,
-    suppresses_warning, ungrouped,
+    child, has_token, is_arg_keys_call, leads_its_test, name_before_less_than, name_token,
+    pack_for_names, parent_outside_grouping, suppresses_warning, ungrouped,
 };
 use crate::{Detail, INJECTABLES, RESULT_FORMS, Type, codes, error, warning};
 
@@ -1521,26 +1521,7 @@ impl Resolver<'_> {
     /// comparison is an application its arguments do not complete.
     #[inline(never)]
     fn check_application(&mut self, node: &SyntaxNode) {
-        let less_than = node
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .any(|token| token.kind() == SyntaxKind::Lt);
-        if !less_than {
-            return;
-        }
-        let Some(left) = node.children().next() else {
-            return;
-        };
-        if left.kind() != SyntaxKind::NameExpr {
-            return;
-        }
-        // The name the operand resolved by: of `alias::name`, the one
-        // after the `::`.
-        let name = match child(&left, SyntaxKind::QualifiedName) {
-            Some(qualified) => identifiers(&qualified).nth(1),
-            None => identifiers(&left).next(),
-        };
-        let Some(name) = name else {
+        let Some(name) = name_before_less_than(node).and_then(|left| name_token(&left)) else {
             return;
         };
         // The name was resolved when the operand was walked.
