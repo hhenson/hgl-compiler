@@ -489,6 +489,10 @@ fn record_tied_call<'a>(
         .unzip();
     typer.use_instance_locals(locals);
     let mark = typer.mark();
+    if typer.missing_configuration(public, &given, &declaration.name, declaration.at) {
+        typer.take_back(mark, false);
+        return;
+    }
     let mut found = vec![None; public.generics.len()];
     from_place(public, witness.output, &mut found);
     let request = typer.argument_output_requested(operator, public, found, &given, false);

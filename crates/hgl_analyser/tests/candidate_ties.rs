@@ -76,6 +76,37 @@ fn required_configuration_can_witness_a_tie() {
     assert_ambiguous(&checked);
 }
 
+/// FN-18: a candidate default cannot make it legal to omit a required
+/// public configuration argument. Supplying it can admit a concrete winner.
+#[test]
+fn a_candidate_default_does_not_replace_required_public_configuration() {
+    let crossed = concat!(
+        "operator amb<A, B>{flag: bool}(a: A, b: B) -> i64\n",
+        "impl const fn amb<B>{flag: bool = true}(a: i64, b: B) -> i64 => 1\n",
+        "impl const fn amb<A>{flag: bool = true}(a: A, b: i64) -> i64 => 2\n",
+    );
+    let definitions =
+        format!("{crossed}impl const fn amb{{flag: bool}}(a: i64, b: i64) -> i64 => 3\n");
+    let checked = module(&definitions);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let checked = module(&format!(
+        "{definitions}test omitted {{ assert amb(1, 1) == 3 }}"
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/argument.missing");
+
+    let checked = module(&format!(
+        "{definitions}test supplied {{ assert amb{{flag: true}}(1, 1) == 3 }}"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let defaults = crossed.replacen("flag: bool}", "flag: bool = true}", 1);
+    assert_ambiguous(&module(&format!(
+        "{defaults}test defaults {{ assert amb(1, 1) == 1 }}"
+    )));
+}
+
 /// GEN-6: a structured witness can use the exact list type. A more specific
 /// candidate for the complete call still prevents a declaration warning.
 #[test]
